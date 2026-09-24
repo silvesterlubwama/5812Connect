@@ -1,0 +1,32 @@
+{
+  "summary": "iter366 similar-items consolidation tested end-to-end. Backend suite /app/backend/tests/test_iter366_similar_items.py (7 tests) reruns green. UI flows on /shipments verified against a throwaway shipment created via API and cleaned up: Similar-items toolbar button opens the dialog; summary line reports '2 groups · 2 extra lines · 1 across boxes · 5 items scanned'; strict/normal/loose buttons re-scan; Blankets group shows 2-different-boxes badge + 'Boxes 24 & 25' + combined preview 16 pcs · $80; unticking blanket row drops preview to 10 pcs · $50 and reticking restores; Combine into one line produces consolidated=true item qty=16, unit $5, box_label='Boxes 24 & 25'; Combine only what shares the kept box returns 400 with toast 'Nothing to merge in that box' and data is untouched; Kitchen-pots group is flagged 'Looks like the same line typed twice' and 'Delete the ticked repeats' removes only the duplicate leaving the kept row at qty 4; 'Keep separate' removes the group from the session without mutating data; manifest.pdf and commercial-invoice.pdf both return %PDF after consolidation; toolbar regressions (AI HS codes, Print Manifest, Scan Boxes, Item, etc.) all still render.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Shipment detail — Items section", "issues": ["'Hide packed' filter is on by default, and consolidated items live in a box so they also get hidden. That means the new 'Split back' button (data-testid ship-item-split-<id>) is not in the DOM until the user unchecks 'Hide packed'. Not a functional bug, but worth surfacing in the tooltip/help text so admins can find undo."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter366_similar_items.py",
+    "/app/test_reports/pytest/iter366_rerun.xml"
+  ],
+  "action_items": [
+    "Optional: when an item becomes consolidated, ensure it is visible even when 'Hide packed' is on (or surface a small hint) so the 'Split back' button is discoverable."
+  ],
+  "critical_code_review_comments": [
+    "SimilarItemsDialog.jsx: state.picks include-set is initialised from group.items on load; when the user unticks a row the preview qty/value correctly recompute — good.",
+    "act() in the dialog uses (pick.name || group.label).trim() as the combined-line name; if a user clears the field it silently falls back to the label — consider disabling combine when the name is empty rather than substituting.",
+    "ShipmentsAdminPage.jsx: 'Similar items' button is disabled when items.length < 2 — correct guard.",
+    "Backend routes in /app/backend/routers/shipments_pkg/similar.py return a clean 400 for combine_same_box when nothing shares the kept box — verified via UI toast."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (POST /api/auth/login {identifier,password}; token field = 'token')",
+  "seed_data_creation": "Created and deleted a throwaway shipment ITER366T_<hex> with two boxes (24, 25) and 5 test items via the shipments API. Cleaned up at end (DELETE /api/shipments/{id}). Real '2026 Shipment' (sh_485669b943) was NOT touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter366 similar-items consolidation is fully working (backend + UI). Only observation: consolidated items are hidden under 'Hide packed' toggle, hiding the 'Split back' button until unchecked. Backend suite test_iter366_similar_items.py continues to pass in ~3s.",
+  "rca of the issue": "n/a — no defects reproduced."
+}

@@ -10,7 +10,9 @@
  *     Goals, Payments, Notes)
  *   • Schools tab: school CRUD + portal-password issuance
  */
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { PersonPicker } from '../components/PersonPicker';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -211,12 +213,47 @@ export default function SocialWorkPage() {
   // New-case dialog
   const [showNewCase, setShowNewCase] = useState(false);
   const [caseForm, setCaseForm] = useState({
-    subject_kind: 'child', subject_id: '', category: 'welfare_support',
+    subject_kind: 'child', subject_id: '', subject_name: '', category: 'welfare_support',
     summary: '', risk_level: 'low',
   });
 
   // Case detail
   const [openCase, setOpenCase] = useState(null);
+
+  // Deep links — /social-work?case=<id> or ?subject_id=<child/member id>.
+  // The page used to ignore both, so a link from a child profile or a
+  // notification just dropped you on the unfiltered case list.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepCaseId = searchParams.get('case') || searchParams.get('case_id');
+  const deepSubjectId = searchParams.get('subject_id');
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (deepLinkDone.current || (!deepCaseId && !deepSubjectId)) return;
+    deepLinkDone.current = true;
+    (async () => {
+      try {
+        if (deepCaseId) {
+          const r = await api.get(`/social-work/cases/${deepCaseId}`);
+          showCase(r.data);
+          return;
+        }
+        const r = await api.get('/social-work/cases', { params: { subject_id: deepSubjectId } });
+        const match = (Array.isArray(r.data) ? r.data : [])[0];
+        if (match) setOpenCase(match);
+        else toast.info('No social case on file for them yet — open one with "New case"');
+      } catch (e) { toast.error(e.response?.data?.detail || 'Could not open that case'); }
+    })();
+  }, [deepCaseId, deepSubjectId]);
+
+  // Keep the URL shareable while a case is open, and clean it up on close.
+  const showCase = (c) => {
+    setOpenCase(c);
+    if (c?.id) setSearchParams({ case: c.id }, { replace: true });
+  };
+  const closeCase = () => {
+    setOpenCase(null);
+    if (deepCaseId || deepSubjectId) setSearchParams({}, { replace: true });
+  };
 
   // Schools dialog state
   const [showNewSchool, setShowNewSchool] = useState(false);
@@ -249,14 +286,15 @@ export default function SocialWorkPage() {
   useEffect(() => { reload(); }, [reload]);
 
   const submitCase = async () => {
-    if (!caseForm.subject_id) { toast.error('Pick a subject (child/member)'); return; }
+    if (!caseForm.subject_id) { toast.error('Search for the person this case is about, then pick them from the list'); return; }
     try {
-      const r = await api.post('/social-work/cases', caseForm);
+      const { subject_name, ...payload } = caseForm;
+      const r = await api.post('/social-work/cases', payload);
       toast.success('Case opened');
       setShowNewCase(false);
-      setCaseForm({ subject_kind: 'child', subject_id: '', category: 'welfare_support', summary: '', risk_level: 'low' });
+      setCaseForm({ subject_kind: 'child', subject_id: '', subject_name: '', category: 'welfare_support', summary: '', risk_level: 'low' });
       reload();
-      setOpenCase(r.data);
+      showCase(r.data);
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
 
@@ -321,11 +359,11 @@ export default function SocialWorkPage() {
         </CardContent></Card>
         <ReviewsDueWidget onOpenCase={(childId) => {
           const c = cases.find(x => x.subject_id === childId);
-          if (c) setOpenCase(c);
+          if (c) showCase(c);
         }} />
         <ProfileCompletenessWidget onOpenCase={(childId) => {
           const c = cases.find(x => x.subject_id === childId);
-          if (c) setOpenCase(c);
+          if (c) showCase(c);
         }} />
       </div>
 
@@ -377,7 +415,7 @@ export default function SocialWorkPage() {
           ) : (
             <div className="space-y-2">
               {cases.map(c => (
-                <Card key={c.id} className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => setOpenCase(c)} data-testid={`sw-case-${c.id}`}>
+                <Card key={c.id} className="rounded-xl cursor-pointer hover:border-primary/40" onClick={() => showCase(c)} data-testid={`sw-case-${c.id}`}>
                   <CardContent className="p-3 flex items-center gap-3">
                     <div className="relative">
                       {c.subject_photo_url
@@ -497,25 +535,26 @@ export default function SocialWorkPage() {
           <DialogHeader><DialogTitle>Open a new case</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5">
-              <Label className="text-xs">Subject kind *</Label>
-              <Select value={caseForm.subject_kind} onValueChange={v => setCaseForm({ ...caseForm, subject_kind: v, subject_id: '' })}>
-                <SelectTrigger data-testid="sw-form-subject-kind"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="child">Child</SelectItem>
-                  <SelectItem value="member">Member / Adult</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs">{caseForm.subject_kind === 'child' ? 'Child' : 'Member'} *</Label>
-              <Select value={caseForm.subject_id} onValueChange={v => setCaseForm({ ...caseForm, subject_id: v })}>
-                <SelectTrigger data-testid="sw-form-subject-id"><SelectValue placeholder={`Pick ${caseForm.subject_kind}...`} /></SelectTrigger>
-                <SelectContent>
-                  {(caseForm.subject_kind === 'child' ? children : members).map(s => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label className="text-xs">Who is this case for? *</Label>
+              {/* Search-first: scrolling a dropdown of every child and member
+                  was unusable, and cases were being opened on the wrong person. */}
+              <PersonPicker testId="sw-form-subject"
+                kinds="child,member"
+                value={caseForm.subject_name || ''}
+                placeholder="Type their name to find them…"
+                onChange={v => setCaseForm({ ...caseForm, subject_name: v, subject_id: '' })}
+                onPick={p => setCaseForm({
+                  ...caseForm, subject_name: p.name, subject_id: p.id,
+                  subject_kind: p.type === 'child' ? 'child' : 'member',
+                })}
+              />
+              {caseForm.subject_id
+                ? <p className="text-[11px] text-emerald-700" data-testid="sw-form-subject-linked">
+                    Linked to their {caseForm.subject_kind === 'child' ? 'child' : 'member'} record
+                  </p>
+                : <p className="text-[11px] text-muted-foreground">
+                    Children and adults both appear here — pick the person the case belongs to.
+                  </p>}
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Category *</Label>
@@ -605,7 +644,7 @@ export default function SocialWorkPage() {
         schools={schools}
         members={members}
         childrenList={children}
-        onClose={() => { setOpenCase(null); reload(); }}
+        onClose={() => { closeCase(); reload(); }}
       />
     </div>
   );
@@ -1642,7 +1681,16 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                     <Input className="h-8 text-xs" type="number" step="0.01" value={newPayment.amount} onChange={e => setNewPayment({ ...newPayment, amount: e.target.value })} placeholder="Amount" data-testid="cd-pay-amount" />
                     <Input className="h-8 text-xs" value={newPayment.currency} onChange={e => setNewPayment({ ...newPayment, currency: e.target.value.toUpperCase().slice(0, 5) })} placeholder="UGX" />
                     <Input className="h-8 text-xs" type="date" value={newPayment.date} onChange={e => setNewPayment({ ...newPayment, date: e.target.value })} />
-                    <Input className="h-8 text-xs col-span-2" value={newPayment.paid_to} onChange={e => setNewPayment({ ...newPayment, paid_to: e.target.value })} placeholder={newPayment.kind === 'child_support' ? 'Sponsor name (received from)' : 'Paid to (school, clinic, vendor)'} />
+                    <div className="col-span-2">
+                      {/* Type-to-find an existing sponsor / payee before typing a fresh name. */}
+                      <PersonPicker testId="cd-pay-paid-to" kinds="member,user,guest"
+                        value={newPayment.paid_to}
+                        placeholder={newPayment.kind === 'child_support' ? 'Sponsor name (received from)' : 'Paid to (school, clinic, vendor)'}
+                        addNewLabel="as typed"
+                        onChange={v => setNewPayment({ ...newPayment, paid_to: v, paid_to_id: '' })}
+                        onPick={p => setNewPayment({ ...newPayment, paid_to: p.name, paid_to_id: p.id })}
+                        onAddNew={typed => setNewPayment({ ...newPayment, paid_to: typed, paid_to_id: '' })} />
+                    </div>
                     <Input className="h-8 text-xs col-span-2" value={newPayment.notes} onChange={e => setNewPayment({ ...newPayment, notes: e.target.value })} placeholder="Notes" />
                   </div>
                   <Button size="sm" className="w-full" onClick={addPayment} disabled={!newPayment.amount} data-testid="cd-pay-submit">Record &amp; auto-post to finance + accounting</Button>

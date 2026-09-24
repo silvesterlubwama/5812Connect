@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import api from '../services/api';
+import { AssetsRegister } from '../components/finance/AssetsRegister';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -8,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { SearchSelect, guardPickerEscape } from '../components/SearchSelect';
+import { VendorPicker } from '../components/VendorPicker';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { toast } from 'sonner';
 import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Upload, Search, X, Pencil, Trash2, Camera, Eye, User } from 'lucide-react';
@@ -21,6 +24,14 @@ import * as XLSX from 'xlsx';
 import PaymentsInbox from '../components/PaymentsInbox';
 
 const money = (n, cur = 'UGX') => new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n || 0));
+// Accounts read best as "code — name", and typing either should find them.
+const accountOptions = (list = []) => list.map(a => ({
+  value: a.id,
+  label: `${a.code} — ${a.name}`,
+  hint: [a.type, a.subtype].filter(Boolean).join(' · ') || undefined,
+  keywords: `${a.code} ${a.name} ${a.type || ''} ${a.subtype || ''}`,
+}));
+
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const monthAgoIso = () => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); };
 
@@ -55,9 +66,10 @@ export default function FinancePage() {
       </header>
 
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
-        {/* Mobile-safe tab strip — on <md the tabs scroll horizontally instead
-            of cramming into a 5-col grid (which caused label overlap at 390px). */}
-        <TabsList className="w-full flex overflow-x-auto no-scrollbar md:grid md:grid-cols-7 md:max-w-4xl">
+        {/* Tabs size to their labels: a fixed 9-column grid gave every tab the
+            same 109px and ran "Payments Inbox" straight into "Chart of
+            Accounts". Narrow screens scroll, desktop wraps onto a second row. */}
+        <TabsList className="w-full flex gap-1 overflow-x-auto no-scrollbar md:flex-wrap md:overflow-visible md:h-auto md:py-1">
           <TabsTrigger value="overview" className="flex-shrink-0" data-testid="finance-tab-overview">Overview</TabsTrigger>
           <TabsTrigger value="journal" className="flex-shrink-0" data-testid="finance-tab-journal">Journal</TabsTrigger>
           <TabsTrigger value="review" className="flex-shrink-0" data-testid="finance-tab-review">Review Queue</TabsTrigger>
@@ -65,7 +77,9 @@ export default function FinancePage() {
           <TabsTrigger value="coa" className="flex-shrink-0" data-testid="finance-tab-coa">Chart of Accounts</TabsTrigger>
           <TabsTrigger value="reports" className="flex-shrink-0" data-testid="finance-tab-reports">Reports</TabsTrigger>
           <TabsTrigger value="budgets" className="flex-shrink-0" data-testid="finance-tab-budgets">Budgets</TabsTrigger>
+          <TabsTrigger value="assets" className="flex-shrink-0" data-testid="finance-tab-assets">Fixed Assets</TabsTrigger>
           <TabsTrigger value="dept-pnl" className="flex-shrink-0" data-testid="finance-tab-dept-pnl">Dept P&amp;L</TabsTrigger>
+          <TabsTrigger value="deleted" className="flex-shrink-0" data-testid="finance-tab-deleted">Deleted entries</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewPanel /></TabsContent>
         <TabsContent value="journal"><JournalPanel /></TabsContent>
@@ -75,6 +89,11 @@ export default function FinancePage() {
         <TabsContent value="reports"><ReportsPanel /></TabsContent>
         <TabsContent value="budgets"><BudgetsPanel /></TabsContent>
         <TabsContent value="dept-pnl"><DepartmentPnlTab /></TabsContent>
+        <TabsContent value="assets" className="mt-4" data-testid="finance-assets-tab">
+          <AssetsRegister />
+        </TabsContent>
+
+        <TabsContent value="deleted"><DeletedEntriesPanel /></TabsContent>
       </Tabs>
     </div>
   );
@@ -336,14 +355,11 @@ function ReviewQueuePanel() {
                               {ln.debit > 0 ? 'Dr' : 'Cr'}
                             </Badge>
                             {isEdit ? (
-                              <Select value={ln.account_id} onValueChange={v => swapAccount(idx, v)}>
-                                <SelectTrigger className="h-7 text-xs" data-testid={`review-queue-swap-${r.id}-${idx}`}>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {accounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}
-                                </SelectContent>
-                              </Select>
+                              <SearchSelect size="sm" testId={`review-queue-swap-${r.id}-${idx}`}
+                                value={ln.account_id}
+                                onChange={v => swapAccount(idx, v)}
+                                placeholder="Type an account"
+                                options={accountOptions(accounts)} />
                             ) : (
                               <span className="font-mono">{ln.account_code} — {ln.account_name}</span>
                             )}
@@ -409,7 +425,7 @@ function ReviewQueuePanel() {
 
       {/* Correct what the OCR misread */}
       <Dialog open={!!correcting} onOpenChange={o => { if (!o) setCorrecting(null); }}>
-        <DialogContent className="max-w-[460px]" data-testid="receipt-correct-dialog">
+        <DialogContent className="max-w-[460px]" data-testid="receipt-correct-dialog" onEscapeKeyDown={guardPickerEscape}>
           <DialogHeader><DialogTitle className="text-base">Fix receipt details</DialogTitle></DialogHeader>
           <p className="text-xs text-muted-foreground">The original entry is voided and a corrected one posted in its place, so only the corrected line counts.</p>
           <div className="space-y-3">
@@ -423,7 +439,9 @@ function ReviewQueuePanel() {
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Vendor</Label>
-              <Input value={correcting?.vendor || ''} onChange={e => setCorrecting({ ...correcting, vendor: e.target.value })} data-testid="receipt-correct-vendor" />
+              <VendorPicker testId="receipt-correct-vendor"
+                value={correcting?.vendor || ''}
+                onChange={v => setCorrecting({ ...correcting, vendor: v })} />
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Description</Label>
@@ -612,7 +630,7 @@ function TransferDialog({ open, onClose, onDone }) {
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md" onEscapeKeyDown={guardPickerEscape}>
         <DialogHeader><DialogTitle>Record transfer</DialogTitle></DialogHeader>
         <div className="space-y-3">
           <div><Label>Amount</Label><Input data-testid="transfer-amount" type="number" step="0.01" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} /></div>
@@ -624,38 +642,43 @@ function TransferDialog({ open, onClose, onDone }) {
               new appeared on the ledger but users saw a "posted" toast. */}
           <div>
             <Label>Campus / sub-location <span className="text-red-500">*</span></Label>
-            <Select value={form.location_id} onValueChange={v => setForm({ ...form, location_id: v })}>
-              <SelectTrigger data-testid="transfer-location"><SelectValue placeholder="Choose campus / sub-location" /></SelectTrigger>
-              <SelectContent>
-                {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-                {subLocations.map(s => <SelectItem key={s.id} value={s.id}>&nbsp;&nbsp;↳ {s.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <SearchSelect testId="transfer-location"
+              value={form.location_id}
+              onChange={v => setForm({ ...form, location_id: v })}
+              placeholder="Type to find a campus / sub-location"
+              options={[
+                ...locations.map(l => ({ value: l.id, label: l.name })),
+                ...subLocations.map(sl => ({ value: sl.id, label: `↳ ${sl.name}`, hint: 'Sub-location' })),
+              ]} />
             {defaultCampus === form.location_id && <p className="text-[10px] text-muted-foreground mt-1">Prefilled from your active campus</p>}
           </div>
 
           <div>
             <Label>From (source)</Label>
-            <Select value={form.from_account_id} onValueChange={v => setForm({ ...form, from_account_id: v })}>
-              <SelectTrigger data-testid="transfer-from"><SelectValue placeholder="Cash/bank source" /></SelectTrigger>
-              <SelectContent>{assetAccounts.filter(a => a.id !== form.to_account_id).map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-            </Select>
+            <SearchSelect testId="transfer-from"
+              value={form.from_account_id}
+              onChange={v => setForm({ ...form, from_account_id: v })}
+              placeholder="Type a cash / bank account"
+              options={accountOptions(assetAccounts.filter(a => a.id !== form.to_account_id))} />
           </div>
           <div>
             <Label>To (destination)</Label>
-            <Select value={form.to_account_id} onValueChange={v => setForm({ ...form, to_account_id: v })}>
-              <SelectTrigger data-testid="transfer-to"><SelectValue placeholder="Cash/bank destination" /></SelectTrigger>
-              <SelectContent>{assetAccounts.filter(a => a.id !== form.from_account_id).map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-            </Select>
+            <SearchSelect testId="transfer-to"
+              value={form.to_account_id}
+              onChange={v => setForm({ ...form, to_account_id: v })}
+              placeholder="Type a cash / bank account"
+              options={accountOptions(assetAccounts.filter(a => a.id !== form.from_account_id))} />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div><Label>Fee (optional)</Label><Input data-testid="transfer-fee" type="number" step="0.01" value={form.fee_amount} onChange={e => setForm({ ...form, fee_amount: e.target.value })} placeholder="e.g. 500" /></div>
             <div>
               <Label>Fee expense account</Label>
-              <Select value={form.fee_account_id} onValueChange={v => setForm({ ...form, fee_account_id: v })}>
-                <SelectTrigger data-testid="transfer-fee-account"><SelectValue placeholder="—" /></SelectTrigger>
-                <SelectContent>{expenseAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <SearchSelect testId="transfer-fee-account"
+                value={form.fee_account_id}
+                onChange={v => setForm({ ...form, fee_account_id: v })}
+                placeholder="Type an expense account"
+                allowClear
+                options={accountOptions(expenseAccounts)} />
             </div>
           </div>
           <div><Label>Reference / receipt #</Label><Input data-testid="transfer-ref" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="Optional transaction / receipt id" /></div>
@@ -685,6 +708,8 @@ function BackfillButtons({ onDone }) {
       const r = await api.post(url);
       const s = r.data || {};
       toast.success(`${kind === 'payroll' ? 'Payroll' : 'Social payments'}: posted ${s.posted_or_replayed}, skipped ${s.skipped_no_amount ?? s.skipped ?? 0}, failed ${s.failed}`);
+      const firstError = (s.error_sample || s.errors || [])[0];
+      if (firstError) toast.error(firstError.error || firstError.reason || 'Some entries could not post', { duration: 12000 });
       onDone?.();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Backfill failed'); }
     setBusy('');
@@ -734,7 +759,6 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     location_id: defaultCampus, department_id: defaultDept,
     staff_name: '', staff_id: '',
   });
-  const [vendorMatches, setVendorMatches] = useState([]);
   // Who actually handled the cash — finance needs this months later, and it
   // is NOT the person keying the entry in.
   const [staffMatches, setStaffMatches] = useState([]);
@@ -787,9 +811,15 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     const parent = locations.find(l => l.id === picked)
       ? picked
       : (subLocations.find(s => s.id === picked)?.location_id || picked);
+    // iter367 — when a sub-location is picked, ask for ITS departments too.
+    // Sending only the parent campus meant sub-location departments (farm,
+    // shelter…) never showed up in the transaction form.
+    const deptParams = picked === parent
+      ? { location_id: parent }
+      : { location_id: parent, sublocation_id: picked };
     Promise.all([
       sublocationsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
-      departmentsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
+      departmentsApi.list(deptParams).catch(() => ({ data: [] })),
     ]).then(([sl, dp]) => {
       const list = sl.data || [];
       if (picked !== parent && !list.some(s => s.id === picked)) {
@@ -884,7 +914,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
 
   return (
     <Dialog open={!!mode} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto" onEscapeKeyDown={guardPickerEscape}>
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between">
             <span>{isExpense ? 'Record expense' : 'Record income'}</span>
@@ -901,13 +931,15 @@ function QuickPostDialog({ mode, onClose, onDone }) {
           {/* Campus / sub-location — required, defaults to user's active campus */}
           <div>
             <Label>Campus / sub-location <span className="text-red-500">*</span></Label>
-            <Select value={form.location_id} onValueChange={v => setForm({ ...form, location_id: v, department_id: '' })}>
-              <SelectTrigger data-testid="quick-post-location"><SelectValue placeholder="Choose campus / sub-location" /></SelectTrigger>
-              <SelectContent>
-                {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-                {subLocations.map(s => <SelectItem key={s.id} value={s.id}>&nbsp;&nbsp;↳ {s.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <SearchSelect
+              testId="quick-post-location"
+              value={form.location_id}
+              onChange={v => setForm({ ...form, location_id: v, department_id: '' })}
+              placeholder="Type to find a campus / sub-location"
+              options={[
+                ...locations.map(l => ({ value: l.id, label: l.name })),
+                ...subLocations.map(sl => ({ value: sl.id, label: `↳ ${sl.name}`, hint: 'Sub-location' })),
+              ]} />
             {defaultCampus === form.location_id && <p className="text-[10px] text-muted-foreground mt-1">Prefilled from your active campus</p>}
           </div>
 
@@ -915,20 +947,13 @@ function QuickPostDialog({ mode, onClose, onDone }) {
           {departments.length > 0 && (
             <div>
               <Label>Department (optional)</Label>
-              <Select value={form.department_id || '_none'} onValueChange={v => setForm({ ...form, department_id: v === '_none' ? '' : v })}>
-                <SelectTrigger data-testid="quick-post-department"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_none">— No department —</SelectItem>
-                  {departments.map(d => (
-                    <SelectItem key={d.id} value={d.id}>
-                      <span className="inline-flex items-center gap-1.5">
-                        {d.color && <span className="w-2 h-2 rounded-full inline-block" style={{ background: d.color }} />}
-                        {d.name}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchSelect
+                testId="quick-post-department"
+                value={form.department_id || '_none'}
+                onChange={v => setForm({ ...form, department_id: v === '_none' ? '' : v })}
+                placeholder="Type to find a department"
+                options={[{ value: '_none', label: '— No department —' },
+                  ...departments.map(d => ({ value: d.id, label: d.name }))]} />
               {defaultDept && defaultDept === form.department_id && <p className="text-[10px] text-muted-foreground mt-1">Prefilled from your primary department</p>}
             </div>
           )}
@@ -939,10 +964,11 @@ function QuickPostDialog({ mode, onClose, onDone }) {
               <div className="space-y-1.5" data-testid="split-primary-legs">
                 {primaryLegs.map((leg, i) => (
                   <div key={i} className="grid grid-cols-[1fr_100px_28px] gap-1.5 items-center" data-testid={`split-primary-row-${i}`}>
-                    <Select value={leg.account_id} onValueChange={v => setPrimaryLegs(rows => rows.map((r, j) => j === i ? { ...r, account_id: v } : r))}>
-                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Account" /></SelectTrigger>
-                      <SelectContent>{primary.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-                    </Select>
+                    <SearchSelect size="sm" testId={`split-primary-account-${i}`}
+                      value={leg.account_id}
+                      onChange={v => setPrimaryLegs(rows => rows.map((r, j) => j === i ? { ...r, account_id: v } : r))}
+                      placeholder="Type code or name"
+                      options={accountOptions(primary)} />
                     <Input type="number" step="0.01" placeholder="Amount" className="h-8 text-xs" value={leg.amount} onChange={e => setPrimaryLegs(rows => rows.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))} data-testid={`split-primary-amount-${i}`} />
                     <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" disabled={primaryLegs.length === 1} onClick={() => setPrimaryLegs(rows => rows.filter((_, j) => j !== i))}>×</Button>
                   </div>
@@ -950,10 +976,11 @@ function QuickPostDialog({ mode, onClose, onDone }) {
                 <Button variant="outline" size="sm" className="h-7 text-xs w-full" onClick={() => setPrimaryLegs(rows => [...rows, emptyLeg()])} data-testid="split-add-primary">+ Add {isExpense ? 'expense' : 'revenue'} line</Button>
               </div>
             ) : (
-              <Select value={form.account_id} onValueChange={v => setForm({ ...form, account_id: v })}>
-                <SelectTrigger data-testid="quick-post-account"><SelectValue placeholder="Choose account" /></SelectTrigger>
-                <SelectContent>{primary.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <SearchSelect testId="quick-post-account"
+                value={form.account_id}
+                onChange={v => setForm({ ...form, account_id: v })}
+                placeholder="Type an account code or name"
+                options={accountOptions(primary)} />
             )}
           </div>
           <div>
@@ -962,10 +989,11 @@ function QuickPostDialog({ mode, onClose, onDone }) {
               <div className="space-y-1.5" data-testid="split-cash-legs">
                 {cashLegs.map((leg, i) => (
                   <div key={i} className="grid grid-cols-[1fr_100px_28px] gap-1.5 items-center" data-testid={`split-cash-row-${i}`}>
-                    <Select value={leg.account_id} onValueChange={v => setCashLegs(rows => rows.map((r, j) => j === i ? { ...r, account_id: v } : r))}>
-                      <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Cash / bank" /></SelectTrigger>
-                      <SelectContent>{cashAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-                    </Select>
+                    <SearchSelect size="sm" testId={`split-cash-account-${i}`}
+                      value={leg.account_id}
+                      onChange={v => setCashLegs(rows => rows.map((r, j) => j === i ? { ...r, account_id: v } : r))}
+                      placeholder="Type cash / bank"
+                      options={accountOptions(cashAccounts)} />
                     <Input type="number" step="0.01" placeholder="Amount" className="h-8 text-xs" value={leg.amount} onChange={e => setCashLegs(rows => rows.map((r, j) => j === i ? { ...r, amount: e.target.value } : r))} data-testid={`split-cash-amount-${i}`} />
                     <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-destructive" disabled={cashLegs.length === 1} onClick={() => setCashLegs(rows => rows.filter((_, j) => j !== i))}>×</Button>
                   </div>
@@ -976,10 +1004,11 @@ function QuickPostDialog({ mode, onClose, onDone }) {
                 </div>
               </div>
             ) : (
-              <Select value={form.paid_from_id} onValueChange={v => setForm({ ...form, paid_from_id: v })}>
-                <SelectTrigger data-testid="quick-post-paid-from"><SelectValue placeholder="Choose account" /></SelectTrigger>
-                <SelectContent>{cashAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <SearchSelect testId="quick-post-paid-from"
+                value={form.paid_from_id}
+                onChange={v => setForm({ ...form, paid_from_id: v })}
+                placeholder="Type an account code or name"
+                options={accountOptions(cashAccounts)} />
             )}
           </div>
           <div><Label>Reference / receipt #</Label><Input data-testid="quick-post-ref" value={form.reference} onChange={e => setForm({ ...form, reference: e.target.value })} placeholder="Optional transaction / receipt id" /></div>
@@ -1005,36 +1034,12 @@ function QuickPostDialog({ mode, onClose, onDone }) {
             )}
           </div>
           {isExpense && (
-            <div className="relative">
+            <div>
               <Label>Vendor</Label>
-              <Input
-                data-testid="quick-post-vendor"
+              <VendorPicker testId="quick-post-vendor"
                 value={form.vendor || ''}
-                placeholder="Start typing a vendor name…"
-                onChange={async e => {
-                  const v = e.target.value;
-                  setForm({ ...form, vendor: v });
-                  if (v && v.length >= 1) {
-                    try {
-                      const { vendorsApi } = await import('../services/api');
-                      const r = await vendorsApi.suggest(v);
-                      setVendorMatches(r.data || []);
-                    } catch { setVendorMatches([]); }
-                  } else setVendorMatches([]);
-                }}
-                onBlur={() => setTimeout(() => setVendorMatches([]), 200)}
-              />
-              {vendorMatches.length > 0 && (
-                <div className="absolute z-50 left-0 right-0 top-full mt-1 border rounded-lg bg-popover shadow max-h-48 overflow-y-auto" data-testid="vendor-suggest-list">
-                  {vendorMatches.map(v => (
-                    <button key={v.id} type="button" className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent" onClick={() => { setForm(f => ({ ...f, vendor: v.name })); setVendorMatches([]); }} data-testid={`vendor-suggest-${v.id}`}>
-                      <div className="font-medium">{v.name}</div>
-                      {(v.email || v.phone || v.category) && <div className="text-[10px] text-muted-foreground">{[v.category, v.phone, v.email].filter(Boolean).join(' · ')}</div>}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <p className="text-[10px] text-muted-foreground mt-1">Auto-links to an existing vendor profile, or creates one on the fly.</p>
+                onChange={v => setForm(f => ({ ...f, vendor: v }))} />
+              <p className="text-[10px] text-muted-foreground mt-1">Matches an existing vendor as you type, or creates one on the fly.</p>
             </div>
           )}
           <div><Label>Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What was this for?" /></div>
@@ -1048,6 +1053,93 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   );
 }
 
+// ─── DELETED ENTRIES (audit trail) ───────────────────────────
+function DeletedEntriesPanel() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState({});
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get('/finance/journal/deleted/list');
+      setRows(r.data?.deleted || []);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not load the trail'); }
+    setLoading(false);
+  };
+
+  const undelete = async (d) => {
+    try {
+      await api.post(`/finance/journal/deleted/${d.id}/restore`);
+      toast.success('Entry restored — it counts again');
+      dataEvents.emit('finance-changed', { source: 'je_undelete' });
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Restore failed'); }
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => dataEvents.on('finance-changed', load), []);
+
+  return (
+    <Card className="rounded-xl" data-testid="deleted-entries-panel">
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <div>
+          <CardTitle className="text-base">Deleted entries</CardTitle>
+          <p className="text-xs text-muted-foreground">Every entry removed from the ledger — who deleted it, when, why, and what it was. Kept forever.</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={load} data-testid="deleted-entries-refresh"><RefreshCw size={13} className="mr-1" />Refresh</Button>
+      </CardHeader>
+      <CardContent>
+        {loading ? <p className="text-sm text-muted-foreground">Loading…</p>
+          : rows.length === 0 ? <p className="text-sm text-muted-foreground" data-testid="deleted-entries-empty">Nothing has been deleted.</p> : (
+            <div className="overflow-x-auto -mx-4 md:mx-0">
+              <Table>
+                <TableHeader><TableRow>
+                  <TableHead>Deleted</TableHead><TableHead>Entry</TableHead><TableHead>By</TableHead>
+                  <TableHead>Reason</TableHead><TableHead className="text-right">Amount</TableHead><TableHead />
+                </TableRow></TableHeader>
+                <TableBody data-testid="deleted-entries-rows">
+                  {rows.map(d => (
+                    <React.Fragment key={d.id}>
+                      <TableRow className="cursor-pointer hover:bg-muted/40" onClick={() => setOpen(o => ({ ...o, [d.id]: !o[d.id] }))} data-testid={`deleted-row-${d.id}`}>
+                        <TableCell className="font-mono text-xs">{(d.deleted_at || '').slice(0, 16).replace('T', ' ')}</TableCell>
+                        <TableCell>{d.description}<span className="block text-[11px] text-muted-foreground font-mono">{d.date} · {d.source}</span></TableCell>
+                        <TableCell className="text-xs">{d.deleted_by_name || d.deleted_by}</TableCell>
+                        <TableCell className="text-xs">{d.reason}</TableCell>
+                        <TableCell className="text-right font-mono">{money(d.total)}</TableCell>
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                          {d.restored_at
+                            ? <Badge variant="outline" className="text-[10px] text-emerald-700 border-emerald-300">RESTORED</Badge>
+                            : d.can_restore
+                              ? <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => undelete(d)} data-testid={`undelete-${d.id}`}>Undelete</Button>
+                              : <span className="text-[11px] text-muted-foreground" title="Rebuilt from the audit log — no line detail to restore">no copy</span>}
+                        </TableCell>
+                      </TableRow>
+                      {open[d.id] && (
+                        <TableRow><TableCell colSpan={6} className="bg-muted/20 p-3">
+                          <table className="w-full text-xs">
+                            <thead><tr className="text-muted-foreground"><th className="text-left">Account</th><th className="text-right">Debit</th><th className="text-right">Credit</th></tr></thead>
+                            <tbody>
+                              {(d.lines || []).map((ln, i) => (
+                                <tr key={i}><td className="font-mono">{ln.account_code} — {ln.account_name}</td><td className="text-right font-mono">{ln.debit ? money(ln.debit) : ''}</td><td className="text-right font-mono">{ln.credit ? money(ln.credit) : ''}</td></tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          {d.restored_at && <p className="mt-2 text-[11px] text-emerald-700">Put back by {d.restored_by_name || d.restored_by} on {(d.restored_at || '').slice(0, 16).replace('T', ' ')}</p>}
+                          <p className="mt-2 text-[11px] text-muted-foreground">Originally entered by {d.original_created_by_name || 'unknown'}{d.original_created_at ? ` on ${d.original_created_at.slice(0, 10)}` : ''} · journal id {d.je_id}</p>
+                        </TableCell></TableRow>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+      </CardContent>
+    </Card>
+  );
+}
+
+
 // ─── JOURNAL ─────────────────────────────────────────────────
 function JournalPanel() {
   const { user } = useAuth();
@@ -1058,7 +1150,6 @@ function JournalPanel() {
   const [editing, setEditing] = useState(null); // je object being edited (metadata only)
   const [editForm, setEditForm] = useState({ description: '', reference: '', date: '', location_id: '', department_id: '', vendor: '', lines: null });
   const [editAccounts, setEditAccounts] = useState([]); // CoA cache for the line-editor account swap
-  const [editVendorMatches, setEditVendorMatches] = useState([]);
   // iter344e — retag a JE's campus/sub-location + department without a
   // full reverse+repost. Loaded lazily when the edit dialog opens.
   const [editLocations, setEditLocations] = useState([]);
@@ -1134,7 +1225,9 @@ function JournalPanel() {
       : (editSubLocations.find(s => s.id === picked)?.location_id || picked);
     Promise.all([
       sublocationsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
-      departmentsApi.list({ location_id: parent }).catch(() => ({ data: [] })),
+      departmentsApi.list(picked === parent
+        ? { location_id: parent }
+        : { location_id: parent, sublocation_id: picked }).catch(() => ({ data: [] })),
     ]).then(([sl, dp]) => {
       // Preserve the picked sub-location in the list even if the backend
       // response doesn't include it (defensive — should never happen once
@@ -1226,22 +1319,14 @@ function JournalPanel() {
   };
 
   const deleteReversal = async (je) => {
-    if (!window.confirm(`Delete this reversal (${je.description})? The original entry it reverses will be un-marked and post again. Only allowed while the fiscal period is open.`)) return;
+    const why = window.prompt(`Delete this reversal (${je.description})? The original entry it reverses will post again. Why are you deleting it?`);
+    if (!why || !why.trim()) return;
     try {
-      await api.delete(`/finance/journal/${je.id}`);
+      await api.delete(`/finance/journal/${je.id}`, { params: { reason: why.trim() } });
       toast.success('Reversal deleted, original restored');
       dataEvents.emit('finance-changed', { source: 'reversal_delete' });
       reload();
     } catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
-  };
-
-  const restoreEntry = async (je) => {
-    try {
-      await api.post(`/finance/journal/${je.id}/restore`);
-      toast.success('Entry restored — it counts again');
-      dataEvents.emit('finance-changed', { source: 'je_restore' });
-      reload();
-    } catch (e) { toast.error(e?.response?.data?.detail || 'Restore failed'); }
   };
 
   // Text search is client-side across description + line account names/codes
@@ -1277,15 +1362,17 @@ function JournalPanel() {
   };
 
   const submitReverse = async () => {
-    if (!reason.trim()) { toast.error('Please give a reason for the reversal'); return; }
+    if (!reason.trim()) { toast.error('Please give a reason — it goes on the audit trail'); return; }
     setBusy(true);
     try {
-      await api.post(`/finance/journal/${reversing.id}/reverse`, { reason });
-      toast.success('Entry reversed — it no longer counts');
+      const r = await api.post(`/finance/journal/${reversing.id}/reverse`, { reason });
+      toast.success(r.data?.deleted
+        ? 'Entry deleted — logged against your name in the audit trail'
+        : 'Period is closed, so a balancing entry was posted instead');
       dataEvents.emit('finance-changed', { source: 'reversal' });
       setReversing(null); setReason('');
       reload();
-    } catch (e) { toast.error(e?.response?.data?.detail || 'Reversal failed'); }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Delete failed'); }
     setBusy(false);
   };
 
@@ -1320,7 +1407,7 @@ function JournalPanel() {
           </div>
           <div><Label className="text-xs">From</Label><Input type="date" value={filters.date_from} onChange={e => setFilters({ ...filters, date_from: e.target.value })} className="w-36" data-testid="journal-filter-from" /></div>
           <div><Label className="text-xs">To</Label><Input type="date" value={filters.date_to} onChange={e => setFilters({ ...filters, date_to: e.target.value })} className="w-36" data-testid="journal-filter-to" /></div>
-          <label className="flex items-center gap-1.5 text-xs pb-2"><input type="checkbox" checked={filters.include_reversed} onChange={e => setFilters({ ...filters, include_reversed: e.target.checked })} data-testid="journal-include-voided" /> Include voided / reversed</label>
+          <label className="flex items-center gap-1.5 text-xs pb-2"><input type="checkbox" checked={filters.include_reversed} onChange={e => setFilters({ ...filters, include_reversed: e.target.checked })} data-testid="journal-include-voided" /> Include reversed</label>
           {activeFilterCount > 0 && <Button size="sm" variant="ghost" onClick={clearFilters} data-testid="journal-clear-filters"><X size={13} className="mr-1" />Clear</Button>}
         </div>
       </CardHeader>
@@ -1339,9 +1426,7 @@ function JournalPanel() {
                   <TableRow className={`cursor-pointer hover:bg-muted/40 ${je.reversed ? 'opacity-50 line-through' : ''}`} onClick={() => setExpanded(e => ({ ...e, [je.id]: !e[je.id] }))} data-testid={`journal-row-${je.id}`}>
                     <TableCell className="font-mono text-xs">{je.date}</TableCell>
                     <TableCell>{je.description}
-                      {je.voided
-                        ? <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">VOIDED</Badge>
-                        : je.reversed && <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">REVERSED</Badge>}
+                      {je.reversed && <Badge variant="outline" className="ml-2 text-[10px] text-red-700 border-red-300">REVERSED</Badge>}
                       {je.edit_history?.length > 0 && <Badge variant="outline" className="ml-2 text-[10px]">EDITED</Badge>}</TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px]">{je.source}</Badge></TableCell>
                     <TableCell className="text-right font-mono">{money(je.total)}</TableCell>
@@ -1350,11 +1435,8 @@ function JournalPanel() {
                         {!je.reversed && je.source !== 'reversal' && (
                           <>
                             <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditing(je)} data-testid={`journal-edit-${je.id}`}>Edit</Button>
-                            <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" onClick={() => { setReversing(je); setReason(''); }} data-testid={`journal-reverse-${je.id}`}>Reverse</Button>
+                            <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" onClick={() => { setReversing(je); setReason(''); }} data-testid={`journal-reverse-${je.id}`}>Delete</Button>
                           </>
-                        )}
-                        {je.voided && je.source !== 'reversal' && (
-                          <Button size="sm" variant="ghost" className="h-7 text-xs no-underline" title="Brings this entry back into the ledger. Only allowed while the fiscal period is open." onClick={() => restoreEntry(je)} data-testid={`journal-restore-${je.id}`}>Restore</Button>
                         )}
                         {je.source === 'reversal' && (
                           <Button size="sm" variant="ghost" className="text-red-700 hover:bg-red-50 h-7 text-xs no-underline" title="Deletes this reversal and restores the original entry. Only allowed while the fiscal period is open." onClick={() => deleteReversal(je)} data-testid={`journal-delete-reversal-${je.id}`}>Delete reversal</Button>
@@ -1372,7 +1454,6 @@ function JournalPanel() {
                           ))}
                         </tbody>
                       </table>
-                      {je.voided && <p className="mt-2 text-[11px] text-red-700">Voided by {je.voided_by_name || je.voided_by || 'someone'} on {(je.voided_at || '').slice(0, 10)} — {je.reversed_reason || 'no reason given'}. It does not count towards any balance or report.</p>}
                       {je.reversed_by_je && <p className="mt-2 text-[11px] text-red-700">Reversed by {je.reversed_by_je} ({je.reversed_reason || 'no reason'})</p>}
                     </TableCell></TableRow>
                   )}
@@ -1384,7 +1465,7 @@ function JournalPanel() {
         )}
       </CardContent>
       <Dialog open={!!editing} onOpenChange={o => !o && setEditing(null)}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="journal-edit-dialog">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="journal-edit-dialog" onEscapeKeyDown={guardPickerEscape}>
           <DialogHeader><DialogTitle>Edit journal entry</DialogTitle></DialogHeader>
           <p className="text-xs text-muted-foreground">Metadata edits (description / reference / date) update in place with an audit trail. Reclassifying lines voids this entry and posts the corrected one in its place, linked via <code>supersedes</code> — so you see one live line, not a line plus a contra. Both paths refuse when the fiscal period is locked.</p>
           <div className="space-y-3 pt-2">
@@ -1396,54 +1477,33 @@ function JournalPanel() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">Campus / sub-location</Label>
-                <Select value={editForm.location_id} onValueChange={v => setEditForm({ ...editForm, location_id: v, department_id: '' })}>
-                  <SelectTrigger data-testid="journal-edit-location"><SelectValue placeholder="Pick a campus" /></SelectTrigger>
-                  <SelectContent>
-                    {editLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
-                    {editSubLocations.map(s => <SelectItem key={s.id} value={s.id}>&nbsp;&nbsp;↳ {s.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect testId="journal-edit-location"
+                  value={editForm.location_id}
+                  onChange={v => setEditForm({ ...editForm, location_id: v, department_id: '' })}
+                  placeholder="Type to find a campus"
+                  options={[
+                    ...editLocations.map(l => ({ value: l.id, label: l.name })),
+                    ...editSubLocations.map(sl => ({ value: sl.id, label: `↳ ${sl.name}`, hint: 'Sub-location' })),
+                  ]} />
               </div>
               <div>
                 <Label className="text-xs">Department</Label>
-                <Select value={editForm.department_id || '__none__'} onValueChange={v => setEditForm({ ...editForm, department_id: v === '__none__' ? '' : v })}>
-                  <SelectTrigger data-testid="journal-edit-department" disabled={!editForm.location_id}><SelectValue placeholder={editForm.location_id ? (editDepartments.length ? 'Untagged' : 'No departments for this campus') : 'Pick a campus first'} /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">Untagged</SelectItem>
-                    {editDepartments.map(d => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <SearchSelect testId="journal-edit-department"
+                  value={editForm.department_id || '__none__'}
+                  onChange={v => setEditForm({ ...editForm, department_id: v === '__none__' ? '' : v })}
+                  placeholder={editForm.location_id ? 'Type to find a department' : 'Pick a campus first'}
+                  options={editForm.location_id
+                    ? [{ value: '__none__', label: 'Untagged' }, ...editDepartments.map(d => ({ value: d.id, label: d.name }))]
+                    : []}
+                  emptyLabel={editForm.location_id ? 'No departments for this campus' : 'Pick a campus first'} />
               </div>
             </div>
-            <div className="relative">
+            <div>
               <Label className="text-xs">Vendor</Label>
-              <Input
-                data-testid="journal-edit-vendor"
+              <VendorPicker testId="journal-edit-vendor"
                 value={editForm.vendor || ''}
-                placeholder="Vendor / payee (retag after the fact)"
-                onChange={async e => {
-                  const v = e.target.value;
-                  setEditForm({ ...editForm, vendor: v });
-                  if (v && v.length >= 1) {
-                    try {
-                      const { vendorsApi } = await import('../services/api');
-                      const r = await vendorsApi.suggest(v);
-                      setEditVendorMatches(r.data || []);
-                    } catch { setEditVendorMatches([]); }
-                  } else setEditVendorMatches([]);
-                }}
-                onBlur={() => setTimeout(() => setEditVendorMatches([]), 200)}
-              />
-              {editVendorMatches.length > 0 && (
-                <div className="absolute z-50 left-0 right-0 top-full mt-1 border rounded-lg bg-popover shadow max-h-48 overflow-y-auto" data-testid="journal-edit-vendor-suggest">
-                  {editVendorMatches.map(v => (
-                    <button key={v.id} type="button" className="w-full text-left px-3 py-1.5 text-xs hover:bg-accent" onClick={() => { setEditForm(f => ({ ...f, vendor: v.name })); setEditVendorMatches([]); }} data-testid={`journal-edit-vendor-suggest-${v.id}`}>
-                      <div className="font-medium">{v.name}</div>
-                      {(v.email || v.phone || v.category) && <div className="text-[10px] text-muted-foreground">{[v.category, v.phone, v.email].filter(Boolean).join(' · ')}</div>}
-                    </button>
-                  ))}
-                </div>
-              )}
+                onChange={v => setEditForm(f => ({ ...f, vendor: v }))}
+                placeholder="Vendor / payee (retag after the fact)" />
               <p className="text-[10px] text-muted-foreground mt-1">Typing a new name creates a vendor profile on save; picking a match links the existing one.</p>
             </div>
 
@@ -1466,10 +1526,11 @@ function JournalPanel() {
                       <tr key={i} className="border-t">
                         <td className="px-2 py-1.5">
                           {editForm.lines ? (
-                            <Select value={ln.account_id} onValueChange={v => swapAccount(i, v)}>
-                              <SelectTrigger className="h-7 text-xs" data-testid={`journal-edit-line-account-${i}`}><SelectValue /></SelectTrigger>
-                              <SelectContent>{editAccounts.map(a => <SelectItem key={a.id} value={a.id}>{a.code} — {a.name} <span className="text-muted-foreground">({a.type})</span></SelectItem>)}</SelectContent>
-                            </Select>
+                            <SearchSelect size="sm" testId={`journal-edit-line-account-${i}`}
+                              value={ln.account_id}
+                              onChange={v => swapAccount(i, v)}
+                              placeholder="Type an account"
+                              options={accountOptions(editAccounts)} />
                           ) : (
                             <span className="font-mono">{ln.account_code} — {ln.account_name}</span>
                           )}
@@ -1502,20 +1563,20 @@ function JournalPanel() {
 
       <Dialog open={!!reversing} onOpenChange={o => !o && setReversing(null)}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Reverse journal entry</DialogTitle></DialogHeader>
-          <p className="text-sm">While the fiscal period is open this simply removes the entry — it stops counting towards every balance and report, and no extra line is posted. You can bring it back with <strong>Restore</strong> (tick &quot;Include voided / reversed&quot;). If the period is already locked, a mirror entry is posted instead, because a closed month can&apos;t be changed.</p>
+          <DialogHeader><DialogTitle>Delete journal entry</DialogTitle></DialogHeader>
+          <p className="text-sm">While the fiscal period is open the entry is <strong>deleted</strong> — it leaves the journal and every report, and no extra line is posted. Your name, the time, this reason and a full copy are kept in <strong>Deleted entries</strong> and the Admin audit trail. If the period is already closed, a balancing entry is posted into the open period instead, because a closed month can&apos;t be changed.</p>
           <div className="mt-3 space-y-3">
             <div className="text-xs bg-muted/40 p-2 rounded font-mono">
               {reversing?.date} · {reversing?.description} · {money(reversing?.total)}
             </div>
             <div>
               <Label>Reason (required)</Label>
-              <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Wrong account picked" data-testid="reverse-reason-input" />
+              <Input value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. Duplicate — entered twice" data-testid="reverse-reason-input" />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setReversing(null)} disabled={busy}>Cancel</Button>
-            <Button variant="destructive" onClick={submitReverse} disabled={busy || !reason.trim()} data-testid="reverse-submit">{busy ? 'Reversing…' : 'Reverse entry'}</Button>
+            <Button variant="destructive" onClick={submitReverse} disabled={busy || !reason.trim()} data-testid="reverse-submit">{busy ? 'Deleting…' : 'Delete entry'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

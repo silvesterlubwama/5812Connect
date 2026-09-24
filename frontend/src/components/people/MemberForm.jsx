@@ -11,7 +11,9 @@ import { ocrApi } from '../../services/api';
 import { toast } from 'sonner';
 
 // Shared form for members/staff — extracted from UnifiedPeoplePage.jsx
-export default function MemberForm({ data, onChange, locations, showDepartment }) {
+// `nameField` lets the caller swap the plain name box for a search-first
+// picker (used by Add Person so an existing profile is found, not duplicated).
+export default function MemberForm({ data, onChange, locations, showDepartment, nameField }) {
   const departmentOptions = (() => {
     if (!data.location_id) return [];
     const loc = locations.find(l => l.id === data.location_id);
@@ -80,7 +82,7 @@ export default function MemberForm({ data, onChange, locations, showDepartment }
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5"><Label className="text-xs">Name *</Label><Input value={data.name} onChange={e => onChange({ ...data, name: e.target.value })} required data-testid="member-name-input" /></div>
+        <div className="space-y-1.5"><Label className="text-xs">Name *</Label>{nameField || <Input value={data.name} onChange={e => onChange({ ...data, name: e.target.value })} required data-testid="member-name-input" />}</div>
         <div className="space-y-1.5"><Label className="text-xs">Email</Label><Input type="email" value={data.email} onChange={e => onChange({ ...data, email: e.target.value })} data-testid="member-email-input" /></div>
       </div>
       <div className="grid grid-cols-2 gap-3">

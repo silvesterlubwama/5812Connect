@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from deps import db, require_staff, require_director
 
-from ._common import post_journal_entry, reverse_journal_entry
+from ._common import post_journal_entry, reverse_journal_entry, delete_journal_entry
 from ._common import _now
 
 router = APIRouter(prefix="/api/finance/journal", tags=["finance"])
@@ -132,57 +132,105 @@ async def update_entry(je_id: str, data: dict, current_user: dict = Depends(requ
 
 @router.post("/{je_id}/reverse")
 async def reverse_entry(je_id: str, data: dict, current_user: dict = Depends(require_director)):
-    """Undo an entry. Open period → the entry is voided and nothing new posts.
-    Locked period → a contra entry is posted (see reverse_journal_entry)."""
-    reason = (data or {}).get("reason") or "No reason provided"
-    return await reverse_journal_entry(je_id, reason=reason, current_user=current_user)
+    """Undo an entry. Open period → the entry is deleted (a copy plus who/why
+    goes to the audit trail). Locked period → a contra entry is posted."""
+    reason = (data or {}).get("reason") or ""
+    if not reason.strip():
+        raise HTTPException(status_code=400, detail="A reason is required so the audit trail means something")
+    return await reverse_journal_entry(je_id, reason=reason.strip(), current_user=current_user)
 
 
-@router.post("/{je_id}/restore")
-async def restore_entry(je_id: str, current_user: dict = Depends(require_director)):
-    """Bring a voided entry back. Refused once its fiscal period is locked."""
+@router.get("/deleted/list")
+async def list_deleted_entries(
+    limit: int = Query(200, le=1000),
+    current_user: dict = Depends(require_staff),
+):
+    """Audit trail of deleted journal entries — who, when, why and what."""
+    rows = await db.finance_deleted_entries.find(
+        {}, {"_id": 0},
+    ).sort("deleted_at", -1).limit(limit).to_list(limit)
+    out = []
+    for r in rows:
+        entry = r.pop("entry", None)
+        out.append({**r, "can_restore": bool(entry) and not r.get("restored_at")})
+    return {"deleted": out, "count": len(out)}
+
+
+@router.post("/deleted/{trail_id}/restore")
+async def restore_deleted_entry(trail_id: str, current_user: dict = Depends(require_director)):
+    """Put a deleted entry back, exactly as it was, from the stored copy."""
     from .setup import period_is_locked
-    doc = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
-    if not doc:
-        raise HTTPException(status_code=404, detail="Journal entry not found")
-    if not doc.get("voided"):
-        raise HTTPException(status_code=400, detail="That entry is not voided")
-    if await period_is_locked(doc.get("date") or "", doc.get("location_id")):
-        raise HTTPException(status_code=400, detail="Fiscal period covering this entry is locked — it cannot be restored")
-    await db.finance_journal_entries.update_one({"id": je_id}, {
-        "$unset": {"voided": "", "voided_at": "", "voided_by": "", "voided_by_name": "",
-                   "reversed_at": "", "reversed_reason": ""},
-        "$set": {"reversed": False, "restored_at": _now(), "restored_by": current_user["id"]},
+    from deps import _audit
+    snap = await db.finance_deleted_entries.find_one({"id": trail_id}, {"_id": 0})
+    if not snap:
+        raise HTTPException(status_code=404, detail="Deleted entry not found")
+    if snap.get("restored_at"):
+        raise HTTPException(status_code=400, detail="That entry has already been restored")
+    entry = snap.get("entry")
+    if not entry:
+        raise HTTPException(
+            status_code=400,
+            detail="This row was rebuilt from the audit log and has no line detail, so it can't be restored — re-enter it by hand",
+        )
+    if await db.finance_journal_entries.find_one({"id": entry.get("id")}, {"_id": 0, "id": 1}):
+        raise HTTPException(status_code=400, detail="That entry is already back in the ledger")
+    if await period_is_locked(entry.get("date") or "", entry.get("location_id")):
+        raise HTTPException(
+            status_code=400,
+            detail="Fiscal period covering this entry is closed — post a fresh entry in the open period instead",
+        )
+    entry.pop("_id", None)
+    for stale in ("reversed", "reversed_at", "reversed_by", "reversed_by_je", "reversed_reason",
+                  "voided", "voided_at", "voided_by", "voided_by_name"):
+        entry.pop(stale, None)
+    entry["restored_at"] = _now()
+    entry["restored_by"] = current_user["id"]
+    entry["restored_by_name"] = current_user.get("name") or ""
+    await db.finance_journal_entries.insert_one(entry)
+    await db.finance_deleted_entries.update_one({"id": trail_id}, {"$set": {
+        "restored_at": _now(), "restored_by": current_user["id"],
+        "restored_by_name": current_user.get("name") or "",
+    }})
+    await _audit(current_user["id"], "restore", "journal_entry", entry["id"], {
+        "date": entry.get("date"), "description": entry.get("description"),
+        "total": float(entry.get("total") or 0), "from_trail": trail_id,
     })
-    return await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
+    entry.pop("_id", None)
+    return {"restored": entry["id"], "entry": entry}
 
 
 @router.delete("/{je_id}")
-async def delete_entry(je_id: str, current_user: dict = Depends(require_director)):
-    """Delete a reversal JE (source='reversal') and un-mark the entry it
-    reversed so the original posts again. Refuses when the fiscal period
-    covering the entry is locked. Non-reversal JEs must go through
-    /reverse — deleting a live posted transaction outright would break
-    the audit trail."""
+async def delete_entry(je_id: str, reason: str = Query("", max_length=300),
+                       current_user: dict = Depends(require_director)):
+    """Delete an entry outright while its fiscal period is open.
+
+    A copy, the reason and the user's name go to `finance_deleted_entries` and
+    the audit trail. Deleting a contra entry also un-marks the entry it
+    reversed, so the original posts again.
+    """
     from .setup import period_is_locked
     doc = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Journal entry not found")
-    if doc.get("source") != "reversal":
-        raise HTTPException(status_code=400, detail="Only reversal entries can be deleted directly. Use /reverse on live entries.")
     if await period_is_locked(doc.get("date") or "", doc.get("location_id")):
-        raise HTTPException(status_code=400, detail="Fiscal period is locked — reversal cannot be undone")
+        raise HTTPException(
+            status_code=400,
+            detail="Fiscal period covering this entry is closed — reverse it instead so the correction lands in the open period",
+        )
+    if not (reason or "").strip():
+        raise HTTPException(status_code=400, detail="A reason is required so the audit trail means something")
     # The contra JE records the entry it reverses in `reference` (older rows
     # used reverses_id / reversed_je_id), so check every shape — otherwise the
     # original silently stays marked reversed and can never post again.
-    original_id = (doc.get("reverses_id") or doc.get("reversed_je_id")
-                   or doc.get("reverses") or doc.get("reference"))
-    # Delete this reversal + un-mark the original
-    await db.finance_journal_entries.delete_one({"id": je_id})
+    original_id = None
+    if doc.get("source") == "reversal":
+        original_id = (doc.get("reverses_id") or doc.get("reversed_je_id")
+                       or doc.get("reverses") or doc.get("reference"))
+    snapshot = await delete_journal_entry(je_id, reason=reason.strip(), current_user=current_user)
     if original_id:
         await db.finance_journal_entries.update_one(
             {"id": original_id},
             {"$unset": {"reversed": "", "reversed_at": "", "reversed_by": "", "reversed_reason": "", "reversed_by_je": "", "voided": "", "voided_at": "", "voided_by": "", "voided_by_name": ""}},
         )
-    return {"deleted": je_id, "restored_original": original_id}
+    return {"deleted": je_id, "restored_original": original_id, "audit_id": snapshot["id"]}
 

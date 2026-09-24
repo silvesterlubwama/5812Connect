@@ -14,9 +14,27 @@ _DAY = 86400
 _YEAR = 31536000
 
 
+async def _recreate_index(coll, name: str, keys, **opts):
+    """Create an index, replacing an older definition with different options."""
+    try:
+        await coll.create_index(keys, name=name, **opts)
+    except Exception:
+        try:
+            await coll.drop_index(name)
+            await coll.create_index(keys, name=name, **opts)
+        except Exception as e:
+            logger.warning(f"index {coll.name}.{name} not updated: {e}")
+
+
 async def _ensure_people_indexes():
     """Users, members, children, guests, families, and auth/session records."""
-    await db.users.create_index("email", unique=True)
+    # Unique on email, but only for accounts that actually HAVE one. A plain
+    # unique index treats every email-less account as `email: ""`, so the second
+    # volunteer/kiosk-only user created without an email hit a duplicate-key
+    # error (and the request hung instead of failing cleanly).
+    await _recreate_index(
+        db.users, "email_1", "email", unique=True,
+        partialFilterExpression={"email": {"$gt": ""}})
     await db.users.create_index("id", unique=True)
     await db.users.create_index([("role", 1), ("status", 1)])
     await db.users.create_index([("location_id", 1), ("status", 1)])

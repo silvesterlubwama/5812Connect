@@ -18,6 +18,7 @@ const LOGIN_PATHS_SKIP_REDIRECT = [
   '/auth/login',
   '/auth/pin-login',
   '/auth/pos-login',
+  '/auth/sales-portal-login',
   '/auth/2fa/verify',
   '/auth/password-reset',
   '/auth/forgot-password',
@@ -414,6 +415,11 @@ export const familiesApi = {
   decidePendingChild: (childId, action, reason = '') => api.post(`/families/pending-approvals/child/${childId}/decide`, { action, reason }),
   decidePendingGuardian: (familyId, guardianId, action, reason = '') => api.post(`/families/pending-approvals/guardian/${familyId}/${guardianId}/decide`, { action, reason }),
   audit: (familyId) => api.get(`/families/${familyId}/audit`),
+  changeRequests: (status = 'pending') => api.get('/families/change-requests', { params: { status } }),
+  decideChangeRequest: (id, action, reason = '') => api.post(`/families/change-requests/${id}/decide`, { action, reason }),
+  duplicates: () => api.get('/people/duplicates'),
+  mergeDuplicates: (keepId, dropIds) => api.post('/people/duplicates/merge', { keep_id: keepId, drop_ids: dropIds }),
+  autoMergeDuplicates: () => api.post('/people/duplicates/auto-merge'),
 };
 export const childrenApi = {
   list: (params) => api.get('/children', { params }),
@@ -799,6 +805,8 @@ export const portalApi = {
   addGuardian: (data) => api.post('/portal/family/guardians', data),
   updateGuardian: (id, data) => api.put(`/portal/family/guardians/${id}`, data),
   removeGuardian: (id) => api.delete(`/portal/family/guardians/${id}`),
+  updateChild: (id, data) => api.put(`/portal/family/children/${id}`, data),
+  myChangeRequests: () => api.get('/portal/family/change-requests'),
   statement: (month) => api.get('/portal/statement', { params: month ? { month } : {} }),
   tickets: () => api.get('/portal/tickets'),
   publicEvents: () => api.get('/public/events'),

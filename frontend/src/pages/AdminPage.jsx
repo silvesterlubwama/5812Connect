@@ -18,6 +18,7 @@ import { dataEvents, emitDataChanged } from '../services/dataEvents';
 import { UserCreateDialog } from '../components/admin/UserCreateDialog';
 import { UserImportDialog } from '../components/admin/UserImportDialog';
 import { UserEditDialog } from '../components/admin/UserEditDialog';
+import { DuplicatePeoplePanel } from '../components/admin/DuplicatePeoplePanel';
 import KioskLinksManager from '../components/KioskLinksManager';
 import BackupRestoreManager from '../components/BackupRestoreManager';
 import { DepartmentsManager } from '../components/admin/DepartmentsManager';
@@ -319,6 +320,7 @@ export default function AdminPage({ mode = 'system' }) {
       {/* Access Expiring Soon banner — moved into System Console tabs below */}
 
       {showStaff && (<>
+      <DuplicatePeoplePanel onMerged={fetchUsers} />
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />

@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Label } from '../components/ui/label';
 import { Switch } from '../components/ui/switch';
 import { Badge } from '../components/ui/badge';
+import { StaffPicker } from '../components/StaffPicker';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { boardsApi, tasksApi, locationsApi, adminApi } from '../services/api';
 import { BulkActionBar, exportToCSV, SelectCheckbox } from '../components/BulkActions';
@@ -876,17 +877,12 @@ export default function TasksPage() {
             </div>
             {/* Board Members */}
             <div className="space-y-2"><Label>Assign Members</Label>
-              <Select onValueChange={v => {
-                if (v && !(currentBoard?.tagged_members || []).includes(v)) {
-                  boardsApi.update(currentBoard.id, { tagged_members: [...(currentBoard?.tagged_members || []), v] }).then(() => { fetchBoards(); toast.success('Member added'); }).catch(() => toast.error('Failed'));
-                }
-              }}>
-                <SelectTrigger><SelectValue placeholder="Add staff to board..." /></SelectTrigger>
-                {/* iter 260 — scope the picker to the board's own location
-                    when set. Same rule as the assignee dropdown so admins
-                    don't accidentally tag a staffer from another campus.
-                    Global boards fall through to the full staff list. */}
-                <SelectContent>{staffUsers
+              {/* iter364 — type-to-find instead of a long dropdown. Still
+                  scoped to the board's own location when set, so admins don't
+                  accidentally tag a staffer from another campus. */}
+              <StaffPicker testId="board-add-member" placeholder="Type a staff name to add…" allowClear={false}
+                value=""
+                options={staffUsers
                   .filter(s => {
                     const role = (s.role || '').toLowerCase();
                     if (!STAFF_ROLES.includes(role)) return false;
@@ -895,10 +891,12 @@ export default function TasksPage() {
                     return (s.location_ids || []).includes(currentBoard.location_id);
                   })
                   .filter(s => !(currentBoard?.tagged_members || []).includes(s.id))
-                  .map(s => (
-                    <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>
-                  ))}</SelectContent>
-              </Select>
+                  .map(s => ({ id: s.id, name: s.name, hint: s.role }))}
+                onChange={v => {
+                  if (v && !(currentBoard?.tagged_members || []).includes(v)) {
+                    boardsApi.update(currentBoard.id, { tagged_members: [...(currentBoard?.tagged_members || []), v] }).then(() => { fetchBoards(); toast.success('Member added'); }).catch(() => toast.error('Failed'));
+                  }
+                }} />
               <div className="flex flex-wrap gap-1 mt-1">
                 {(currentBoard?.tagged_members || []).map(uid => {
                   const s = staffUsers.find(u => u.id === uid);

@@ -25,11 +25,21 @@ from .badges import router as _badges_router
 from .nfc import router as _nfc_router
 from .bulk_import import router as _bulk_import_router
 from .pdf import router as _pdf_router
+from .people_search import router as _people_search_router
+from .dedupe import router as _dedupe_router
+from .family_approvals import router as _family_approvals_router
+from .family_members import router as _family_members_router
 
 # Aggregator — server.py does `from routers.members import router` and then
 # `app.include_router(router)`, exactly like before.
 router = APIRouter()
 router.include_router(_core_router)
+# family_approvals first: its /families/change-requests paths must win over
+# the catch-all /families/{family_id} route in families.py
+router.include_router(_family_approvals_router)
+# family_members before families/children so its /members and /family-members
+# paths are matched before the catch-all {family_id} / {child_id} routes
+router.include_router(_family_members_router)
 router.include_router(_families_router)
 router.include_router(_children_router)
 router.include_router(_guests_router)
@@ -37,3 +47,5 @@ router.include_router(_badges_router)
 router.include_router(_nfc_router)
 router.include_router(_bulk_import_router)
 router.include_router(_pdf_router)
+router.include_router(_people_search_router)
+router.include_router(_dedupe_router)

@@ -88,6 +88,7 @@ import BarcodeReissuePage from './pages/BarcodeReissuePage';
 import ReconciliationReportsPage from './pages/ReconciliationReportsPage';
 import CustomerStatementsPage from './pages/CustomerStatementsPage';
 import HRPage from './pages/HRPage';
+import LessonPlanningPage from './pages/LessonPlanningPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import SecurityCheckpointPage from './pages/SecurityCheckpointPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -191,6 +192,7 @@ function AppRoutes() {
         <Route path="comms" element={<CommsPage />} />
         <Route path="voip" element={<VoipAdminPage />} />
         <Route path="outreach" element={<OutreachPage />} />
+        <Route path="lesson-planning" element={<LessonPlanningPage />} />
         <Route path="resources" element={<ResourcesPage />} />
         <Route path="ticket-scanner" element={<TicketScannerPage />} />
         <Route path="access" element={<AccessPage />} />

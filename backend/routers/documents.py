@@ -7,7 +7,7 @@ from pathlib import Path
 import uuid
 import os
 
-from deps import db, get_current_user, require_manager, _audit
+from deps import db, get_current_user, require_manager, _audit, find_linked_member
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -92,10 +92,8 @@ async def upload_member_document(
         # Fallback: check if this is a user_id and find their linked member record
         user = await db.users.find_one({"id": member_id}, {"_id": 0, "id": 1, "name": 1, "email": 1})
         if user:
-            member = await db.members.find_one(
-                {"$or": [{"user_id": member_id}, {"email": user.get("email", "__none__")}]},
-                {"_id": 0, "id": 1, "role": 1, "group": 1, "name": 1, "email": 1}
-            )
+            member = await find_linked_member(member_id, user.get("email"),
+                {"_id": 0, "id": 1, "role": 1, "group": 1, "name": 1, "email": 1})
             if member:
                 member_id = member["id"]
             else:
@@ -109,9 +107,7 @@ async def upload_member_document(
     is_staff = role in {"admin", "system_admin", "executive director", "director", "manager", "coordinator", "staff", "hr"}
     if not is_staff:
         # Check if this user is the member
-        user_record = await db.members.find_one(
-            {"email": current_user.get("email")}, {"_id": 0, "id": 1}
-        )
+        user_record = await find_linked_member(current_user.get("id"), current_user.get("email"), {"_id": 0, "id": 1})
         if not user_record or user_record.get("id") != member_id:
             raise HTTPException(status_code=403, detail="You can only upload your own documents")
 
@@ -179,10 +175,7 @@ async def list_member_documents(member_id: str, current_user: dict = Depends(get
     if not member:
         user = await db.users.find_one({"id": member_id}, {"_id": 0, "email": 1})
         if user:
-            linked = await db.members.find_one(
-                {"$or": [{"user_id": member_id}, {"email": user.get("email", "__none__")}]},
-                {"_id": 0, "id": 1}
-            )
+            linked = await find_linked_member(member_id, user.get("email"), {"_id": 0, "id": 1})
             if linked:
                 resolved_id = linked["id"]
     docs = await db.files.find({"member_id": {"$in": [member_id, resolved_id]}, "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(200)
@@ -252,10 +245,7 @@ async def create_document_request(data: dict, current_user: dict = Depends(get_c
         # Fallback: resolve user_id to member
         user = await db.users.find_one({"id": member_id}, {"_id": 0, "name": 1, "email": 1})
         if user:
-            linked = await db.members.find_one(
-                {"$or": [{"user_id": member_id}, {"email": user.get("email", "__none__")}]},
-                {"_id": 0, "name": 1, "id": 1}
-            )
+            linked = await find_linked_member(member_id, user.get("email"), {"_id": 0, "name": 1, "id": 1})
             if linked:
                 member = linked
                 member_id = linked["id"]
@@ -304,7 +294,7 @@ async def list_document_requests(
             query["member_id"] = member_id
     else:
         # Find member record for this user
-        user_member = await db.members.find_one({"email": current_user.get("email")}, {"_id": 0, "id": 1})
+        user_member = await find_linked_member(current_user.get("id"), current_user.get("email"), {"_id": 0, "id": 1})
         if user_member:
             query["member_id"] = user_member["id"]
         else:

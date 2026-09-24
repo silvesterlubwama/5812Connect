@@ -9,7 +9,10 @@ const TabsList = React.forwardRef(({ className, ...props }, ref) => (
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground",
+      // justify-start, not center: a centred flex row that overflows spills off
+      // the LEFT edge where it can never be scrolled to, which hid the first
+      // tabs (Salaries, Payslips, Overview…) on phones.
+      "inline-flex h-9 items-center justify-start md:justify-center rounded-lg bg-muted p-1 text-muted-foreground",
       className
     )}
     {...props} />

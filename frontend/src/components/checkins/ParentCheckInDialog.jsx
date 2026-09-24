@@ -2,6 +2,7 @@ import React from 'react';
 import { Baby, Phone, QrCode, UserCheck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { PersonPicker } from '../PersonPicker';
 import { Label } from '../ui/label';
 import { Badge } from '../ui/badge';
 import { Checkbox } from '../ui/checkbox';
@@ -41,16 +42,19 @@ export function ParentCheckInDialog({
           {!parentData && (
             <>
               <div className="space-y-2">
-                <Label>Parent Phone, Email, or ID *</Label>
+                <Label>Parent name, phone, email or ID *</Label>
                 <div className="flex gap-2">
-                  <Input
-                    data-testid="parent-lookup-input"
-                    placeholder="e.g. +256 700 123456"
-                    value={parentLookup}
-                    onChange={e => setParentLookup(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); onLookup(); } }}
-                    className="flex-1"
-                  />
+                  <div className="flex-1">
+                    {/* Type-to-find the parent; a phone/ID still works as before. */}
+                    <PersonPicker
+                      testId="parent-lookup-input"
+                      kinds="member,user,guest"
+                      placeholder="Type their name, or a phone / ID"
+                      value={parentLookup}
+                      onChange={setParentLookup}
+                      onPick={p => { setParentLookup(p.name); onLookup(p.phone || p.email || p.name); }}
+                    />
+                  </div>
                   <Button variant="outline" size="icon" onClick={onStartQrScan} title="Scan QR" data-testid="qr-scan-btn"><QrCode size={16} /></Button>
                 </div>
               </div>

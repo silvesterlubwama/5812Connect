@@ -1,0 +1,31 @@
+{
+  "summary": "iter361 Outreach Lesson Planning — full-stack review. Backend: original 7/7 pytest suite passes; added 5 more targeted tests for RBAC (Volunteer allowed, Member 403), theme-delete-when-in-use (400), PO with no snacks (400), and Volunteer plan creation — all 5 pass. Frontend: sidebar 'Lesson Planning' nav works, page renders with data-testid='lesson-planning-page' and all 5 tabs. Outreach events tab lists seeded 'Kids Club Outreach (sample)' + 2 test events, non-outreach 'meeting' event correctly excluded. Session-plan authoring flow works end-to-end: yearly theme picker, topic, verse, target, running-order slots, worship songs, games, snacks/kit, materials, story fields, offering, take-home all persist after save (verified by reload + deep link ?event=<id>). Raise-order button generated PO-2026-000003 with correct line items. Run sheet popup opens with topic, memory verse, slot titles, songs, snacks all present. Mark-final toggle works. Yearly theme creation with topic works and appears in list. Library tab surfaces newly-typed songs/games. Duplicate dialog opens with target selectors. Deep link /lesson-planning?event=<id> auto-opens the correct plan. Mobile 390x844: ZERO horizontal overflow on all 4 tested tabs. 'Plan this' button verified in CalendarPage source (gated by type==='outreach', navigates to deep link).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter361_lesson_planning.py",
+    "/app/backend/tests/test_iter361_lesson_planning_rbac.py",
+    "/app/test_reports/pytest/iter361.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "lesson_planning.py list_library() still reads scope['location_id'] directly (line ~131) instead of using _allowed_locations() helper — same silent-no-op class of bug that was fixed in _plan_or_404. Not blocking today because admin is unscoped, but Volunteer scoped to a campus will not filter properly. Same pattern in outreach_events() at line ~187.",
+    "duplicate_plan endpoint does not respect _allowed_locations for the TARGET event — a cross-campus admin could copy onto a campus they cannot access. _plan_or_404 covers the source only.",
+    "plan_to_purchase_order() uses count_documents()+1 as PO number seed which is O(n) on every raise; fine at low volume but consider a counter collection later.",
+    "LessonPlanningPage.jsx is a single 450-line file — approaching the 700 line guideline but still manageable; would benefit from splitting the plan editor sub-form into its own component."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter361_lesson_planning_rbac.py"
+  ],
+  "success_rate": {"backend": "100% (12/12)", "frontend": "100% of tested UI flows"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 ; member@5812uganda.org / Member@5812 ; dynamic Volunteer test user created and cleaned up per run",
+  "seed_data_creation": "Volunteer user vol_<hex>@example.test created/deleted per test run. Test outreach events + themes + plans created and cleaned up. Two persistent plans left over on 'Kids Club outreach f676c' (from initial pytest run) — these were reused by UI tests. PO-2026-000003 raised from UI test remains in the purchase_orders collection.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest suites: test_iter361_lesson_planning.py (7 tests) and test_iter361_lesson_planning_rbac.py (5 tests) all pass against the public URL. UI thoroughly verified. Only cross-campus scoping edge case remains (see critical_code_review_comments). Calendar 'Plan this' click-through was not visually exercised because the seeded outreach event is dated 2026-09-26 while calendar defaults to current month view; the underlying deep link ?event=<id> was directly verified and works, and the button is present in source with correct type==='outreach' gate.",
+  "rca of the issue": "No blocking issue. Minor code-quality notes only (see critical_code_review_comments)."
+}

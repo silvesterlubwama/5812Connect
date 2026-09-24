@@ -580,3 +580,46 @@ async def resolve_department(location_id, department):
     if loc.get("type") == "sub-location":
         return loc.get("name")
     return department
+
+
+
+async def find_linked_member(user_id: str = "", email: str = "", projection: dict = None, name: str = ""):
+    """Find the `members` row that belongs to a user, in priority order.
+
+    Two hard rules, both learnt from live data corruption:
+      * A blank email is NEVER a match key — `{"email": ""}` matched the first
+        member row with no email on file, so the admin edit dialog opened on a
+        completely different person (and their campus).
+      * A `user_id` link is only trusted when the name or email agrees. Stale
+        links (e.g. a guest promoted to staff whose user was later renamed)
+        otherwise let one person's edits overwrite another person's profile.
+    """
+    import re as _re
+    proj = projection or {"_id": 0}
+    # the trust check needs identity fields regardless of the caller's projection
+    ident_proj = {"_id": 0, "id": 1, "name": 1, "email": 1}
+    e = (email or "").strip().lower()
+    n = (name or "").strip().lower()
+
+    def trusted(row: dict) -> bool:
+        if not n and not e:
+            return True
+        re_ = (row.get("email") or "").strip().lower()
+        rn = (row.get("name") or "").strip().lower()
+        if e and re_ and e == re_:
+            return True
+        if n and rn:
+            return n == rn
+        return True     # nothing comparable on file — trust the explicit link
+
+    queries = []
+    if user_id:
+        queries += [{"id": user_id}, {"user_id": user_id}]
+    if e:
+        queries.append({"email": {"$regex": f"^{_re.escape(e)}$", "$options": "i"}})
+    for q in queries:
+        ident = await db.members.find_one(q, ident_proj)
+        if not ident or not trusted(ident):
+            continue
+        return await db.members.find_one({"id": ident["id"]}, proj)
+    return None

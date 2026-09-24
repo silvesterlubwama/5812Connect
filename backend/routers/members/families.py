@@ -31,17 +31,206 @@ async def _log_family_event(family_id: Optional[str], action: str, actor: dict, 
 
 router = APIRouter(prefix="/api", tags=["members"])
 
+PERSON_COLLECTIONS = {"member": "members", "user": "users", "guest": "guests", "child": "children"}
+SPOUSE_WORDS = {"spouse", "husband", "wife", "partner"}
+# Relationships that ARE a parent by definition — the toggle is locked on.
+PARENT_WORDS = SPOUSE_WORDS | {"guardian", "parent", "mother", "father", "mum", "mom", "dad",
+                               "step-parent", "step parent", "foster parent"}
+NEW_PERSON_FIELDS = ("phone", "email", "gender", "date_of_birth", "national_id",
+                     "address", "photo_url", "notes", "occupation")
+
+
+def parent_flags(relationship: str, data: dict) -> dict:
+    """One role + one pickup permission for every household adult.
+
+    The old parent-vs-pickup-only split is gone: everybody recorded on a family
+    is a family member, and the only question left is whether they may collect
+    the children (see routers/members/family_members.py).
+    """
+    from routers.members.family_members import role_flags
+    return role_flags(relationship, data)
+
+
+async def _build_guardian(data: dict, actor: dict, pending: bool) -> dict:
+    """A household adult row. When `person_id` is supplied (the type-ahead was
+    used) the row carries the link, so the kiosk and every other surface can
+    resolve the same profile instead of a re-typed name."""
+    name = (data.get("name") or "").strip()
+    person_id = (data.get("person_id") or "").strip()
+    person_type = (data.get("person_type") or "").strip()
+    linked = None
+    if person_id and person_type in PERSON_COLLECTIONS:
+        linked = await db[PERSON_COLLECTIONS[person_type]].find_one(
+            {"id": person_id}, {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "photo_url": 1})
+        if not linked:
+            raise HTTPException(status_code=404, detail="That person could not be found any more")
+        name = name or linked.get("name") or ""
+    if not name:
+        raise HTTPException(status_code=400, detail="Give their name, or pick them from the search")
+    guardian = {
+        "id": f"gdn_{str(uuid.uuid4())[:8]}",
+        "name": name[:160],
+        "phone": (data.get("phone") or (linked or {}).get("phone") or "")[:40],
+        "email": (data.get("email") or (linked or {}).get("email") or "")[:160],
+        "person_id": person_id if linked else "",
+        "person_type": person_type if linked else "",
+        "photo_url": data.get("photo_url") or (linked or {}).get("photo_url") or "",
+        **parent_flags(data.get("role") or data.get("relationship") or "Guardian", data),
+        "added_at": datetime.now(timezone.utc).isoformat(),
+        "added_by": actor.get("id"),
+        "added_by_name": actor.get("name", ""),
+    }
+    if pending:
+        guardian["approval_status"] = "pending"
+        guardian["submitted_by_parent"] = True
+    return guardian
+
+
+async def _link_person_to_family(guardian: dict, family_id: str, actor: dict):
+    """Point the linked profile at this household, and pair spouses both ways.
+
+    The spouse link is only written when neither side already has a different
+    one — a correction made by the other person or an admin is never undone by
+    someone else re-adding them.
+    """
+    pid, ptype = guardian.get("person_id"), guardian.get("person_type")
+    if not pid or ptype not in PERSON_COLLECTIONS:
+        return
+    coll = PERSON_COLLECTIONS[ptype]
+    await db[coll].update_one({"id": pid}, {"$set": {"family_id": family_id}})
+    if (guardian.get("relationship") or "").strip().lower() not in SPOUSE_WORDS:
+        return
+    me = actor.get("id")
+    if not me or me == pid:
+        return
+    for a, b in ((me, pid), (pid, me)):
+        for c in ("users", "members", "guests"):
+            row = await db[c].find_one({"id": a}, {"_id": 0, "spouse_id": 1})
+            if row is None:
+                continue
+            if row.get("spouse_id") and row["spouse_id"] != b:
+                continue        # somebody already set a different spouse — leave it
+            await db[c].update_one({"id": a}, {"$set": {
+                "spouse_id": b, "spouse_linked_by": actor.get("id"),
+                "spouse_linked_at": datetime.now(timezone.utc).isoformat(),
+            }})
+
+
+async def _create_household_person(data: dict, family_id: str, actor: dict, pending: bool) -> dict:
+    """"Add new" from a household form: build the profile the app was missing.
+
+    An adult becomes a real `members` row (so they can be searched, badged and
+    checked in later); a child goes to `children`, which is where the rest of
+    the app expects them.
+    """
+    name = (data.get("name") or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Enter their full name")
+    relationship = (data.get("relationship") or "Guardian").strip()
+    is_child = bool(data.get("is_child")) or relationship.lower() in {"child", "son", "daughter"}
+    base = {k: (str(data.get(k) or "").strip()[:300]) for k in NEW_PERSON_FIELDS}
+    doc = {
+        "id": f"{'chd' if is_child else 'mem'}_{str(uuid.uuid4())[:8]}",
+        "name": name[:160],
+        **base,
+        "relationship": relationship[:60],
+        "family_id": family_id,
+        "location_id": actor.get("location_id") or actor.get("active_campus_id") or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": actor.get("id"),
+        "created_from": "household_form",
+    }
+    if pending:
+        doc["approval_status"] = "pending"
+        doc["submitted_by_parent"] = True
+    if is_child:
+        doc["parent_ids"] = [actor["id"]] if actor.get("id") else []
+        await db.children.insert_one(dict(doc))
+        await _log_family_event(family_id, "child_submitted" if pending else "child_added", actor,
+                                {"child_id": doc["id"], "child_name": doc["name"]})
+        return {"person": doc, "kind": "child", "guardian": None}
+    doc.update({"kind": "member", "role": "Member", "status": "pending" if pending else "active"})
+    await db.members.insert_one(dict(doc))
+    guardian = await _build_guardian({
+        "name": doc["name"], "relationship": relationship, "phone": doc.get("phone"),
+        "email": doc.get("email"), "photo_url": doc.get("photo_url"),
+        "is_parent": data.get("is_parent"), "can_pickup": data.get("can_pickup"),
+        "person_id": doc["id"], "person_type": "member",
+    }, actor, pending=pending)
+    await db.families.update_one({"id": family_id}, {"$push": {"guardians": guardian}})
+    if not pending:
+        await _link_person_to_family(guardian, family_id, actor)
+    await _log_family_event(family_id, "guardian_submitted" if pending else "guardian_added", actor,
+                            {"guardian_id": guardian["id"], "guardian_name": guardian["name"],
+                             "relationship": relationship, "created_profile": doc["id"]})
+    return {"person": doc, "kind": "member", "guardian": guardian}
+
+
+async def _notify_admins_of_family_change(title: str, body: str, link: str):
+    try:
+        from routers.notifications import create_notification
+        admins = await db.users.find(
+            {"role": {"$in": ["admin", "system_admin", "Executive Director", "Director", "Manager"]}},
+            {"_id": 0, "id": 1},
+        ).to_list(50)
+        for a in admins:
+            try:
+                await create_notification(title, body, a["id"], "warning", link)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 
 @router.get("/families")
 async def list_families(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     from deps import get_campus_filter
-    query = {**await get_campus_filter(current_user)}
+    conditions = []
+    campus = await get_campus_filter(current_user)
+    if campus:
+        # A household with no campus on file must still be visible — otherwise
+        # it silently vanishes from the Families tab (and looks deleted).
+        conditions.append({"$or": [campus, {"location_id": {"$in": [None, ""]}},
+                                   {"location_id": {"$exists": False}}]})
     if search:
-        query["$or"] = [
+        conditions.append({"$or": [
             {"family_name": {"$regex": search, "$options": "i"}},
             {"primary_contact_name": {"$regex": search, "$options": "i"}},
-        ]
+        ]})
+    query = {"$and": conditions} if conditions else {}
     families = await db.families.find(query, {"_id": 0}).sort("family_name", 1).to_list(500)
+    # Card preview: every adult in the household, however they were linked —
+    # guardians[] rows plus any profile that simply carries the family_id.
+    ids = [f["id"] for f in families]
+    if ids:
+        from routers.members.family_members import normalise_role
+        extra = {fid: [] for fid in ids}
+        for coll, kind in (("guests", "guest"), ("members", "member"), ("users", "user")):
+            async for p in db[coll].find(
+                {"family_id": {"$in": ids}},
+                {"_id": 0, "id": 1, "name": 1, "family_id": 1, "relationship": 1, "phone": 1},
+            ):
+                extra[p["family_id"]].append(p)
+        for f in families:
+            rows, seen = [], set()
+            for g in (f.get("guardians") or []):
+                key = (g.get("person_id") or "") or (g.get("name") or "").strip().lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append({"id": g.get("person_id") or g.get("id"), "name": g.get("name") or "",
+                             "role": normalise_role(g.get("role") or g.get("relationship")),
+                             "can_pickup": g.get("can_pickup") is not False,
+                             "approval_status": g.get("approval_status") or "approved"})
+            for p in extra.get(f["id"], []):
+                key = p["id"] if p["id"] not in seen else (p.get("name") or "").strip().lower()
+                if p["id"] in seen or key in seen or not (p.get("name") or "").strip():
+                    continue
+                seen.add(p["id"])
+                rows.append({"id": p["id"], "name": p.get("name") or "",
+                             "role": normalise_role(p.get("relationship")),
+                             "can_pickup": True, "approval_status": "approved"})
+            f["family_members"] = rows
     return families
 
 
@@ -58,6 +247,13 @@ async def create_family(data: FamilyCreate, current_user: dict = Depends(get_cur
     }
     await db.families.insert_one(doc)
     doc.pop("_id", None)
+    # The contact was chosen from the people picker — point their profile here
+    # so the household resolves from either side.
+    if data.primary_contact_person_id:
+        await _link_person_to_family(
+            {"person_id": data.primary_contact_person_id,
+             "person_type": data.primary_contact_person_type},
+            doc["id"], current_user)
     return doc
 
 
@@ -77,11 +273,27 @@ async def bulk_update_families(data: dict, current_user: dict = Depends(get_curr
 
 @router.post("/families/bulk-delete")
 async def bulk_delete_families(data: dict, current_user: dict = Depends(get_current_user)):
+    """Delete several households. Same soft-delete + unlink cascade as the
+    single delete — without it, children/guests/members kept a dangling
+    `family_id` and disappeared from every household view."""
     ids = data.get("ids", [])
     if not ids:
         return {"deleted": 0}
-    result = await db.families.delete_many({"id": {"$in": ids}})
-    return {"deleted": result.deleted_count}
+    deleted = 0
+    for fid in ids:
+        family = await db.families.find_one({"id": fid}, {"_id": 0})
+        if not family:
+            continue
+        family["_deleted_from"] = "families"
+        family["deleted_at"] = datetime.now(timezone.utc).isoformat()
+        family["deleted_by"] = current_user["id"]
+        await db.deleted_items.insert_one(family)
+        await db.families.delete_one({"id": fid})
+        for coll in (db.children, db.guests, db.users, db.members):
+            await coll.update_many({"family_id": fid}, {"$unset": {"family_id": ""}})
+        await _audit(current_user["id"], "delete", "family", fid, {"name": family.get("family_name")})
+        deleted += 1
+    return {"deleted": deleted}
 
 
 @router.put("/guests/bulk-update")
@@ -239,6 +451,14 @@ async def decide_pending_guardian(family_id: str, guardian_id: str, data: dict, 
                 "guardians.$.approved_by_name": current_user.get("name", ""),
             }},
         )
+        # Only now does the link go live: the profile joins the household and,
+        # for a spouse, the pairing is written both ways.
+        submitter = await db.users.find_one({"id": guardian.get("added_by")}, {"_id": 0, "id": 1, "name": 1}) \
+            if guardian.get("added_by") else None
+        await _link_person_to_family(guardian, family_id, submitter or current_user)
+        if guardian.get("person_type") == "member" and guardian.get("person_id"):
+            await db.members.update_one({"id": guardian["person_id"]},
+                                        {"$set": {"status": "active", "approval_status": "approved"}})
         try:
             from routers.notifications import create_notification
             if guardian.get("added_by"):
@@ -255,6 +475,14 @@ async def decide_pending_guardian(family_id: str, guardian_id: str, data: dict, 
         return {"decided": "approved", "family_id": family_id, "guardian_id": guardian_id}
     # Reject → pull guardian off the array
     await db.families.update_one({"id": family_id}, {"$pull": {"guardians": {"id": guardian_id}}})
+    # A profile created purely by that submission goes with it.
+    if guardian.get("person_type") == "member" and guardian.get("person_id"):
+        created = await db.members.find_one({"id": guardian["person_id"]}, {"_id": 0})
+        if created and created.get("created_from") == "household_form":
+            created.update({"_deleted_from": "members", "deleted_at": datetime.now(timezone.utc).isoformat(),
+                            "deleted_by": current_user["id"], "delete_reason": "household submission rejected"})
+            await db.deleted_items.insert_one(created)
+            await db.members.delete_one({"id": guardian["person_id"]})
     try:
         from routers.notifications import create_notification
         if guardian.get("added_by"):
@@ -289,9 +517,27 @@ async def get_family_audit(family_id: str, current_user: dict = Depends(get_curr
 
 
 @router.put("/families/{family_id}")
-async def update_family(family_id: str, data: FamilyCreate, current_user: dict = Depends(get_current_user)):
-    update = {**data.model_dump(), "updated_at": datetime.now(timezone.utc).isoformat()}
-    await db.families.update_one({"id": family_id}, {"$set": update})
+async def update_family(family_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Partial update of the household record.
+
+    Only the scalar fields the caller actually sent are written. The old
+    version replaced the whole document from a `FamilyCreate` payload, which
+    blanked `location_id` (so the family dropped out of the campus-scoped
+    Families list and looked deleted) and wiped `guardians` / `parent_ids`.
+    Membership is changed through the dedicated guardian/member endpoints.
+    """
+    allowed = {"family_name", "primary_contact_name", "primary_contact_email",
+               "primary_contact_phone", "address", "notes", "location_id"}
+    update = {k: v for k, v in data.items() if k in allowed and v not in (None,)}
+    if not update.get("location_id"):
+        update.pop("location_id", None)   # never clear the campus
+    if not update:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    res = await db.families.update_one({"id": family_id}, {"$set": update})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Family not found")
+    await _log_family_event(family_id, "family_updated", current_user, {"fields": list(update.keys())})
     return await db.families.find_one({"id": family_id}, {"_id": 0})
 
 
@@ -308,6 +554,10 @@ async def delete_family(family_id: str, current_user: dict = Depends(get_current
     # Cascade: unlink children and guests from this family
     await db.children.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
     await db.guests.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
+    # users and members carry the same pointer (iter363) — a dangling one used
+    # to leave the person unable to create a new household.
+    await db.users.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
+    await db.members.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
     await _audit(current_user["id"], "delete", "family", family_id, {"name": family.get("family_name")})
     return {"message": "Family deleted"}
 
@@ -324,39 +574,81 @@ async def get_family_detail(family_id: str, current_user: dict = Depends(get_cur
     parents = await db.guests.find({"family_id": family_id, "is_parent": True}, {"_id": 0}).to_list(20)
     family["children"] = family_children
     family["parents"] = parents
+    # One unified list of household adults (roles + pickup permission).
+    from routers.members.family_members import member_rows
+    family["family_members"] = await member_rows(family_id)
+    fresh = await db.families.find_one({"id": family_id}, {"_id": 0, "guardians": 1, "parent_ids": 1})
+    family["guardians"] = (fresh or {}).get("guardians") or []
+    family["parent_ids"] = (fresh or {}).get("parent_ids") or []
+    # One household definition for every surface (admin, portal, kiosk).
+    from routers.members.household import household_members
+    anchor = (parents[0] if parents else {"id": (family.get("parent_ids") or [None])[0],
+                                          "name": family.get("primary_contact_name") or "",
+                                          "email": family.get("primary_contact_email") or ""})
+    family["household"] = await household_members({**anchor, "family_id": family_id}, include_pending=True)
     return family
 
 
 @router.post("/families/{family_id}/guardians")
 async def add_guardian(family_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    """Add a guardian to a family."""
+    """Add a spouse/guardian to a family — linked to their profile when picked
+    from the people search, or a loose contact when typed in by hand."""
     family = await db.families.find_one({"id": family_id})
     if not family:
         raise HTTPException(status_code=404, detail="Family not found")
-    guardian = {
-        "id": f"gdn_{str(uuid.uuid4())[:8]}",
-        "name": data.get("name", ""),
-        "phone": data.get("phone", ""),
-        "email": data.get("email", ""),
-        "relationship": data.get("relationship", "Guardian"),
-        "added_at": datetime.now(timezone.utc).isoformat(),
-    }
+    guardian = await _build_guardian(data, current_user, pending=False)
     await db.families.update_one({"id": family_id}, {"$push": {"guardians": guardian}})
+    await _link_person_to_family(guardian, family_id, current_user)
+    await _log_family_event(family_id, "guardian_added", current_user, {
+        "guardian_id": guardian["id"], "guardian_name": guardian["name"],
+        "relationship": guardian.get("relationship"), "linked": bool(guardian.get("person_id")),
+    })
     return guardian
+
+
+@router.post("/families/{family_id}/people")
+async def admin_add_household_person(family_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """"Add new" on the admin household form — creates the profile and attaches it."""
+    if not await db.families.find_one({"id": family_id}, {"_id": 0, "id": 1}):
+        raise HTTPException(status_code=404, detail="Family not found")
+    return await _create_household_person(data, family_id, current_user, pending=False)
+
+
+@router.post("/portal/family/people")
+async def portal_add_household_person(data: dict, current_user: dict = Depends(get_current_user)):
+    """A member adds a brand-new spouse / guardian / child to their own household.
+    Same approval queue as children — an admin vets it before it goes live."""
+    if (current_user.get("status") or "").lower() == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval — family edits unlock once an admin approves you.")
+    family_id = await _resolve_my_family_id(current_user)
+    if not family_id:
+        raise HTTPException(status_code=404, detail="No household on file yet — create yours first")
+    out = await _create_household_person(data, family_id, current_user, pending=True)
+    await _notify_admins_of_family_change(
+        "Family change pending review",
+        f"{current_user.get('name', 'A member')} added {out['person']['name']} "
+        f"({out['person'].get('relationship')}) — needs approval",
+        f"/people?family={family_id}",
+    )
+    return out
 
 
 @router.put("/families/{family_id}/guardians/{guardian_id}")
 async def update_guardian(family_id: str, guardian_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    """Update a guardian in a family."""
+    """Update a household adult — including whether they count as a parent or
+    are only authorised to collect the children."""
+    relationship = data.get("role") or data.get("relationship") or "Guardian"
+    flags = parent_flags(relationship, data)
     await db.families.update_one(
         {"id": family_id, "guardians.id": guardian_id},
         {"$set": {
             "guardians.$.name": data.get("name", ""),
             "guardians.$.phone": data.get("phone", ""),
             "guardians.$.email": data.get("email", ""),
-            "guardians.$.relationship": data.get("relationship", "Guardian"),
+            **{f"guardians.$.{k}": v for k, v in flags.items()},
         }}
     )
+    await _log_family_event(family_id, "guardian_updated", current_user, {"guardian_id": guardian_id})
     return {"message": "Guardian updated"}
 
 
@@ -460,7 +752,16 @@ async def get_my_family(current_user: dict = Depends(get_current_user)):
     for sp in linked_users:
         if not any((p.get("email") or "").lower() == (sp.get("email") or "").lower() for p in parents):
             parents.append({**sp, "is_parent": True, "is_staff": True})
-    return {"family": family, "children": children, "parents": parents, "can_create": False}
+    from routers.members.household import household_members
+    household = await household_members({**current_user, "family_id": family["id"]}, include_pending=True)
+    from routers.members.family_approvals import pending_change_map
+    pending_changes = await pending_change_map(family["id"])
+    # One unified family-member list — same shape the staff side gets.
+    from routers.members.family_members import member_rows
+    family_members = await member_rows(family["id"])
+    return {"family": family, "children": children, "parents": parents,
+            "family_members": family_members,
+            "household": household, "pending_changes": pending_changes, "can_create": False}
 
 
 @router.post("/portal/family")
@@ -472,7 +773,12 @@ async def create_my_family(data: dict, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=403, detail="Your account is pending approval — household setup unlocks once an admin approves you.")
     existing = await _resolve_my_family_id(current_user)
     if existing:
-        return await db.families.find_one({"id": existing}, {"_id": 0})
+        family = await db.families.find_one({"id": existing}, {"_id": 0})
+        if family:
+            return family
+        # The household was deleted but the pointer on the user survived —
+        # clear it rather than handing back null and blocking setup forever.
+        await db.users.update_one({"id": current_user["id"]}, {"$unset": {"family_id": ""}})
     name = (current_user.get("name") or "").strip()
     default_name = f"{name.split(' ')[-1]} Family" if name else "My Family"
     family = {
@@ -499,23 +805,55 @@ async def create_my_family(data: dict, current_user: dict = Depends(get_current_
 
 @router.put("/portal/family/guardians/{guardian_id}")
 async def portal_update_guardian(guardian_id: str, data: dict, current_user: dict = Depends(get_current_user)):
-    """Edit a household member on your OWN family only."""
+    """Propose an edit to a household adult on your OWN family.
+
+    Member-side edits are reviewed before they go live (iter364) — the request
+    is queued and an admin approves or rejects it.
+    """
     family_id = await _resolve_my_family_id(current_user)
     if not family_id:
         raise HTTPException(status_code=404, detail="No household found")
     if (current_user.get("status") or "").lower() == "pending":
         raise HTTPException(status_code=403, detail="Your account is pending approval — family edits unlock once an admin approves you.")
-    update = {
-        f"guardians.$.{k}": (str(v or "").strip()[:160])
-        for k, v in data.items() if k in {"name", "phone", "email", "relationship"}
-    }
-    if not update:
-        raise HTTPException(status_code=400, detail="Nothing to update")
-    res = await db.families.update_one({"id": family_id, "guardians.id": guardian_id}, {"$set": update})
-    if not res.matched_count:
+    family = await db.families.find_one({"id": family_id}, {"_id": 0, "guardians": 1})
+    guardian = next((g for g in (family or {}).get("guardians") or [] if g.get("id") == guardian_id), None)
+    if not guardian:
         raise HTTPException(status_code=404, detail="Household member not found")
-    await _log_family_event(family_id, "guardian_updated", current_user, {"guardian_id": guardian_id})
-    return await db.families.find_one({"id": family_id}, {"_id": 0})
+    relationship = data.get("role") or data.get("relationship") or guardian.get("role") or guardian.get("relationship") or "Guardian"
+    proposed = {k: (str(v or "").strip()[:160]) for k, v in data.items()
+                if k in {"name", "phone", "email"}}
+    flags = parent_flags(relationship, data)
+    proposed.update({"role": flags["role"], "relationship": flags["relationship"],
+                     "can_pickup": flags["can_pickup"]})
+    from routers.members.family_approvals import create_change_request
+    req = await create_change_request(family_id, "guardian", guardian_id,
+                                      guardian.get("name") or "", guardian, proposed, current_user)
+    if req.get("status") == "unchanged":
+        return {"status": "unchanged", "message": "Nothing changed"}
+    return {"status": "pending_review", "request": req,
+            "message": "Sent for review — an admin approves it before it goes live"}
+
+
+@router.put("/portal/family/children/{child_id}")
+async def portal_update_child(child_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Propose an edit to one of your own children. Reviewed before it applies."""
+    family_id = await _resolve_my_family_id(current_user)
+    if not family_id:
+        raise HTTPException(status_code=404, detail="No household found")
+    if (current_user.get("status") or "").lower() == "pending":
+        raise HTTPException(status_code=403, detail="Your account is pending approval — family edits unlock once an admin approves you.")
+    child = await db.children.find_one({"id": child_id, "family_id": family_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Child not found in your household")
+    allowed = {"name", "date_of_birth", "gender", "class_group", "medical_notes", "allergies"}
+    proposed = {k: (str(v or "").strip()[:300]) for k, v in data.items() if k in allowed}
+    from routers.members.family_approvals import create_change_request
+    req = await create_change_request(family_id, "child", child_id, child.get("name") or "",
+                                      child, proposed, current_user)
+    if req.get("status") == "unchanged":
+        return {"status": "unchanged", "message": "Nothing changed"}
+    return {"status": "pending_review", "request": req,
+            "message": "Sent for review — an admin approves it before it goes live"}
 
 
 @router.delete("/portal/family/guardians/{guardian_id}")
@@ -533,15 +871,20 @@ async def portal_remove_guardian(guardian_id: str, current_user: dict = Depends(
 
 @router.put("/portal/family")
 async def update_my_family(data: dict, current_user: dict = Depends(get_current_user)):
-    """Parent updates their own family details."""
+    """Member proposes an update to their own family details — reviewed first."""
     family_id = await _resolve_my_family_id(current_user)
     if not family_id:
         raise HTTPException(status_code=404, detail="No family found")
+    family = await db.families.find_one({"id": family_id}, {"_id": 0})
     allowed_fields = {"family_name", "address", "notes", "primary_contact_phone"}
-    update = {k: v for k, v in data.items() if k in allowed_fields}
-    update["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db.families.update_one({"id": family_id}, {"$set": update})
-    return await db.families.find_one({"id": family_id}, {"_id": 0})
+    proposed = {k: v for k, v in data.items() if k in allowed_fields}
+    from routers.members.family_approvals import create_change_request
+    req = await create_change_request(family_id, "family", family_id,
+                                      family.get("family_name") or "", family, proposed, current_user)
+    if req.get("status") == "unchanged":
+        return {"status": "unchanged", "message": "Nothing changed"}
+    return {"status": "pending_review", "request": req,
+            "message": "Sent for review — an admin approves it before it goes live"}
 
 
 @router.post("/portal/family/children")
@@ -599,17 +942,7 @@ async def parent_add_guardian(data: dict, current_user: dict = Depends(get_curre
     family_id = await _resolve_my_family_id(current_user)
     if not family_id:
         raise HTTPException(status_code=404, detail="No family found. Contact admin.")
-    guardian = {
-        "id": f"gdn_{str(uuid.uuid4())[:8]}",
-        "name": data.get("name", ""),
-        "phone": data.get("phone", ""),
-        "email": data.get("email", ""),
-        "relationship": data.get("relationship", "Guardian"),
-        "approval_status": "pending",
-        "submitted_by_parent": True,
-        "added_at": datetime.now(timezone.utc).isoformat(),
-        "added_by": current_user["id"],
-    }
+    guardian = await _build_guardian(data, current_user, pending=True)
     await db.families.update_one({"id": family_id}, {"$push": {"guardians": guardian}})
     await _log_family_event(family_id, "guardian_submitted", current_user, {
         "guardian_id": guardian["id"], "guardian_name": guardian["name"], "relationship": guardian.get("relationship"),
@@ -641,36 +974,54 @@ async def update_family_members(family_id: str, data: dict, current_user: dict =
     """Update which children and parents/guardians belong to a family.
     iter344f — enforce hard caps: max 2 parents (mum+dad) and max 6
     guardians (siblings, grandparents, emergency contacts). Refuses if
-    caps are exceeded so bad data can't creep in from the FE."""
-    child_ids = data.get("child_ids", [])
-    parent_ids = data.get("parent_ids", [])
-    guardian_ids = data.get("guardian_ids", [])
-    if len(parent_ids) > 2:
-        raise HTTPException(status_code=400, detail="A family can have at most 2 parents. Remove one before adding another.")
-    if len(guardian_ids) > 6:
-        raise HTTPException(status_code=400, detail="A family can have at most 6 guardians.")
+    caps are exceeded so bad data can't creep in from the FE.
 
-    # Unlink old children from this family
-    await db.children.update_many({"family_id": family_id}, {"$unset": {"family_id": ""}})
-    # Link specified children
-    if child_ids:
-        await db.children.update_many({"id": {"$in": child_ids}}, {"$set": {"family_id": family_id}})
+    Only the dimensions actually present in the body are touched. Sending
+    just `child_ids` used to detach every parent from the household because
+    the missing key was read as "empty list".
+    """
+    child_ids = data.get("child_ids")
+    parent_ids = data.get("parent_ids")
+    guardian_ids = data.get("guardian_ids")
+    from routers.members.family_members import MAX_FAMILY_MEMBERS
+    if parent_ids is not None and len(parent_ids) > MAX_FAMILY_MEMBERS:
+        raise HTTPException(status_code=400, detail=f"A family can have at most {MAX_FAMILY_MEMBERS} family members. Remove somebody before adding another.")
+    if guardian_ids is not None and len(guardian_ids) > MAX_FAMILY_MEMBERS:
+        raise HTTPException(status_code=400, detail=f"A family can have at most {MAX_FAMILY_MEMBERS} family members.")
 
-    # Unlink old parents
-    await db.guests.update_many({"family_id": family_id, "is_parent": True}, {"$unset": {"family_id": ""}})
-    # Link specified parents
-    if parent_ids:
-        await db.guests.update_many({"id": {"$in": parent_ids}}, {"$set": {"family_id": family_id, "is_parent": True}})
+    if child_ids is not None:
+        # Unlink only the children that are no longer on the list
+        await db.children.update_many(
+            {"family_id": family_id, "id": {"$nin": child_ids}}, {"$unset": {"family_id": ""}})
+        if child_ids:
+            await db.children.update_many({"id": {"$in": child_ids}}, {"$set": {"family_id": family_id}})
 
-    # Store guardian links
-    await db.families.update_one({"id": family_id}, {"$set": {
-        "guardian_ids": guardian_ids,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }})
+    if parent_ids is not None:
+        await db.guests.update_many(
+            {"family_id": family_id, "is_parent": True, "id": {"$nin": parent_ids}},
+            {"$unset": {"family_id": ""}})
+        if parent_ids:
+            await db.guests.update_many({"id": {"$in": parent_ids}}, {"$set": {"family_id": family_id, "is_parent": True}})
+            # A picked person is just as often a members/users row — writing
+            # only to `guests` was why the link silently never saved.
+            for coll in (db.members, db.users):
+                await coll.update_many({"id": {"$in": parent_ids}}, {"$set": {"family_id": family_id}})
+            await db.families.update_one({"id": family_id}, {"$set": {"parent_ids": parent_ids}})
+
+    if guardian_ids is not None:
+        await db.families.update_one({"id": family_id}, {"$set": {
+            "guardian_ids": guardian_ids,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }})
 
     # Auto-link spouses when exactly 2 parents are set so the guest profile
     # can render the "married to" chip immediately.
-    if len(parent_ids) == 2:
+    if parent_ids and len(parent_ids) == 2:
         await db.guests.update_one({"id": parent_ids[0]}, {"$set": {"spouse_id": parent_ids[1]}})
         await db.guests.update_one({"id": parent_ids[1]}, {"$set": {"spouse_id": parent_ids[0]}})
-    return {"message": "Family members updated", "children": len(child_ids), "parents": len(parent_ids), "guardians": len(guardian_ids)}
+    await _log_family_event(family_id, "membership_updated", current_user, {
+        "children": len(child_ids or []), "parents": len(parent_ids or []),
+        "guardians": len(guardian_ids or []),
+    })
+    return {"message": "Family members updated", "children": len(child_ids or []),
+            "parents": len(parent_ids or []), "guardians": len(guardian_ids or [])}

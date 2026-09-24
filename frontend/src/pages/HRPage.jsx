@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
+import { StaffPicker } from '../components/StaffPicker';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -16,6 +17,163 @@ import api from '../services/api';
 import { adminApi, locationsApi, departmentsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+
+// Each payday's net total next to what actually reached the ledger. A gap means
+// a paid payslip with no journal entry — shown by name, never netted away.
+function PayrollPostingReport() {
+  const [data, setData] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState({});
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.get('/hr/payroll/posting-report');
+      setData(r.data);
+    } catch (e) { /* not a director — stay quiet */ }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (!data || !(data.periods || []).length) return null;
+  const t = data.totals || {};
+  const money = (n) => Number(n || 0).toLocaleString();
+
+  return (
+    <Card className="rounded-xl mb-3" data-testid="payroll-posting-report">
+      <CardHeader className="flex flex-row items-center justify-between gap-3 py-3">
+        <div>
+          <CardTitle className="text-sm">Payday vs ledger</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Paid {money(t.paid)} · in the ledger {money(t.posted)} ·{' '}
+            <span className={t.gap ? 'text-red-700 font-semibold' : 'text-emerald-700'}>
+              {t.gap ? `${money(t.gap)} missing` : 'fully matched'}
+            </span>
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => { setOpen(o => !o); load(); }} data-testid="payroll-report-toggle">
+          {open ? 'Hide' : 'Show'}
+        </Button>
+      </CardHeader>
+      {open && (
+        <CardContent>
+          {/* Phones: one block per payday — a five-column table of long period
+              labels and six-figure amounts can't fit 390px. */}
+          <div className="sm:hidden space-y-2" data-testid="payroll-report-cards">
+            {data.periods.map(p => (
+              <div key={p.period}
+                className={`rounded-lg border p-3 text-xs ${p.balanced ? '' : 'border-amber-400 bg-amber-50/60 dark:bg-amber-950/20'}`}
+                onClick={() => !p.balanced && setExpanded(e => ({ ...e, [p.period]: !e[p.period] }))}
+                data-testid={`payroll-report-card-${p.period}`}>
+                <p className="font-medium">{p.period}</p>
+                <p className="text-muted-foreground">{p.staff_count} staff · paid {money(p.paid_total)}</p>
+                <p>In the ledger <strong className="font-mono">{money(p.posted_total)}</strong>
+                  {p.balanced
+                    ? <span className="ml-2 text-emerald-700">matched</span>
+                    : <span className="ml-2 text-red-700 font-semibold">{money(p.gap)} missing</span>}
+                </p>
+                {expanded[p.period] && (p.unposted || []).map(u => (
+                  <p key={u.payslip_id} className="mt-1 pl-2 border-l-2 border-amber-400" data-testid={`payroll-report-gap-${u.payslip_id}`}>
+                    <strong>{u.staff_name}</strong> · {money(u.net_salary)} — {u.reason}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="hidden sm:block overflow-x-auto">
+          <table className="w-full text-sm" data-testid="payroll-report-table">
+            <thead className="text-xs text-muted-foreground">
+              <tr className="border-b">
+                <th className="text-left py-2">Period</th>
+                <th className="text-right hidden sm:table-cell">Staff</th>
+                <th className="text-right">Paid</th><th className="text-right">In ledger</th>
+                <th className="text-right">Gap</th>
+              </tr>
+            </thead>
+            <tbody data-testid="payroll-report-rows">
+              {data.periods.map(p => (
+                <React.Fragment key={p.period}>
+                  <tr className={`border-b ${p.balanced ? '' : 'bg-amber-50/60 dark:bg-amber-950/20 cursor-pointer'}`}
+                    onClick={() => !p.balanced && setExpanded(e => ({ ...e, [p.period]: !e[p.period] }))}
+                    data-testid={`payroll-report-row-${p.period}`}>
+                    <td className="py-2 font-medium text-xs sm:text-sm">{p.period}
+                      <span className="block sm:hidden text-[11px] font-normal text-muted-foreground">{p.staff_count} staff</span>
+                    </td>
+                    <td className="text-right hidden sm:table-cell">{p.staff_count}</td>
+                    <td className="text-right font-mono text-xs sm:text-sm">{money(p.paid_total)}</td>
+                    <td className="text-right font-mono text-xs sm:text-sm">{money(p.posted_total)}</td>
+                    <td className={`text-right font-mono text-xs sm:text-sm ${p.balanced ? 'text-muted-foreground' : 'text-red-700 font-semibold'}`}>
+                      {p.balanced ? '—' : money(p.gap)}
+                    </td>
+                  </tr>
+                  {expanded[p.period] && (p.unposted || []).map(u => (
+                    <tr key={u.payslip_id} className="border-b bg-muted/20" data-testid={`payroll-report-gap-${u.payslip_id}`}>
+                      <td colSpan={5} className="text-xs py-2">
+                        <strong>{u.staff_name}</strong> · {money(u.net_salary)} — {u.reason}
+                      </td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
+// Paid payslips with nothing in the ledger. Payroll posts automatically when a
+// payslip is marked paid, but if the chart of accounts can't take it (no 5000
+// Salaries account, no cash account — what a financial-data wipe leaves behind)
+// it used to fail silently. This is the safety net.
+function UnpostedPayslipsBanner() {
+  const [state, setState] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.get('/hr/payslips/unposted');
+      setState(r.data);
+    } catch (e) { /* HR view without director rights — stay quiet */ }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  if (!state || !state.count) return null;
+
+  const postAll = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post('/hr/payslips/post-to-finance', {});
+      const failed = r.data?.failed || [];
+      if (r.data?.posted) toast.success(`${r.data.posted} payslip${r.data.posted === 1 ? '' : 's'} posted to finance`);
+      if (failed.length) toast.error(`${failed.length} still could not post — ${failed[0].reason}`, { duration: 12000 });
+      await load();
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not post to finance'); }
+    setBusy(false);
+  };
+
+  return (
+    <Card className="rounded-xl mb-3 border-2 border-amber-400 bg-amber-50/70 dark:bg-amber-950/20" data-testid="unposted-payslips-banner">
+      <CardContent className="p-4 space-y-2">
+        <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+          {state.count} paid payslip{state.count === 1 ? '' : 's'} ({state.total?.toLocaleString()}) never reached the ledger
+        </p>
+        <ul className="text-xs space-y-1">
+          {(state.payslips || []).slice(0, 5).map(p => (
+            <li key={p.id} data-testid={`unposted-payslip-${p.id}`}>
+              <strong>{p.staff_name}</strong> · {p.period} · {Number(p.net_salary || 0).toLocaleString()} — {p.reason}
+            </li>
+          ))}
+          {state.count > 5 && <li className="text-muted-foreground">…and {state.count - 5} more</li>}
+        </ul>
+        <Button size="sm" onClick={postAll} disabled={busy} data-testid="post-payslips-to-finance-btn">
+          {busy ? 'Posting…' : 'Post to finance'}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 
 export default function HRPage() {
   const { user } = useAuth();
@@ -365,18 +523,18 @@ export default function HRPage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto md:flex-wrap">
-          <TabsTrigger value="salaries" data-testid="hr-tab-salaries"><DollarSign size={13} className="mr-1" /> Salaries</TabsTrigger>
-          <TabsTrigger value="payslips" data-testid="hr-tab-payslips"><FileText size={13} className="mr-1" /> Payslips</TabsTrigger>
-          <TabsTrigger value="contracts" data-testid="hr-tab-contracts"><FileText size={13} className="mr-1" /> Contracts</TabsTrigger>
-          <TabsTrigger value="documents" data-testid="hr-tab-documents"><Users size={13} className="mr-1" /> Documents</TabsTrigger>
-          <TabsTrigger value="leave" data-testid="hr-tab-leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
-          <TabsTrigger value="reimbursements" data-testid="hr-tab-reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
-          <TabsTrigger value="attendance" data-testid="hr-tab-attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
-          <TabsTrigger value="timesheets" data-testid="hr-tab-timesheets"><Clock size={13} className="mr-1" /> Timesheets</TabsTrigger>
-          <TabsTrigger value="holidays" data-testid="hr-tab-holidays"><CalendarDays size={13} className="mr-1" /> Holidays</TabsTrigger>
-          <TabsTrigger value="time-off" data-testid="hr-tab-time-off"><Clock size={13} className="mr-1" /> Time Off</TabsTrigger>
-          <TabsTrigger value="onboarding" data-testid="hr-tab-onboarding"><CheckCircle2 size={13} className="mr-1" /> Onboarding</TabsTrigger>
-          {isAdmin && <TabsTrigger value="staff" data-testid="hr-tab-staff"><Users size={13} className="mr-1" /> Staff & Users</TabsTrigger>}
+          <TabsTrigger value="salaries" className="flex-shrink-0" data-testid="hr-tab-salaries"><DollarSign size={13} className="mr-1" /> Salaries</TabsTrigger>
+          <TabsTrigger value="payslips" className="flex-shrink-0" data-testid="hr-tab-payslips"><FileText size={13} className="mr-1" /> Payslips</TabsTrigger>
+          <TabsTrigger value="contracts" className="flex-shrink-0" data-testid="hr-tab-contracts"><FileText size={13} className="mr-1" /> Contracts</TabsTrigger>
+          <TabsTrigger value="documents" className="flex-shrink-0" data-testid="hr-tab-documents"><Users size={13} className="mr-1" /> Documents</TabsTrigger>
+          <TabsTrigger value="leave" className="flex-shrink-0" data-testid="hr-tab-leave"><Clock size={13} className="mr-1" /> Leave</TabsTrigger>
+          <TabsTrigger value="reimbursements" className="flex-shrink-0" data-testid="hr-tab-reimbursements"><DollarSign size={13} className="mr-1" /> Reimbursements</TabsTrigger>
+          <TabsTrigger value="attendance" className="flex-shrink-0" data-testid="hr-tab-attendance"><Clock size={13} className="mr-1" /> Attendance</TabsTrigger>
+          <TabsTrigger value="timesheets" className="flex-shrink-0" data-testid="hr-tab-timesheets"><Clock size={13} className="mr-1" /> Timesheets</TabsTrigger>
+          <TabsTrigger value="holidays" className="flex-shrink-0" data-testid="hr-tab-holidays"><CalendarDays size={13} className="mr-1" /> Holidays</TabsTrigger>
+          <TabsTrigger value="time-off" className="flex-shrink-0" data-testid="hr-tab-time-off"><Clock size={13} className="mr-1" /> Time Off</TabsTrigger>
+          <TabsTrigger value="onboarding" className="flex-shrink-0" data-testid="hr-tab-onboarding"><CheckCircle2 size={13} className="mr-1" /> Onboarding</TabsTrigger>
+          {isAdmin && <TabsTrigger value="staff" className="flex-shrink-0" data-testid="hr-tab-staff"><Users size={13} className="mr-1" /> Staff & Users</TabsTrigger>}
         </TabsList>
 
         {/* SALARIES TAB */}
@@ -423,6 +581,8 @@ export default function HRPage() {
 
         {/* PAYSLIPS TAB */}
         <TabsContent value="payslips" className="mt-4">
+          <UnpostedPayslipsBanner />
+          <PayrollPostingReport />
           <div className="flex justify-between items-center gap-2 mb-3 flex-wrap">
             <div className="flex items-center gap-2 flex-wrap">
               <Label className="text-xs text-muted-foreground">Export period:</Label>
@@ -682,10 +842,9 @@ export default function HRPage() {
           <DialogHeader><DialogTitle>{editingSalaryId ? 'Edit Salary Record' : 'Add Salary Record'}</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5"><Label>Staff Member *</Label>
-              <Select value={salaryForm.staff_id} onValueChange={v => setSalaryForm({...salaryForm, staff_id: v})} disabled={!!editingSalaryId}>
-                <SelectTrigger><SelectValue placeholder="Select staff" /></SelectTrigger>
-                <SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name} ({s.role})</SelectItem>)}</SelectContent>
-              </Select>
+              <StaffPicker testId="salary-staff-picker" disabled={!!editingSalaryId}
+                value={salaryForm.staff_id} onChange={v => setSalaryForm({...salaryForm, staff_id: v})}
+                options={staff.map(s => ({ id: s.id, name: s.name, hint: [s.role, s.department].filter(Boolean).join(' · ') }))} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
@@ -954,7 +1113,11 @@ export default function HRPage() {
                 const r = await api.put(`/hr/payslips/${editingPayslip.id}`, payload);
                 setPayslips(prev => prev.map(x => x.id === editingPayslip.id ? r.data : x));
                 setEditingPayslip(null);
-                toast.success('Payslip updated');
+                if (r.data?.finance_post_error) {
+                  toast.error(`Payslip saved, but it did NOT post to finance — ${r.data.finance_post_error}`, { duration: 14000 });
+                } else {
+                  toast.success(r.data?.status === 'paid' ? 'Payslip paid and posted to finance' : 'Payslip updated');
+                }
               } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
             }}>Save changes</Button>
           </DialogFooter>
@@ -1142,12 +1305,9 @@ export default function HRPage() {
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5">
               <Label className="text-xs">Staff member *</Label>
-              <Select value={manualPayslip.staff_id} onValueChange={v => setManualPayslip({ ...manualPayslip, staff_id: v })}>
-                <SelectTrigger data-testid="manual-payslip-staff"><SelectValue placeholder="Select staff…" /></SelectTrigger>
-                <SelectContent>
-                  {staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name} {s.department ? `· ${s.department}` : ''}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <StaffPicker testId="manual-payslip-staff"
+                value={manualPayslip.staff_id} onChange={v => setManualPayslip({ ...manualPayslip, staff_id: v })}
+                options={staff.map(s => ({ id: s.id, name: s.name, hint: [s.role, s.department].filter(Boolean).join(' · ') }))} />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
@@ -1290,10 +1450,9 @@ export default function HRPage() {
               </Select>
             </div>
             <div className="space-y-1.5"><Label>Staff Member *</Label>
-              <Select value={issueForm.staff_id} onValueChange={v => setIssueForm({...issueForm, staff_id: v})}>
-                <SelectTrigger><SelectValue placeholder="Select staff" /></SelectTrigger>
-                <SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <StaffPicker testId="contract-staff-picker"
+                value={issueForm.staff_id} onChange={v => setIssueForm({...issueForm, staff_id: v})}
+                options={staff.map(s => ({ id: s.id, name: s.name, hint: [s.role, s.department].filter(Boolean).join(' · ') }))} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Start Date</Label><Input type="date" value={issueForm.start_date} onChange={e => setIssueForm({...issueForm, start_date: e.target.value})} /></div>
@@ -1313,10 +1472,9 @@ export default function HRPage() {
           <DialogHeader><DialogTitle>Request Documents</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5"><Label>Staff Member *</Label>
-              <Select value={docReqForm.staff_id} onValueChange={v => setDocReqForm({...docReqForm, staff_id: v})}>
-                <SelectTrigger><SelectValue placeholder="Select staff" /></SelectTrigger>
-                <SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-              </Select>
+              <StaffPicker testId="docreq-staff-picker"
+                value={docReqForm.staff_id} onChange={v => setDocReqForm({...docReqForm, staff_id: v})}
+                options={staff.map(s => ({ id: s.id, name: s.name, hint: [s.role, s.department].filter(Boolean).join(' · ') }))} />
             </div>
             <div className="space-y-1.5"><Label>Documents to Request</Label>
               <div className="flex flex-wrap gap-2">
@@ -1831,10 +1989,12 @@ function LeavePanel({ currentUser, staff }) {
             <>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={openTypeMgr} data-testid="leave-manage-types-btn"><Settings size={13} /> Manage types</Button>
               {staff.length > 0 && (
-                <Select value="" onValueChange={(v) => { const s = staff.find(x => x.id === v); if (s) openAlloc(s); }}>
-                  <SelectTrigger className="h-8 text-xs w-[180px]" data-testid="leave-set-alloc-trigger"><SelectValue placeholder="Set allocations…" /></SelectTrigger>
-                  <SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-                </Select>
+                <div className="w-[200px]">
+                  <StaffPicker testId="leave-set-alloc-trigger" value="" allowClear={false}
+                    placeholder="Set allocations…"
+                    onChange={(v) => { const s = staff.find(x => x.id === v); if (s) openAlloc(s); }}
+                    options={staff.map(s => ({ id: s.id, name: s.name, hint: s.role }))} />
+                </div>
               )}
             </>
           )}
@@ -1900,13 +2060,9 @@ function LeavePanel({ currentUser, staff }) {
             {staff.length > 0 && (
               <div className="space-y-1.5">
                 <Label className="text-xs">File for (HR only — leave blank for yourself)</Label>
-                <Select value={requestForm.staff_id || 'self'} onValueChange={v => setRequestForm({...requestForm, staff_id: v === 'self' ? '' : v})}>
-                  <SelectTrigger><SelectValue placeholder="Yourself" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="self">Yourself</SelectItem>
-                    {staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <StaffPicker testId="leave-file-for-picker" placeholder="Yourself"
+                  value={requestForm.staff_id} onChange={v => setRequestForm({...requestForm, staff_id: v || ''})}
+                  options={staff.map(s => ({ id: s.id, name: s.name, hint: s.role }))} />
               </div>
             )}
             <div className="flex gap-2 pt-2">
@@ -2532,12 +2688,9 @@ function TimesheetsPanel() {
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">Use this for staff members who don&apos;t use the app. You can only log for users within your assigned locations.</p>
             <div className="space-y-1.5"><Label className="text-xs">Staff member</Label>
-              <Select value={logForm.staff_id} onValueChange={v => setLogForm({...logForm, staff_id: v})}>
-                <SelectTrigger data-testid="log-for-staff-select"><SelectValue placeholder="Pick a staff member" /></SelectTrigger>
-                <SelectContent className="max-h-64">
-                  {staffOptions.map(s => (<SelectItem key={s.id} value={s.id}>{s.name} — {s.role || 'staff'}</SelectItem>))}
-                </SelectContent>
-              </Select>
+              <StaffPicker testId="log-for-staff-select" placeholder="Type a staff name…"
+                value={logForm.staff_id} onChange={v => setLogForm({...logForm, staff_id: v})}
+                options={staffOptions.map(s => ({ id: s.id, name: s.name, hint: s.role || 'staff' }))} />
             </div>
             <div className="space-y-1.5"><Label className="text-xs">Pay Period</Label>
               <Select value={logForm.period} onValueChange={v => setLogForm({...logForm, period: v})}>

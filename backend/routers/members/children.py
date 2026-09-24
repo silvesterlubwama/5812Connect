@@ -9,6 +9,7 @@ from models import ChildCreate
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
+import re
 
 router = APIRouter(prefix="/api", tags=["members"])
 
@@ -390,17 +391,24 @@ async def delete_child_extra(child_id: str, extra_id: str, current_user: dict = 
 # ========== PHOTOS ==========
 
 async def _save_photo(file: UploadFile, path_prefix: str, subject_id: str) -> str:
-    """Shared helper: save an image upload and return its public URL."""
+    """Shared helper: save an image upload and return its public URL.
+
+    The object key carries a short random suffix so a replacement photo gets a
+    NEW url. Re-using `{id}.{ext}` meant a re-upload kept the same url, and the
+    browser/CDN happily served the cached old picture — the photo looked
+    changed in the dialog but reverted on the next load.
+    """
     if not file.content_type or not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="File must be an image")
     data = await file.read()
     if len(data) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image must be under 5MB")
     ext = file.filename.rsplit('.', 1)[-1] if '.' in (file.filename or '') else 'jpg'
-    path = f"profile-photos/{path_prefix}{subject_id}.{ext}"
+    ext = re.sub(r"[^A-Za-z0-9]", "", ext)[:5].lower() or "jpg"
+    name = f"{path_prefix}{subject_id}-{uuid.uuid4().hex[:8]}.{ext}"
     try:
         from upload_helper import save_upload
-        return await save_upload("profile-photos", f"{path_prefix}{subject_id}.{ext}", data, file.content_type)
+        return await save_upload("profile-photos", name, data, file.content_type)
     except Exception as e:
         logger.warning(f"Profile photo upload failed: {e}")
         raise HTTPException(status_code=502, detail="Could not save photo")
@@ -411,7 +419,13 @@ async def upload_member_photo(member_id: str, file: UploadFile = File(...), curr
     """Upload a profile photo for a member. Stores in object storage."""
     photo_url = await _save_photo(file, "", member_id)
     await db.members.update_one({"id": member_id}, {"$set": {"photo_url": photo_url}})
-    # Also update user record if linked
+    # Keep every mirror of this person in step — a guests row shares the id,
+    # and the linked user account carries its own copy.
+    await db.guests.update_one({"id": member_id}, {"$set": {"photo_url": photo_url}})
+    await db.children.update_one({"id": member_id}, {"$set": {"photo_url": photo_url}})
+    await db.families.update_many({"guardians.person_id": member_id},
+                                  {"$set": {"guardians.$[g].photo_url": photo_url}},
+                                  array_filters=[{"g.person_id": member_id}])
     member = await db.members.find_one({"id": member_id}, {"_id": 0, "user_id": 1})
     if member and member.get("user_id"):
         await db.users.update_one({"id": member["user_id"]}, {"$set": {"photo_url": photo_url}})
@@ -433,8 +447,14 @@ async def upload_user_photo(user_id: str, file: UploadFile = File(...), current_
         raise HTTPException(status_code=403, detail="Only yourself or a manager can change this user's photo")
     photo_url = await _save_photo(file, "user-", user_id)
     await db.users.update_one({"id": user_id}, {"$set": {"photo_url": photo_url}})
-    # Mirror to member record if linked
+    # Mirror to the member record however it is linked (user_id, pinned
+    # member_id, or a members row that shares the user's id).
     await db.members.update_many({"user_id": user_id}, {"$set": {"photo_url": photo_url}})
+    await db.members.update_one({"id": user_id}, {"$set": {"photo_url": photo_url}})
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "member_id": 1})
+    if user and user.get("member_id"):
+        await db.members.update_one({"id": user["member_id"]}, {"$set": {"photo_url": photo_url}})
+        await db.guests.update_one({"id": user["member_id"]}, {"$set": {"photo_url": photo_url}})
     return {"photo_url": photo_url}
 
 

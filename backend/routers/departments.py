@@ -54,17 +54,44 @@ class DepartmentUpdate(BaseModel):
 @router.get("")
 async def list_departments(
     location_id: Optional[str] = None,
+    sublocation_id: Optional[str] = None,
     include_inactive: bool = False,
     current_user: dict = Depends(get_current_user),
 ):
-    """List departments visible to the current user (campus-scoped)."""
+    """List departments visible to the current user (campus-scoped).
+
+    `location_id` may be a campus OR a sub-location. Pass a sub-location
+    (either way) and you get that sub-location's own departments plus the
+    campus-wide ones — previously the caller's sub-location was silently
+    resolved to its parent campus, so departments created for a farm or a
+    shelter never appeared when posting a transaction against it.
+    """
     scope = await get_campus_filter(current_user)
     q: dict = {**scope}
-    if location_id:
-        q["location_id"] = location_id
+    sub = (sublocation_id or "").strip()
+    loc = (location_id or "").strip()
+    if loc and not sub:
+        picked = await db.locations.find_one({"id": loc}, {"_id": 0, "id": 1, "parent_id": 1})
+        if picked and picked.get("parent_id"):
+            sub, loc = loc, picked["parent_id"]
+    if loc or sub:
+        # Departments are tagged with whichever location they belong to — some
+        # sit on the campus, some on a sub-location — so accept both ids.
+        q["location_id"] = {"$in": [x for x in {loc, sub} if x]}
+    if sub:
+        q["$and"] = [{"$or": [
+            {"sublocation_id": sub},
+            {"sublocation_id": {"$in": [None, ""]}},
+            {"sublocation_id": {"$exists": False}},
+        ]}]
     if not include_inactive:
         q["active"] = {"$ne": False}
     rows = await db.departments.find(q, {"_id": 0}).sort("name", 1).to_list(500)
+    if sub:
+        # The sub-location's own departments first — that's what was picked.
+        rows.sort(key=lambda r: (
+            0 if (r.get("location_id") == sub or r.get("sublocation_id") == sub) else 1,
+            (r.get("name") or "").lower()))
     return rows
 
 

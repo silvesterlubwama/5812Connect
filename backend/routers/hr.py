@@ -202,6 +202,15 @@ def _period_bounds(period: str) -> tuple:
         first = dt_date(y, mo, 1)
         nxt = dt_date(y + (1 if mo == 12 else 0), 1 if mo == 12 else mo + 1, 1)
         return first, nxt - td(days=1)
+    # A bare date — HR is allowed to type "any date inside the period" on a
+    # manual payslip. Without this it fell through to today, so a payslip for
+    # July was filed into the CURRENT pay period.
+    if _re.match(r"^\d{4}-\d{2}-\d{2}$", (period or "")[:10]):
+        try:
+            d = dt_date.fromisoformat(period[:10])
+            return d, d
+        except Exception:
+            pass
     today = dt_date.today()
     return today.replace(day=1), today
 
@@ -1525,11 +1534,14 @@ async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_di
         return {"paid_count": 0, "message": "No approved payslips matched"}
     paid_count = 0
     aggregated_total = 0
+    finance_warnings = []
     for pid in ids:
         payslip = await db.hr_payslips.find_one({"id": pid, "status": {"$ne": "paid"}}, {"_id": 0})
         if not payslip:
             continue
-        await _aggregate_payroll_expense(payslip, current_user)
+        reason = await _aggregate_payroll_expense(payslip, current_user)
+        if reason:
+            finance_warnings.append({"payslip_id": pid, "staff_name": payslip.get("staff_name"), "reason": reason})
         # iter-split-payroll: fan the paid amount out to department cost centres
         # so per-department P&L takes its share. Reads splits from the staff's
         # salary record; writes rows to `expense_allocations` (structured
@@ -1573,7 +1585,11 @@ async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_di
         paid_count += 1
         aggregated_total += float(payslip.get("net_salary") or 0)
     await _audit(current_user["id"], "pay-batch", "hr_payslips", f"{paid_count} payslips", {"total": aggregated_total})
-    return {"paid_count": paid_count, "total_paid": aggregated_total}
+    return {"paid_count": paid_count, "total_paid": aggregated_total,
+            "posted_to_finance": paid_count - len(finance_warnings),
+            "finance_warnings": finance_warnings,
+            "message": (f"{paid_count} paid · {len(finance_warnings)} could not post to finance"
+                        if finance_warnings else f"{paid_count} paid and posted to finance")}
 
 
 @router.get("/payslips/{payslip_id}/allocations")
@@ -1688,17 +1704,145 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
     return await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
 
 
-async def _aggregate_payroll_expense(payslip: dict, current_user: dict):
-    """iter 246 (finance reset): every 'paid' payslip now posts a single
-    balanced Journal Entry via the new `routers.finance.postings` module —
-    Dr Salaries & Wages / Cr Bank. Idempotent by payslip.id so re-running
-    the payday flow never doubles up the ledger.
+async def _aggregate_payroll_expense(payslip: dict, current_user: dict) -> Optional[str]:
+    """Post the payslip to the ledger (Dr Salaries & Wages / Cr Bank),
+    idempotent by payslip id.
+
+    Returns None on success and a plain-English reason when it could NOT post.
+    The reason is stamped on the payslip (`finance_post_error`) and handed back
+    to the caller — a payslip must never read "paid" while the ledger silently
+    has nothing in it.
     """
-    from routers.finance.postings import post_payroll_payslip
+    from routers.finance.postings import post_payroll_payslip, LedgerSetupError
+    pid = payslip.get("id")
     try:
-        await post_payroll_payslip(payslip, current_user)
+        je = await post_payroll_payslip(payslip, current_user)
+    except LedgerSetupError as ex:
+        reason = str(ex)
     except Exception as ex:
-        logger.error(f"[finance] payroll JE post failed for {payslip.get('id')}: {ex}")
+        logger.error(f"[finance] payroll JE post failed for {pid}: {ex}")
+        reason = f"Could not post to the ledger: {ex}"
+    else:
+        if je is None:
+            reason = "Net pay is zero — nothing to post"
+        else:
+            await db.hr_payslips.update_one({"id": pid}, {
+                "$set": {"finance_posted": True, "finance_je_id": je.get("id")},
+                "$unset": {"finance_post_error": ""},
+            })
+            return None
+    await db.hr_payslips.update_one({"id": pid}, {"$set": {
+        "finance_posted": False, "finance_post_error": reason[:300],
+    }})
+    logger.warning(f"[finance] payslip {pid} not posted: {reason}")
+    return reason
+
+
+@router.get("/payslips/unposted")
+async def unposted_payslips(current_user: dict = Depends(require_director)):
+    """Paid payslips with nothing in the ledger — what the HR banner reads."""
+    scope = await get_campus_filter(current_user)
+    q = {"status": "paid", **(scope or {})}
+    rows = await db.hr_payslips.find(q, {
+        "_id": 0, "id": 1, "staff_name": 1, "period": 1, "net_salary": 1, "currency": 1,
+        "paid_at": 1, "finance_post_error": 1, "location_id": 1, "payroll_location_id": 1,
+    }).sort("paid_at", -1).to_list(500)
+    out = []
+    for p in rows:
+        je = await db.finance_journal_entries.find_one(
+            {"idempotency_key": f"payslip:{p['id']}", "voided": {"$ne": True}}, {"_id": 0, "id": 1})
+        if je:
+            continue
+        out.append({**p, "reason": p.get("finance_post_error") or "Never posted to the ledger"})
+    return {"payslips": out, "count": len(out),
+            "total": round(sum(float(p.get("net_salary") or 0) for p in out), 2)}
+
+
+@router.get("/payroll/posting-report")
+async def payroll_posting_report(
+    limit_periods: int = Query(12, le=60),
+    current_user: dict = Depends(require_director),
+):
+    """Each payday's net total next to what actually reached the ledger.
+
+    Any difference is a real gap — a paid payslip whose journal entry never
+    posted (or was deleted) — so it is listed by name rather than netted away.
+    """
+    scope = await get_campus_filter(current_user)
+    rows = await db.hr_payslips.find({"status": "paid", **(scope or {})}, {
+        "_id": 0, "id": 1, "staff_name": 1, "period": 1, "net_salary": 1,
+        "currency": 1, "paid_at": 1, "finance_post_error": 1,
+    }).to_list(5000)
+
+    periods: dict = {}
+    for p in rows:
+        key = p.get("period") or "Unknown period"
+        b = periods.setdefault(key, {
+            "period": key, "staff_count": 0, "paid_total": 0.0,
+            "posted_total": 0.0, "unposted": [], "currency": p.get("currency") or "UGX",
+            "last_paid_at": None,
+        })
+        net = float(p.get("net_salary") or 0)
+        b["staff_count"] += 1
+        b["paid_total"] += net
+        if p.get("paid_at") and (not b["last_paid_at"] or p["paid_at"] > b["last_paid_at"]):
+            b["last_paid_at"] = p["paid_at"]
+        je = await db.finance_journal_entries.find_one(
+            {"idempotency_key": f"payslip:{p['id']}"}, {"_id": 0, "id": 1, "total": 1})
+        if je:
+            b["posted_total"] += float(je.get("total") or 0)
+        else:
+            b["unposted"].append({
+                "payslip_id": p["id"], "staff_name": p.get("staff_name"), "net_salary": net,
+                "reason": p.get("finance_post_error") or "No journal entry in the ledger",
+            })
+
+    out = []
+    for b in periods.values():
+        b["paid_total"] = round(b["paid_total"], 2)
+        b["posted_total"] = round(b["posted_total"], 2)
+        b["gap"] = round(b["paid_total"] - b["posted_total"], 2)
+        b["balanced"] = abs(b["gap"]) < 0.01
+        out.append(b)
+    out.sort(key=lambda x: x.get("last_paid_at") or x["period"], reverse=True)
+    out = out[:limit_periods]
+    return {
+        "periods": out,
+        "totals": {
+            "paid": round(sum(b["paid_total"] for b in out), 2),
+            "posted": round(sum(b["posted_total"] for b in out), 2),
+            "gap": round(sum(b["gap"] for b in out), 2),
+            "unposted_count": sum(len(b["unposted"]) for b in out),
+        },
+    }
+
+
+@router.post("/payslips/post-to-finance")
+async def post_payslips_to_finance(data: dict = None, current_user: dict = Depends(require_director)):
+    """Post every paid payslip that never reached the ledger. Idempotent —
+    anything already posted is skipped by the JE idempotency key.
+    Body (optional): {payslip_ids: [...]}"""
+    data = data or {}
+    ids = data.get("payslip_ids") or []
+    if ids:
+        rows = await db.hr_payslips.find({"id": {"$in": ids}, "status": "paid"}, {"_id": 0}).to_list(500)
+    else:
+        scope = await get_campus_filter(current_user)
+        rows = await db.hr_payslips.find({"status": "paid", **(scope or {})}, {"_id": 0}).to_list(500)
+    posted, failed = 0, []
+    for p in rows:
+        existing = await db.finance_journal_entries.find_one(
+            {"idempotency_key": f"payslip:{p['id']}", "voided": {"$ne": True}}, {"_id": 0, "id": 1})
+        if existing:
+            continue
+        reason = await _aggregate_payroll_expense(p, current_user)
+        if reason:
+            failed.append({"payslip_id": p["id"], "staff_name": p.get("staff_name"), "reason": reason})
+        else:
+            posted += 1
+    await _audit(current_user["id"], "post-to-finance", "hr_payslips", f"{posted} payslips",
+                 {"posted": posted, "failed": len(failed)})
+    return {"posted": posted, "failed": failed}
 
 
 # ========== PAYROLL LEDGER REPAIR (iter219) ==========

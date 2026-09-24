@@ -361,11 +361,15 @@ async def list_cases(
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
     school_id: Optional[str] = None,
+    subject_id: Optional[str] = None,
     search: Optional[str] = None,
     ocr_confidence: Optional[str] = None,
     current_user: dict = Depends(require_staff),
 ):
     """Search cases. Scoped to user's campus.
+
+    `subject_id` returns every case for one person, whatever its status — used
+    by the "open their social case" deep link from a child/member profile.
 
     `ocr_confidence` filters cases by the LATEST review's OCR confidence:
       • 'low'   → cases whose latest review was auto-extracted with low confidence
@@ -381,6 +385,8 @@ async def list_cases(
         query["risk_level"] = risk_level
     if school_id:
         query["education.school_id"] = school_id
+    if subject_id:
+        query["subject_id"] = subject_id
     if search:
         s = search.strip()
         query["$or"] = [

@@ -1,0 +1,56 @@
+{
+  "summary": "Frontend-only tests for iter368 unified 'Family members' UX. Verified 3 flows: Staff People > Families dialog, Staff Children edit dialog family members block, and Member Portal /portal/family. The unified section, roles/pickup toggles, portal card, and portal add/edit for approval all render correctly and portal add produces the correct 'Sent for approval' toast. HOWEVER a critical regression in UnifiedPeoplePage.jsx breaks the staff-side family-members editor as soon as the family contains any adult member: the component renders <Edit /> but the lucide-react import list on line 3 is missing the 'Edit' symbol, throwing ReferenceError caught by ErrorBoundary. This makes the reported original bug (parents not saving) still USER-VISIBLE from the staff UI even though the backend saved the row — the row never renders and re-opening the dialog crashes the members list.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "UnifiedPeoplePage.jsx family-members editor",
+        "issue": "ReferenceError: Edit is not defined. The lucide-react import on line 3 does NOT include `Edit`, but the family-member row (line 1477) and edit-guest section render `<Edit size={... } />`. As soon as the staff family dialog tries to render even one adult family member (either an existing member on open, or a newly-picked one), the map crashes and ErrorBoundary swallows the whole editor. Net effect: staff CANNOT see or manage adults on any family that has members — regression vs the very bug being fixed. Also blocks fam-member-edit-<id>, fam-member-remove-<id> and persistence verification because the row never renders after the pick.",
+        "selector": "[data-testid='fam-members-editor'] > row map (uses `<Edit />`)",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "UnifiedPeoplePage.jsx child family-members unlink",
+        "issue": "After clicking child-member-remove-<person_id> on a linked family member, the row was still present on the next check (count=1). Could not fully verify because Edit-crash may have leaked stale state; needs main agent to re-verify DELETE /children/{child_id}/family-members/{person_id} response handling and loadChildMembers refresh.",
+        "selector": "[data-testid^='child-member-remove-']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Staff — add existing person to a family (fam-add-member pick)",
+        "issue": "Picker returns suggestions (verified). Clicking a suggestion presumably calls POST /families/{id}/members successfully (no toast.error, no failed request seen), but the row never appears in the DOM because rendering crashes on <Edit />. Re-opening the family also crashes the section as soon as backend returns >=1 member. This is the DIRECT recurrence of the reported 'not saving' bug from the user's point of view.",
+        "affected_selectors": ["[data-testid='fam-add-member']", "[data-testid^='fam-member-']", "[data-testid^='fam-member-edit-']", "[data-testid^='fam-member-remove-']"]
+      }
+    ],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Staff family dialog: single 'Family members (x/6)' section renders (data-testid fam-members-editor). No 'Parents (', 'Guardians (' or 'Authorised/Authorized pickup only' sections found.",
+    "PersonPicker for family members returns server-side suggestions on 3+ chars (found 1 match for 'adm' = Admin user).",
+    "Children tab > edit child: child-family-members block present, child-add-member picker returns suggestions, picking a person immediately renders child-member-<id>, and the link PERSISTS after clicking save-child-btn and reopening (regression #2 from user is fixed).",
+    "Member portal /portal/family: exactly ONE 'Family members' card (data-testid parents-card) — 'Authorised pickup only' card is gone.",
+    "Portal Add Person dialog: guardian-role-select and guardian-pickup-toggle both present.",
+    "Portal save-guardian-btn on a new person produces the toast 'Sent for approval — an admin will review the new profile'.",
+    "Portal edit of an existing member submits (save-guardian-edit-btn works; toast 'Nothing changed' when no fields modified — expected path)."
+  ],
+  "test_report_links": ["/app/test_reports/iteration_244.json"],
+  "action_items": [
+    "MUST FIX (one-liner): add `Edit` to the lucide-react import at /app/frontend/src/pages/UnifiedPeoplePage.jsx line 3 (change `... History } from 'lucide-react'` → include `Edit`). Without this, iter368 'add family member' looks like it failed to save from the user's UI even though the backend row is written.",
+    "Re-verify child family-member unlink flow (DELETE /children/{child_id}/family-members/{person_id}) — row remained after remove click in one run; may be a stale-state artifact from the Edit crash but worth confirming after the import fix.",
+    "Consider adding a lint rule / build-time check so a missing lucide icon import fails CI (this exact class of bug repeats)."
+  ],
+  "critical_code_review_comments": [
+    "/app/frontend/src/pages/UnifiedPeoplePage.jsx:3 — `Edit` lucide icon used at line 1477 (fam-member row) and elsewhere but not imported. This is the actual root cause of the user-reported 'parents not saving' bug on the staff side after iter368.",
+    "/app/frontend/src/pages/UnifiedPeoplePage.jsx is 2027 lines — over the 700-line guideline; the family/child/guest dialogs are tightly coupled and repeatedly re-declare form state. Splitting the family dialog + child dialog into their own components would (a) make missing-import bugs surface immediately, (b) reduce the ErrorBoundary blast radius.",
+    "PersonPicker onPick handlers duplicate the '{ name, person_id, person_type, role: Guardian, can_pickup: true }' shape in three places (child dialog line 1417, family dialog line 1497, portal). Consider a small helper to keep defaults in sync with defaultCanPickup()."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "~65% — 7 of 11 tested behaviours pass; 1 critical regression blocks 3 staff flows"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 and member@5812uganda.org / Member@5812 (both worked)",
+  "seed_data_creation": "Created one pending portal person 'PortalGuest_<ts>' via /portal/family. No admin-side rows were created because of the Edit crash.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "After main agent adds `Edit` to the lucide import in UnifiedPeoplePage.jsx, re-run the family-members flow on family fam_7457254e (or any freshly-created family): (1) open edit-family-<id>, (2) type 'adm' in fam-add-member and pick the option, (3) verify fam-member-<id> row appears with 'Guardian · can pickup' text, (4) close and re-open — row must persist, (5) exercise fam-member-edit-<id> role change to Uncle + pickup toggle + fam-adult-save, (6) fam-member-remove-<id>, (7) type a fresh name and use fam-add-member-add-new → new-person-role=Aunt → new-person-save. Also re-verify child-member-remove-<pid> on the children flow because it was blocked/false on this run.",
+  "rca of the issue": "Root cause of the visible 'parents not saving' regression on staff UI is NOT the backend — /api/families/{id}/members POST succeeds (the previously passing test suite test_iter368_family_members.py confirms this). It is a missing named import: `Edit` is used inside the `.map` that renders each fam-member row (UnifiedPeoplePage.jsx line 1477: `<Button ... data-testid={`fam-member-edit-${m.id}`} onClick={...}><Edit size={12} /></Button>`) but `Edit` is not in the lucide-react import statement on line 3. React throws ReferenceError during render, ErrorBoundary captures it, and the whole fam-members-editor unmounts. From the user's POV the row 'disappears' after picking a person and the family 'looks empty' after reopening — indistinguishable from the original save bug. Fix: append `, Edit` to the lucide-react named-imports on line 3 of UnifiedPeoplePage.jsx."
+}

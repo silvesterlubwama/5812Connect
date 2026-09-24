@@ -14,7 +14,7 @@ import { Badge } from './ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { QRCode } from 'react-qrcode-logo';
 import { toast } from 'sonner';
-import { locationsApi, securityCheckpointApi } from '../services/api';
+import api, { locationsApi, securityCheckpointApi } from '../services/api';
 import DeviceDiagnosticsDialog from './DeviceDiagnosticsDialog';
 
 const _origin = () => {
@@ -59,6 +59,46 @@ function LinkRow({ label, url, qrSize = 96, hint, badgePillText, copyTestId, qrT
             </a>
           </Button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// How early an event appears on the kiosk's "checking in for" list.
+function EventWindowSetting() {
+  const [mins, setMins] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get('/admin/system-settings')
+      .then(r => setMins(String(r.data?.kiosk?.event_window_minutes ?? 60)))
+      .catch(() => setMins('60'));
+  }, []);
+
+  const save = async () => {
+    const n = parseInt(mins, 10);
+    if (!n || n < 5 || n > 720) { toast.error('Pick between 5 and 720 minutes'); return; }
+    setSaving(true);
+    try {
+      await api.put('/admin/system-settings', { kiosk: { event_window_minutes: n } });
+      toast.success(`Kiosk will offer events up to ${n} minutes before they start`);
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Could not save'); }
+    setSaving(false);
+  };
+
+  return (
+    <div className="rounded-lg border p-3 flex flex-wrap items-end gap-3" data-testid="kiosk-event-window-setting">
+      <div>
+        <p className="text-xs font-medium">Show events starting within</p>
+        <p className="text-[11px] text-muted-foreground">An event stays on the kiosk list until it ends.</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Input type="number" min={5} max={720} value={mins} onChange={e => setMins(e.target.value)}
+          className="h-8 w-20 text-xs" data-testid="kiosk-event-window-input" />
+        <span className="text-xs text-muted-foreground">minutes</span>
+        <Button size="sm" onClick={save} disabled={saving} data-testid="kiosk-event-window-save">
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
       </div>
     </div>
   );
@@ -179,6 +219,7 @@ export default function KioskLinksManager() {
               url={`${origin}/kiosk`}
               hint="Tablet-friendly check-in surface for members + guests. Use the in-kiosk Setup screen (PIN-protected) to bind a campus + lock the screen."
             />
+            <EventWindowSetting />
           </section>
 
           {/* POS */}

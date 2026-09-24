@@ -1,7 +1,7 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pin_security import pin_digest
-from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit
+from pin_security import pin_digest, pin_query, pin_matches
+from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit
 from models import UserRegister, UserLogin
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -19,9 +19,12 @@ async def pin_login(data: dict, request: Request) -> dict:
     pin = (data.get("pin") or "").strip()
     if not pin or len(pin) < 4:
         raise HTTPException(status_code=400, detail="PIN must be at least 4 digits")
-    user = await db.users.find_one({"pin": pin, "status": "active"}, {"_id": 0, "password_hash": 0})
-    if not user:
-        # Also try matching members.pin (for checkin-only members) — but only return staff users here
+    # iter371 — PINs have been stored as an HMAC digest since iter353; this
+    # route was still querying the cleartext `pin` field that the migration
+    # removed, so every cashier PIN sign-in failed.
+    await enforce_public_rate_limit(request, "pin_login", limit=10, window_minutes=10)
+    user = await db.users.find_one({**pin_query(pin), "status": "active"}, {"_id": 0, "password_hash": 0})
+    if not user or not pin_matches(pin, user):
         raise HTTPException(status_code=401, detail="Invalid PIN")
     # Optional store restriction: cashier must be at this store, its parent campus, or its sub-locations
     store_id = (data.get("store_id") or "").strip()
@@ -322,20 +325,29 @@ async def revoke_other_sessions(request: Request, current_user: dict = Depends(g
 
 
 @router.post("/auth/sales-portal-login")
-async def sales_portal_login(data: dict) -> dict:
-    """Login for sales portal devices — uses last name + PIN."""
+async def sales_portal_login(data: dict, request: Request) -> dict:
+    """Login for sales portal devices — uses last name + PIN.
+
+    iter371: the PIN is looked up by its HMAC digest (iter353 removed the
+    cleartext `pin` field, which this route was still querying, so POS sign-in
+    was impossible). The last name is escaped before it reaches the regex, and
+    both failure modes return the same 401 so the endpoint cannot be used to
+    discover who works here.
+    """
+    import re as _re
     last_name = (data.get("last_name") or "").strip()
     pin = (data.get("pin") or "").strip()
     if not last_name or not pin:
         raise HTTPException(status_code=400, detail="Last name and PIN required")
-    # Find user by last name (case-insensitive) and PIN
+    await enforce_public_rate_limit(request, "sales_portal_login", limit=10, window_minutes=10)
+    invalid = HTTPException(status_code=401, detail="Invalid last name or PIN")
     user = await db.users.find_one({
-        "name": {"$regex": f"\\b{last_name}$", "$options": "i"},
-        "pin": pin,
+        "name": {"$regex": f"\\b{_re.escape(last_name)}$", "$options": "i"},
+        **pin_query(pin),
         "status": "active",
     }, {"_id": 0, "password_hash": 0})
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid last name or PIN")
+    if not user or not pin_matches(pin, user):
+        raise invalid
     token = create_token(user["id"])
     return {"token": token, "name": user.get("name", ""), "id": user["id"], "role": user.get("role", "")}
 

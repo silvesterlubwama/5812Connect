@@ -98,6 +98,16 @@ async def _run_due_date_reminder_scheduler():
                     await fire_due_recurring_entries()
                 except Exception as e:
                     logger.error(f"fire_due_recurring_entries: {e}")
+                # iter369: refresh children's inherited restricted-location
+                # access — revokes what the parent no longer has and flags
+                # the ones who have turned 18.
+                try:
+                    from routers.access_children import sync_all_children
+                    res = await sync_all_children()
+                    logger.info(f"child access re-check: {res['refreshed']} refreshed, "
+                                f"{len(res['revoked'])} revoked, {len(res['aged_out'])} aged out")
+                except Exception as e:
+                    logger.error(f"child access re-check: {e}")
                 last_birthday_check_date = date.today()
 
             # Daily AUTO-BACKUP — runs once per day during the midnight UTC hour.

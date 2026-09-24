@@ -7,6 +7,8 @@ import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import api from '../services/api';
+import { secureStorage } from '../services/secureStorage';
+import { PersonPicker } from '../components/PersonPicker';
 import { toast } from 'sonner';
 import { Toaster } from '../components/ui/sonner';
 
@@ -29,11 +31,15 @@ export default function SalesPortalPage() {
   const [recentSales, setRecentSales] = useState([]);
   const [customerSearch, setCustomerSearch] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [customers, setCustomers] = useState([]);
 
   const handleLogin = async () => {
     try {
       const res = await api.post('/auth/sales-portal-login', loginForm);
+      // iter371 — the token was never stored, so every POS call after login
+      // went out unauthenticated and the 401 interceptor bounced the terminal
+      // back to /login.
+      secureStorage.setToken(res.data.token);
+      secureStorage.setUser({ id: res.data.id, name: res.data.name, role: res.data.role });
       setAuthed(true);
       setStaffName(res.data.name);
       setStaffUser(res.data);
@@ -73,9 +79,30 @@ export default function SalesPortalPage() {
     })();
   }, [authed, showManage]);
 
-  const searchCustomers = async (q) => {
-    if (q.length < 2) { setCustomers([]); return; }
-    try { const res = await api.get('/customers', { params: { search: q } }); setCustomers(res.data || []); } catch { setCustomers([]); }
+  const pickCustomer = async (person) => {
+    if (person.type === 'customer') {
+      setSelectedCustomer({ id: person.id, name: person.name, phone: person.phone || '', email: person.email || '' });
+      setCustomerSearch(person.name);
+      return;
+    }
+    try {
+      const res = await api.post('/customers', {
+        name: person.name, phone: person.phone || '', email: person.email || '',
+        person_id: person.id, person_type: person.type,
+      });
+      setSelectedCustomer(res.data);
+      setCustomerSearch(person.name);
+      toast.success(`Linked ${person.name} — no duplicate created`);
+    } catch { toast.error('Could not link that person'); }
+  };
+
+  const createCustomerNamed = async (name) => {
+    try {
+      const res = await api.post('/customers', { name });
+      setSelectedCustomer(res.data);
+      setCustomerSearch(name);
+      toast.success('Customer created');
+    } catch { toast.error('Failed'); }
   };
 
   // Auto-lock after 5 minutes of inactivity
@@ -265,25 +292,16 @@ export default function SalesPortalPage() {
         {/* Cart */}
         <div className="w-80 border-l bg-white dark:bg-slate-800 flex flex-col">
           <div className="p-3 border-b"><p className="text-sm font-semibold">Cart ({cart.length})</p></div>
-          {/* Customer lookup */}
+          {/* Customer lookup — one shared picker: existing customers, members,
+              staff and guests in a single list, "add new" only if nothing matches */}
           <div className="p-2 border-b space-y-1">
-            <div className="flex gap-1">
-              <Input className="h-7 text-xs flex-1" placeholder="Customer name/phone..." value={customerSearch} onChange={e => { setCustomerSearch(e.target.value); searchCustomers(e.target.value); }} />
-              {customerSearch.trim() && !selectedCustomer && customers.length === 0 && (
-                <Button size="sm" className="h-7 text-[10px] shrink-0" onClick={async () => {
-                  try {
-                    const res = await api.post('/customers', { name: customerSearch.trim() });
-                    setSelectedCustomer(res.data); setCustomers([]); toast.success('Customer created');
-                  } catch { toast.error('Failed'); }
-                }} data-testid="create-customer-btn">+ New</Button>
-              )}
-            </div>
-            {customers.length > 0 && !selectedCustomer && (
-              <div className="max-h-24 overflow-auto border rounded text-xs">
-                {customers.map(c => <button key={c.id} className="w-full text-left px-2 py-1 hover:bg-accent/50" onClick={() => { setSelectedCustomer(c); setCustomerSearch(c.name); setCustomers([]); }}>{c.name} {c.phone ? `(${c.phone})` : ''}</button>)}
-              </div>
+            {!selectedCustomer && (
+              <PersonPicker size="sm" testId="pos-customer-picker" kinds="customer,member,user,guest"
+                value={customerSearch} onChange={setCustomerSearch}
+                placeholder="Customer name/phone…" addNewLabel="as a new customer"
+                onPick={pickCustomer} onAddNew={createCustomerNamed} />
             )}
-            {selectedCustomer && <div className="flex items-center justify-between text-xs"><Badge variant="outline" className="text-[10px]">{selectedCustomer.name}</Badge><button className="text-destructive text-[10px]" onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }}>Clear</button></div>}
+            {selectedCustomer && <div className="flex items-center justify-between text-xs"><Badge variant="outline" className="text-[10px]">{selectedCustomer.name}</Badge><button className="text-destructive text-[10px]" onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }} data-testid="pos-customer-clear">Clear</button></div>}
           </div>
           <div className="flex-1 overflow-auto p-2 space-y-1">
             {cart.map(c => (

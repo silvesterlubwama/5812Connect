@@ -5,11 +5,14 @@ all /api/shipments/* and /api/public/shipments/* routes exactly.
 """
 from fastapi import APIRouter
 
-from . import core, items, pallets, public, airport, pdfs
+from . import core, items, pallets, public, airport, pdfs, similar
 
 router = APIRouter()
 router.include_router(core.router)
 router.include_router(items.router)
+# similar-item consolidation must be registered before nothing in particular,
+# its paths are distinct from the item CRUD routes.
+router.include_router(similar.router)
 router.include_router(pallets.router)
 router.include_router(public.router)
 router.include_router(airport.router)

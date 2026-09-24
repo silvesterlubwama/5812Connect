@@ -1,7 +1,7 @@
 """Restricted access management - residents, staff access, guest pre-approval"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from typing import Optional, List
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 import re
 import uuid
 import logging
@@ -212,18 +212,53 @@ async def revoke_staff_access(pass_id: str, current_user: dict = Depends(get_cur
 
 @router.post("/access/guest-requests")
 async def request_guest_visit(data: dict, current_user: dict = Depends(get_current_user)):
-    """Submit a guest visit request for a restricted sub-location"""
+    """Submit a guest visit request for a restricted sub-location.
+
+    A stay can span several days (`visit_from` → `visit_to`); one approval then
+    covers the whole period on a single pass. A single `visit_date` still works
+    for older clients. When the guest was found with the people search,
+    `person_id`/`person_type` link the request to that profile instead of
+    creating yet another loose name.
+    """
     location_id = data.get("location_id")
     loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1})
+    today = datetime.now(timezone.utc).date().isoformat()
+    visit_from = (data.get("visit_from") or data.get("visit_date") or today)[:10]
+    visit_to = (data.get("visit_to") or visit_from)[:10]
+    if visit_to < visit_from:
+        raise HTTPException(status_code=400, detail="The last day cannot be before the first day")
+    name = (data.get("guest_name") or "").strip()
+    phone = (data.get("guest_phone") or "").strip()
+    email = (data.get("guest_email") or "").strip()
+    person_id = (data.get("person_id") or "").strip()
+    person_type = (data.get("person_type") or "").strip()
+    if person_id:
+        from routers.members.family_members import find_person
+        found = await find_person(person_id, person_type)
+        if not found:
+            raise HTTPException(status_code=404, detail="That person could not be found any more")
+        name = name or found.get("name") or ""
+        phone = phone or found.get("phone") or ""
+        email = email or found.get("email") or ""
+        person_type = found["person_type"]
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Search for the guest, or enter their full name")
     doc = {
         "id": f"gr_{str(uuid.uuid4())[:8]}",
-        "guest_name": data.get("guest_name"),
-        "guest_phone": data.get("guest_phone", ""),
+        "guest_name": name,
+        "guest_phone": phone,
+        "guest_email": email,
         "guest_id_number": data.get("guest_id_number", ""),
+        "person_id": person_id,
+        "person_type": person_type,
         "location_id": location_id,
         "purpose": data.get("purpose", ""),
-        "visit_date": data.get("visit_date"),
+        "visit_date": visit_from,      # kept for older clients / back-compat
+        "visit_from": visit_from,
+        "visit_to": visit_to,
+        "days": (date.fromisoformat(visit_to) - date.fromisoformat(visit_from)).days + 1,
         "visit_time": data.get("visit_time", ""),
+        "visit_until_time": data.get("visit_until_time", ""),
         "status": "pending",  # pending, approved, rejected
         "requested_by": current_user["id"],
         "approved_by": None,
@@ -231,11 +266,12 @@ async def request_guest_visit(data: dict, current_user: dict = Depends(get_curre
     }
     await db.guest_requests.insert_one(doc)
     doc.pop("_id", None)
+    when = visit_from if visit_from == visit_to else f"{visit_from} → {visit_to} ({doc['days']} days)"
     await _audit(current_user["id"], "create", "guest_request", doc["id"])
     await notify_role_level(7, "guest_approval", {
         "guest_name": doc.get("guest_name", ""),
         "location_name": loc.get("name") if loc else location_id,
-        "date": doc.get("visit_date", ""),
+        "date": when,
         "purpose": doc.get("purpose", ""),
         "action_url": "/access",
     })
@@ -245,16 +281,9 @@ async def request_guest_visit(data: dict, current_user: dict = Depends(get_curre
         await ws_manager.broadcast({
             "type": "notification",
             "title": f"Guest visit request: {doc.get('guest_name', '')}",
-            "body": f"At {loc.get('name') if loc else location_id} on {doc.get('visit_date', '')}",
+            "body": f"At {loc.get('name') if loc else location_id} on {when}",
             "link": "/access",
         })
-    except Exception:
-        pass
-    # Send push notification to managers
-    try:
-        # Push notification for guest requests (non-blocking)
-        from deps import db as _db, logger as _log
-        _log.info(f"Guest request: {doc.get('guest_name', '')} at {loc.get('name') if loc else location_id}")
     except Exception:
         pass
     return doc
@@ -285,11 +314,17 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
     req = await db.guest_requests.find_one({"id": request_id}, {"_id": 0})
     if req:
         pass_id = f"gp_{str(uuid.uuid4())[:8]}"
-        # Check if the guest already has a member/staff badge
-        existing_badge = await db.members.find_one(
-            {"$or": [{"name": req.get("guest_name")}, {"phone": req.get("guest_phone")}]},
-            {"_id": 0, "id": 1, "name": 1, "badge_id": 1}
-        )
+        # Prefer the profile the requester linked with the people search;
+        # only fall back to matching on name/phone when there is none.
+        existing_badge = None
+        if req.get("person_id"):
+            from routers.members.family_members import find_person
+            existing_badge = await find_person(req["person_id"], req.get("person_type") or "")
+        if not existing_badge:
+            existing_badge = await db.members.find_one(
+                {"$or": [{"name": req.get("guest_name")}, {"phone": req.get("guest_phone")}]},
+                {"_id": 0, "id": 1, "name": 1, "badge_id": 1}
+            )
         if not existing_badge:
             # Also check staff/users table
             existing_badge = await db.users.find_one(
@@ -297,17 +332,23 @@ async def approve_guest_request(request_id: str, current_user: dict = Depends(ge
                 {"_id": 0, "id": 1, "name": 1}
             )
         visit_time = req.get("visit_time", "")
+        valid_from = req.get("visit_from") or req.get("visit_date")
+        valid_until = req.get("visit_to") or req.get("visit_date")
         guest_pass = {
             "id": pass_id,
             "guest_request_id": request_id,
             "guest_name": req.get("guest_name"),
             "guest_phone": req.get("guest_phone", ""),
+            "person_id": req.get("person_id", ""),
+            "person_type": req.get("person_type", ""),
             "location_id": req.get("location_id"),
-            "visit_date": req.get("visit_date"),
-            "valid_from": req.get("visit_date"),
-            "valid_until": req.get("visit_date"),  # Single day by default
+            "visit_date": valid_from,
+            # One pass covers the whole stay — a single QR, no daily reissue.
+            "valid_from": valid_from,
+            "valid_until": valid_until,
+            "days": req.get("days") or 1,
             "valid_from_time": visit_time or "06:00",
-            "valid_until_time": "22:00",  # Default end of day
+            "valid_until_time": req.get("visit_until_time") or "22:00",
             "qr_value": pass_id,
             "has_existing_badge": bool(existing_badge),
             "existing_member_id": existing_badge.get("id") if existing_badge else None,
@@ -415,10 +456,14 @@ async def scan_in_out(data: dict, current_user: dict = Depends(get_current_user)
     # ---- Back-compat: legacy path checking guest_requests directly ----
     is_approved_guest = None
     if not guest_pass:
+        # Legacy rows: a single `visit_date`, or a stay covering today.
         guest_query = {
             "location_id": location_id,
             "status": "approved",
-            "visit_date": today_iso,
+            "$and": [
+                {"$or": [{"visit_from": {"$lte": today_iso}}, {"visit_date": today_iso}]},
+                {"$or": [{"visit_to": {"$gte": today_iso}}, {"visit_date": today_iso}]},
+            ],
         }
         if guest_request_id:
             guest_query["id"] = guest_request_id
@@ -427,9 +472,20 @@ async def scan_in_out(data: dict, current_user: dict = Depends(get_current_user)
         is_approved_guest = await db.guest_requests.find_one(guest_query)
 
     if not is_resident and not has_staff_pass and not guest_pass and not is_approved_guest:
-        raise HTTPException(status_code=403, detail="No access authorization for this restricted location")
-
-    access_type = "resident" if is_resident else ("staff" if has_staff_pass else "guest")
+        # A child may follow the caregiver who is cleared for this location.
+        inherited = None
+        if member_id:
+            try:
+                from routers.access_children import may_child_enter
+                if await db.children.find_one({"id": member_id}, {"_id": 0, "id": 1}):
+                    inherited = await may_child_enter(member_id, location_id)
+            except Exception as e:
+                logger.warning(f"child inherited access check failed: {e}")
+        if not inherited:
+            raise HTTPException(status_code=403, detail="No access authorization for this restricted location")
+        access_type = "inherited_child"
+    else:
+        access_type = "resident" if is_resident else ("staff" if has_staff_pass else "guest")
     scan = {
         "id": f"scan_{str(uuid.uuid4())[:8]}",
         "member_id": member_id,
@@ -1063,10 +1119,25 @@ async def validate_access(data: dict, current_user: dict = Depends(get_current_u
     if resident:
         return {"allowed": True, "person_id": person_id, "person_name": person_name, "access_type": "resident", "valid_until": "permanent"}
 
-    # Check 2: Staff with access pass for this location
-    staff_pass = await db.staff_passes.find_one({"staff_id": person_id, "location_id": location_id, "status": "active"})
+    # Check 2: Staff with access pass for this location (both collections —
+    # passes are written to `staff_access`, older rows live in `staff_passes`)
+    staff_pass = await db.staff_access.find_one({"staff_id": person_id, "location_id": location_id, "status": "active"}) \
+        or await db.staff_passes.find_one({"staff_id": person_id, "location_id": location_id, "status": "active"})
     if staff_pass:
         return {"allowed": True, "person_id": person_id, "person_name": person_name, "access_type": "staff", "valid_until": staff_pass.get("valid_until", "permanent")}
+
+    # Check 2b: a child following the caregiver who is already cleared here.
+    # Evaluated live, so revoking the parent's pass revokes the child's too.
+    try:
+        from routers.access_children import may_child_enter
+        if await db.children.find_one({"id": person_id}, {"_id": 0, "id": 1}):
+            grant = await may_child_enter(person_id, location_id)
+            if grant:
+                return {"allowed": True, "person_id": person_id, "person_name": person_name,
+                        "access_type": "inherited_child", "valid_until": grant.get("expires_on") or "",
+                        "inherited_from": grant.get("via_name") or "", "via": grant.get("via_kind")}
+    except Exception as e:
+        logger.warning(f"child inherited access check failed: {e}")
 
     # Check 3: Active guest pass for this location
     guest_pass = await db.access_guest_passes.find_one({"$or": [{"guest_id": person_id}, {"guest_request_id": person_id}], "location_id": location_id, "status": "active"})

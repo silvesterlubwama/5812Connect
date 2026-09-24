@@ -43,6 +43,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
       { to: '/outreach', icon: Globe, label: 'Outreach', roles: STAFF_PLUS },
+      { to: '/lesson-planning', icon: BookOpen, label: 'Lesson Planning' },
       { to: '/calendar', icon: Calendar, label: 'Calendar' },
       { to: '/check-ins', icon: UserCheck, label: 'Check-ins', roles: STAFF_PLUS },
     ]

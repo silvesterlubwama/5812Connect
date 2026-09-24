@@ -1508,6 +1508,120 @@ async def _ticket_flags_safe(member: dict, child_ids: Optional[list] = None) -> 
         return []
 
 
+DEFAULT_KIOSK_EVENT_WINDOW = 60
+
+
+async def _kiosk_event_window() -> int:
+    """How many minutes before an event starts the kiosk should offer it."""
+    try:
+        doc = await db.system_settings.find_one({"id": "default"}, {"_id": 0, "kiosk": 1})
+        mins = int(((doc or {}).get("kiosk") or {}).get("event_window_minutes") or DEFAULT_KIOSK_EVENT_WINDOW)
+        return max(5, min(mins, 720))
+    except Exception:
+        return DEFAULT_KIOSK_EVENT_WINDOW
+
+
+async def _campus_now(location_id: str) -> datetime:
+    """Local wall-clock time at the campus. Events store `date` and `time` as
+    local strings, so comparing them against UTC would be three hours out."""
+    tz_name = "Africa/Kampala"
+    if location_id:
+        loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "timezone": 1})
+        tz_name = (loc or {}).get("timezone") or tz_name
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+def _hhmm(value: str, fallback: Optional[int] = None) -> Optional[int]:
+    """'09:30' → minutes since midnight."""
+    m = re.match(r"^(\d{1,2}):(\d{2})", (value or "").strip())
+    if not m:
+        return fallback
+    return int(m.group(1)) * 60 + int(m.group(2))
+
+
+async def kiosk_events_for(location_id: str) -> dict:
+    """Events the kiosk should offer: on right now (or starting within the
+    window), plus the rest of today for early arrivals.
+
+    Recurring events are matched on their own date/end_date range like any
+    other — recurrence expansion lives in the events UI, not here.
+    """
+    window = await _kiosk_event_window()
+    now = await _campus_now(location_id)
+    today = now.date().isoformat()
+    minute_now = now.hour * 60 + now.minute
+
+    query = {
+        "status": {"$nin": ["cancelled", "completed"]},
+        "$or": [
+            {"date": today},
+            {"$and": [{"date": {"$lte": today}}, {"end_date": {"$gte": today}}]},
+        ],
+    }
+    if location_id:
+        query["$and"] = [{"$or": [
+            {"location_id": location_id}, {"location_id": {"$in": ["", None]}}, {"location_id": {"$exists": False}},
+        ]}]
+    rows = await db.events.find(query, {
+        "_id": 0, "id": 1, "title": 1, "name": 1, "date": 1, "end_date": 1, "time": 1,
+        "end_time": 1, "location": 1, "venue_name": 1, "location_id": 1, "type": 1,
+    }).to_list(100)
+
+    now_list, later_list = [], []
+    for e in rows:
+        starts = _hhmm(e.get("time"), 0)
+        ends = _hhmm(e.get("end_time"))
+        if ends is None or ends <= starts:
+            ends = min(starts + 120, 24 * 60)          # assume two hours when no end time
+        multi_day = bool(e.get("end_date")) and e["end_date"] > e.get("date", "")
+        if multi_day:
+            starts, ends = 0, 24 * 60
+        item = {
+            "id": e.get("id"),
+            "name": e.get("title") or e.get("name") or "Event",
+            "time": e.get("time") or "",
+            "end_time": e.get("end_time") or "",
+            "venue": e.get("venue_name") or e.get("location") or "",
+            "location_id": e.get("location_id") or "",
+            "type": e.get("type") or "",
+        }
+        if starts - window <= minute_now <= ends:
+            mins = minute_now - starts
+            item["started"] = mins >= 0
+            item["minutes"] = abs(mins)
+            item["when"] = ("On now" if multi_day else
+                            (f"Started {mins} min ago" if mins > 0 else
+                             ("Starting now" if mins == 0 else f"Starts in {-mins} min")))
+            now_list.append(item)
+        elif minute_now < starts:
+            item["started"] = False
+            item["minutes"] = starts - minute_now
+            item["when"] = f"Later today · {item['time']}"
+            later_list.append(item)
+
+    now_list.sort(key=lambda x: (not x.get("started"), x["minutes"]))
+    later_list.sort(key=lambda x: x["minutes"])
+    return {
+        "events_now": now_list,
+        "events_later_today": later_list[:8],
+        "event_window_minutes": window,
+        "campus_time": now.strftime("%H:%M"),
+    }
+
+
+@router.get("/kiosk/events-now")
+async def kiosk_events_now(location_id: str = "", request: Request = None):
+    """What the kiosk can check people into right now (public, like the rest of
+    the kiosk endpoints — it exposes only what the screen shows)."""
+    if request is not None:
+        await enforce_public_rate_limit(request, "kiosk_events_now", limit=60, window_minutes=10)
+    return await kiosk_events_for(location_id)
+
+
 @router.post("/kiosk/checkin")
 async def kiosk_checkin(data: CheckInCreate):
     ci_id = f"ci_{str(uuid.uuid4())[:8]}"
@@ -1558,24 +1672,18 @@ async def kiosk_lookup(identifier: str, request: Request):
         person = await db.users.find_one({"$or": or_q}, proj)
     if not person:
         raise HTTPException(status_code=404, detail="No match — try the full national ID, passport, phone number or in-app ID")
-    # Children the kiosk can offer for check-in (first names + photo only).
-    children = []
-    child_or = []
-    if person.get("family_id"):
-        child_or.append({"family_id": person["family_id"]})
-    if person.get("id"):
-        child_or.append({"parent_ids": person["id"]})
-    if child_or:
-        children = await db.children.find(
-            {"$or": child_or}, {"_id": 0, "id": 1, "name": 1, "photo_url": 1},
-        ).to_list(20)
+    from routers.members.household import household_for_kiosk
+    household = await household_for_kiosk(person)
     return {
         "id": person.get("id"),
         "name": person.get("name", ""),
         "role": person.get("role") or "member",
         "photo_url": person.get("photo_url"),
         "location_id": person.get("location_id"),
-        "children": children,
+        **household,
+        # What the kiosk can check this family into, so the screen can say which
+        # event it is rather than filing a blank check-in.
+        **await kiosk_events_for(person.get("location_id") or ""),
     }
 
 
@@ -1627,33 +1735,27 @@ async def kiosk_pin_checkin(data: dict, request: Request):
             resolved_location = ev.get("location_id")
     if not resolved_location:
         resolved_location = member.get("location_id") or member.get("active_campus_id") or ""
-    # If this person is/could be a parent, also surface their children so the kiosk
-    # can offer them as check-in options (kiosk is unauthenticated — staff-only
-    # parent-lookup endpoint won't work for an external parent at a kiosk).
+    # The whole household the kiosk can offer — the person themselves, their
+    # spouse/guardians and their children (iter363; children only before that).
+    household = []
     children = []
     try:
-        child_or = []
-        if member.get("family_id"):
-            child_or.append({"family_id": member["family_id"]})
-        if member.get("id"):
-            child_or.append({"parent_ids": member["id"]})
-        if child_or:
-            children = await db.children.find(
-                {"$or": child_or},
-                # No date_of_birth: this response goes to an anonymous kiosk.
-                {"_id": 0, "id": 1, "name": 1, "photo_url": 1, "family_id": 1},
-            ).to_list(20)
+        from routers.members.household import household_for_kiosk
+        payload = await household_for_kiosk(member)
+        household, children = payload["household"], payload["children"]
     except Exception as e:
-        logger.warning(f"Kiosk children lookup failed: {e}")
-        children = []
+        logger.warning(f"Kiosk household lookup failed: {e}")
     if action == "lookup":
         return {
             "member_name": member.get("name"),
             "member_id": member.get("id"),
             "role": member.get("role", ""),
             "type": member.get("role", "member"),
+            "photo_url": member.get("photo_url"),
             "children": children,
+            "household": household,
             "event_tickets": await _ticket_flags_safe(member, [c["id"] for c in children]),
+            **await kiosk_events_for(resolved_location),
         }
     if action == "checkout":
         last_ci = await db.checkins.find_one(
@@ -1671,27 +1773,65 @@ async def kiosk_pin_checkin(data: dict, request: Request):
                 logger.warning(f"kiosk→timesheet checkout sync failed for {member.get('id')}: {e}")
             return {"message": "Checked out", "member_name": member.get("name")}
         return {"message": "No active check-in", "member_name": member.get("name")}
-    # ---- check in (parent + optional children) ----
-    ci_id = f"ci_{str(uuid.uuid4())[:8]}"
-    checkin = {
-        "id": ci_id, "member_id": member["id"], "member_name": member.get("name", ""),
-        "type": member.get("role", "member").lower(), "event_id": event_id, "event_name": event_name,
-        "method": "pin", "check_in_time": datetime.now(timezone.utc).isoformat(), "source": "kiosk",
-        "location_id": resolved_location,
-    }
-    await db.checkins.insert_one(checkin)
-    checkin.pop("_id", None)
-    # iter 338 — badge autofill onto timesheet (silent no-op for non-staff).
-    try:
-        from routers.hr import sync_kiosk_to_timesheet
-        await sync_kiosk_to_timesheet(
-            member["id"], "checkin", checkin["check_in_time"], resolved_location,
-        )
-    except Exception as e:
-        logger.warning(f"kiosk pin→timesheet autofill failed for {member.get('id')}: {e}")
-    # Optionally check in the parent's children too
+    # ---- check in ----
+    # The adult is checked in ONLY when they tapped their own name. Checking the
+    # person doing the lookup in automatically counted guardians who were just
+    # dropping a child off (iter359).
     selected_child_ids = data.get("child_ids") or []
+    selected_member_ids = data.get("member_ids") or []
+    include_self = data.get("include_self")
+    if include_self is None:
+        if data.get("member_ids") is not None:
+            include_self = member["id"] in selected_member_ids
+        else:
+            include_self = not selected_child_ids   # nothing chosen at all → the adult
+    # Household adults other than the person at the keypad (spouse, guardians).
+    other_adults = [
+        r for r in household
+        if r.get("type") != "child" and r.get("id") != member["id"]
+        and r.get("id") in selected_member_ids
+    ]
+    if not include_self and not selected_child_ids and not other_adults:
+        raise HTTPException(status_code=400, detail="Tap at least one name to check in")
+    if event_id and not event_name:
+        ev = await db.events.find_one({"id": event_id}, {"_id": 0, "title": 1, "name": 1})
+        if ev:
+            event_name = ev.get("title") or ev.get("name") or ""
+    checkin = None
+    if include_self:
+        ci_id = f"ci_{str(uuid.uuid4())[:8]}"
+        checkin = {
+            "id": ci_id, "member_id": member["id"], "member_name": member.get("name", ""),
+            "type": member.get("role", "member").lower(), "event_id": event_id, "event_name": event_name,
+            "method": "pin", "check_in_time": datetime.now(timezone.utc).isoformat(), "source": "kiosk",
+            "location_id": resolved_location,
+        }
+        await db.checkins.insert_one(checkin)
+        checkin.pop("_id", None)
+        # iter 338 — badge autofill onto timesheet (silent no-op for non-staff).
+        try:
+            from routers.hr import sync_kiosk_to_timesheet
+            await sync_kiosk_to_timesheet(
+                member["id"], "checkin", checkin["check_in_time"], resolved_location,
+            )
+        except Exception as e:
+            logger.warning(f"kiosk pin→timesheet autofill failed for {member.get('id')}: {e}")
     child_checkins = []
+    for adult in other_adults:
+        aci = {
+            "id": f"ci_{str(uuid.uuid4())[:8]}", "member_id": adult["id"],
+            "member_name": adult.get("name", ""),
+            "type": (adult.get("type") or "member").lower(),
+            "relationship": adult.get("relationship") or "",
+            "event_id": event_id, "event_name": event_name,
+            "method": "household", "check_in_time": datetime.now(timezone.utc).isoformat(),
+            "source": "kiosk", "checked_in_by": member["id"],
+            "checked_in_by_name": member.get("name", ""),
+            "location_id": resolved_location,
+        }
+        await db.checkins.insert_one(aci)
+        aci.pop("_id", None)
+        child_checkins.append(aci)
     if selected_child_ids and children:
         for child in children:
             if child["id"] not in selected_child_ids:
@@ -1707,9 +1847,14 @@ async def kiosk_pin_checkin(data: dict, request: Request):
             await db.checkins.insert_one(cci)
             cci.pop("_id", None)
             child_checkins.append(cci)
+    names = ([member.get("name", "")] if include_self else []) + [c["member_name"] for c in child_checkins]
     return {
         "message": "Checked in",
         "member_name": member.get("name"),
+        "checked_in_names": names,
+        "checked_in_count": len(names),
+        "event_id": event_id,
+        "event_name": event_name,
         "checkin": checkin,
         "child_checkins": child_checkins,
         "event_tickets": await _ticket_flags_safe(member, [c["id"] for c in children]),

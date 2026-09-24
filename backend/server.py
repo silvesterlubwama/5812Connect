@@ -419,6 +419,7 @@ try:
     from routers.notifications import router as notifications_router
     from routers.access import router as access_router
     from routers.access_eligible import router as access_eligible_router
+    from routers.access_children import router as access_children_router
     from routers.reports import router as reports_router
     from routers.documents import router as documents_router
     from routers.auth import router as auth_router
@@ -459,6 +460,7 @@ try:
     app.include_router(notifications_router)
     app.include_router(access_router)
     app.include_router(access_eligible_router)
+    app.include_router(access_children_router)
     app.include_router(reports_router)
     app.include_router(documents_router)
     app.include_router(auth_router)
@@ -510,6 +512,9 @@ try:
     # iter346: Flutterwave online checkout for the public shop (card + Uganda MoMo).
     from routers.payments_flutterwave import router as payments_flutterwave_router
     from routers.payments_gateway import router as payments_gateway_router
+    # iter361: outreach lesson planning — yearly theme, monthly topic, session
+    # run sheets with a leader per slot.
+    from routers.lesson_planning import router as lesson_planning_router
     # iter319: customer directory (extracted from the offline financial.py) and
     # customer statements / payment reminders — both had live UI hitting 404s.
     from routers.customers import router as customers_router
@@ -547,6 +552,7 @@ try:
     app.include_router(public_shop_router)
     app.include_router(payments_flutterwave_router)
     app.include_router(payments_gateway_router)
+    app.include_router(lesson_planning_router)
     app.include_router(customers_router)
     app.include_router(statements_router)
     app.include_router(invoices_router)

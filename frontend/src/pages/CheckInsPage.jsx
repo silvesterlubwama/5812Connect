@@ -3,6 +3,7 @@ import { Search, Plus, UserCheck, RefreshCw, KeyRound, LogOut, Wifi, Baby, QrCod
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
+import { PersonPicker } from '../components/PersonPicker';
 import { Card, CardContent } from '../components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
@@ -32,7 +33,7 @@ export default function CheckInsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [events, setEvents] = useState([]);
   const [saving, setSaving] = useState(false);
-  const [newCI, setNewCI] = useState({ member_name: '', type: 'member', event_id: '', event_name: '', method: 'manual' });
+  const [newCI, setNewCI] = useState({ member_name: '', member_id: '', type: 'member', event_id: '', event_name: '', method: 'manual' });
   const [showPin, setShowPin] = useState(false);
   const [pinCode, setPinCode] = useState('');
   const [pinEvent, setPinEvent] = useState('');
@@ -127,13 +128,16 @@ export default function CheckInsPage() {
   };
 
   // Parent check-in handlers
-  const handleParentLookup = async () => {
-    if (!parentLookup.trim()) return;
+  const handleParentLookup = async (override = '') => {
+    // `override` lets the name picker look up straight away with the phone /
+    // email of the person that was chosen.
+    const lookup = (typeof override === 'string' && override.trim()) ? override.trim() : parentLookup.trim();
+    if (!lookup) return;
     setLookingUp(true);
     setParentData(null);
     setParentChildren([]);
     try {
-      const res = await checkinsApi.parentLookup({ lookup: parentLookup.trim(), event_id: parentEventId });
+      const res = await checkinsApi.parentLookup({ lookup, event_id: parentEventId });
       setParentData(res.data.parent);
       setParentChildren(res.data.children || []);
       setSelectedChildIds((res.data.children || []).map(c => c.id)); // select all by default
@@ -141,11 +145,11 @@ export default function CheckInsPage() {
         toast.info('No children found for this parent');
       }
       // Cache success for offline fallback during the same event
-      rememberLookup('parent', parentLookup.trim(), { parent: res.data.parent, children: res.data.children || [] });
+      rememberLookup('parent', lookup, { parent: res.data.parent, children: res.data.children || [] });
     } catch (err) {
       // Network died? Try the local cache before surfacing the error.
       if (isLikelyOffline(err)) {
-        const hit = recallLookup('parent', parentLookup.trim());
+        const hit = recallLookup('parent', lookup);
         if (hit) {
           setParentData(hit.parent);
           setParentChildren(hit.children || []);
@@ -307,11 +311,12 @@ export default function CheckInsPage() {
     const eventObj = events.find(ev => ev.id === newCI.event_id);
     try {
       const payload = { ...newCI, event_name: eventObj?.title || newCI.event_name };
+      delete payload.linked;
       const res = await checkinsApi.create(payload);
       setCheckins(prev => [res.data, ...prev]);
       setStats(s => ({ ...s, total: s.total + 1, today: s.today + 1, [res.data.type + 's']: (s[res.data.type + 's'] || 0) + 1 }));
       setShowAdd(false);
-      setNewCI({ member_name: '', type: 'member', event_id: '', event_name: '', method: 'manual' });
+      setNewCI({ member_name: '', member_id: '', type: 'member', event_id: '', event_name: '', method: 'manual' });
       toast.success(`${res.data.member_name} checked in!`);
     } catch { toast.error('Failed to check in'); }
     finally { setSaving(false); }
@@ -447,7 +452,24 @@ export default function CheckInsPage() {
           <form onSubmit={handleAdd} className="space-y-4 mt-2">
             <div className="space-y-2">
               <Label>Person Name *</Label>
-              <Input placeholder="Full name" value={newCI.member_name} onChange={e => setNewCI({...newCI, member_name: e.target.value})} required />
+              {/* Search first: link the check-in to the person already on file
+                  instead of typing a loose name that matches nobody. */}
+              <PersonPicker testId="manual-checkin-name"
+                value={newCI.member_name}
+                placeholder="Type their name to find them…"
+                addNewLabel="as a walk-in visitor"
+                onChange={v => setNewCI({ ...newCI, member_name: v, member_id: '', linked: false })}
+                onPick={p => setNewCI({
+                  ...newCI, member_name: p.name, member_id: p.id, linked: true,
+                  type: p.type === 'child' ? 'child' : (p.type === 'user' ? 'staff' : (p.type === 'guest' ? 'visitor' : 'member')),
+                })}
+                onAddNew={typed => setNewCI({ ...newCI, member_name: typed, member_id: '', linked: false, type: 'visitor' })}
+              />
+              {newCI.member_id
+                ? <p className="text-xs text-emerald-700" data-testid="manual-checkin-linked">Linked to their profile — attendance will show on their record.</p>
+                : newCI.member_name.trim().length > 1
+                  ? <p className="text-xs text-muted-foreground" data-testid="manual-checkin-unlinked">Not linked to a profile — they&apos;ll be counted as a walk-in.</p>
+                  : null}
             </div>
             <div className="space-y-2">
               <Label>Type</Label>

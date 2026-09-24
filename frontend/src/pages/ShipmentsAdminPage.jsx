@@ -20,8 +20,9 @@ import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { formatDimCm, formatWeightKg, parseDimToCm, parseWeightToKg, dimPlaceholder, weightPlaceholder } from '../services/shipmentUnits';
-import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Box, Scissors, Loader2, ShieldAlert, Users, ChevronDown, FileText, MoreVertical, X } from 'lucide-react';
+import { Plus, Trash2, Copy, RefreshCw, Container, Sparkles, ExternalLink, ArrowLeft, Layers, Upload, Image as ImageIcon, Link2, FileSpreadsheet, Download, Pencil, Ruler, KeyRound, Boxes, Box, Scissors, Loader2, ShieldAlert, Users, ChevronDown, FileText, MoreVertical, X, Undo2 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator, DropdownMenuLabel } from '../components/ui/dropdown-menu';
+import { SimilarItemsDialog } from '../components/shipments/SimilarItemsDialog';
 import { Checkbox } from '../components/ui/checkbox';
 import api from '../services/api';
 import { toast } from 'sonner';
@@ -101,6 +102,8 @@ export default function ShipmentsAdminPage() {
     } catch (e) { console.warn(e?.message || e); }
     finally { setLoading(false); }
   }, []);
+
+  const [showSimilar, setShowSimilar] = useState(false);
 
   const refreshDetail = useCallback(async () => {
     if (!selectedId) { setSelected(null); return; }
@@ -877,6 +880,14 @@ export default function ShipmentsAdminPage() {
             );
           })()}
           <div className="flex gap-1.5 flex-wrap">
+            {/* iter366 — one customs line per product: find items that read the
+                same (in one box or spread over several) and combine them. */}
+            <Button size="sm" variant="outline" className="text-indigo-700 border-indigo-300 hover:bg-indigo-50"
+              onClick={() => setShowSimilar(true)} disabled={(selected.items || []).length < 2}
+              data-testid="ship-similar-items-btn"
+              title="Find items with similar names or descriptions, see them as one line with box numbers like 24 & 25, then combine or delete repeats">
+              <Copy size={11} className="mr-1" /> Similar items
+            </Button>
             {(() => {
               const missingHs = (selected.items || []).filter(i => !(i.hs_code || '').trim()).length;
               return (
@@ -978,8 +989,10 @@ export default function ShipmentsAdminPage() {
               // iter 256 — sort by box name, then highest value, then heaviest.
               // iter229 — optionally hide items already assigned to a box/pallet/suitcase
               // (they're still on manifests & PDFs — cleaner working view).
+              // iter366 — a line combined for customs stays visible even with
+              // "hide packed" on, otherwise its "Split back" undo disappears.
               const source = hidePacked
-                ? (selected.items || []).filter(i => !(i.pallet_id || i.packing_unit_id || i.suitcase_id))
+                ? (selected.items || []).filter(i => i.consolidated || !(i.pallet_id || i.packing_unit_id || i.suitcase_id))
                 : (selected.items || []);
               const unitById = Object.fromEntries((selected.packing_units || []).map(u => [u.id, u]));
               const boxKey = (name) => {
@@ -1261,6 +1274,19 @@ export default function ShipmentsAdminPage() {
                         </div>
                       );
                     })()}
+                    {it.consolidated && (
+                      <Button size="sm" variant="ghost" className="h-7 gap-1 px-1.5 text-[10px] text-indigo-700"
+                        title={`Combined line — ${it.box_label || 'several boxes'}. Click to split it back into the original rows.`}
+                        onClick={async () => {
+                          try {
+                            const r = await api.post(`/shipments/${selected.id}/items/${it.id}/undo-consolidate`);
+                            toast.success(`Split back into ${r.data.restored + 1} lines`);
+                            refreshDetail();
+                          } catch (e) { toast.error(e.response?.data?.detail || 'Could not split that line'); }
+                        }} data-testid={`ship-item-split-${it.id}`}>
+                        <Undo2 size={10} /> Split back
+                      </Button>
+                    )}
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Edit details (dimensions, pallet, position…)"
                       onClick={() => openItemEdit(it)} data-testid={`ship-item-edit-${it.id}`}>
                       <Pencil size={11} />
@@ -1299,6 +1325,9 @@ export default function ShipmentsAdminPage() {
       />
 
       <RecentScans shipmentId={selectedId} refreshDetail={refreshDetail} />
+
+      <SimilarItemsDialog open={showSimilar} onOpenChange={setShowSimilar}
+        shipmentId={selectedId} onChanged={refreshDetail} />
 
       {/* Container visualization — 2D / 3D (hidden in airport mode — iter226).
           iter228: now receives both legacy `pallets` AND new `packing_units` so

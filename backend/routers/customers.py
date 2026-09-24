@@ -49,6 +49,12 @@ async def create_customer(data: dict, current_user: dict = Depends(require_staff
     guest_id = data.get("guest_id", "")
     email = (data.get("email") or "").strip().lower()
     phone = (data.get("phone") or "").strip()
+    # iter364 — the POS can hand us someone who already exists in the CRM
+    # (member / staff / guest) so they are linked instead of retyped.
+    person_id = (data.get("person_id") or "").strip()
+    person_type = (data.get("person_type") or "").strip()
+    if person_id and person_type == "guest":
+        guest_id = guest_id or person_id
     if not guest_id and (email or phone):
         or_clauses = []
         if email:
@@ -62,6 +68,8 @@ async def create_customer(data: dict, current_user: dict = Depends(require_staff
         "id": f"cust_{uuid.uuid4().hex[:8]}",
         "name": name, "email": email, "phone": phone,
         "guest_id": guest_id,
+        "person_id": person_id,
+        "person_type": person_type,
         "location_id": data.get("location_id") or current_user.get("active_campus_id") or current_user.get("location_id") or "",
         "notes": data.get("notes", ""),
         "total_purchases": 0, "total_spent": 0,
@@ -72,6 +80,9 @@ async def create_customer(data: dict, current_user: dict = Depends(require_staff
     doc.pop("_id", None)
     if guest_id:
         await db.guests.update_one({"id": guest_id}, {"$set": {"is_customer": True, "customer_id": doc["id"]}})
+    elif person_id and person_type in {"member", "user"}:
+        coll = db.members if person_type == "member" else db.users
+        await coll.update_one({"id": person_id}, {"$set": {"is_customer": True, "customer_id": doc["id"]}})
     return doc
 
 

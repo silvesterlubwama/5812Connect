@@ -34,6 +34,12 @@ async def _cash_account_id(location_id: Optional[str] = None, channel: Optional[
     return (await get_account_by_code("1010")) or (await get_account_by_code("1000"))
 
 
+class LedgerSetupError(Exception):
+    """The ledger can't take this posting yet — e.g. the chart of accounts is
+    missing the account payroll or sales needs. Raised instead of returning
+    quietly, so the caller can tell the user what to fix."""
+
+
 async def post_payroll_payslip(payslip: dict, current_user: dict) -> Optional[dict]:
     """Called by HR when a payslip's status flips to 'paid'. Posts:
 
@@ -41,18 +47,25 @@ async def post_payroll_payslip(payslip: dict, current_user: dict) -> Optional[di
         Credit 1010 Bank — Operating (or configured location cash account)
 
     Idempotent by payslip.id — running twice yields the same JE, not two.
+    Raises LedgerSetupError when the chart of accounts can't support it (this
+    used to return None, which is how paid payslips ended up with nothing in
+    the ledger and HR still saw a success message).
     """
     net = _q(payslip.get("net_salary"))
     if net <= 0:
         return None
     expense_acct = await get_account_by_code("5000")
     if not expense_acct:
-        logger.warning("[finance] post_payroll_payslip: no 5000 Salaries account (COA not seeded)")
-        return None
+        raise LedgerSetupError(
+            "Chart of accounts has no 5000 Salaries & Wages account — add it in "
+            "Finance → Chart of Accounts (or seed the defaults) and post again"
+        )
     cash_acct = await _cash_account_id(payslip.get("payroll_location_id") or payslip.get("location_id"))
     if not cash_acct:
-        logger.warning("[finance] post_payroll_payslip: no cash account available")
-        return None
+        raise LedgerSetupError(
+            "No bank or cash account to pay from — set a default cash account for this "
+            "campus, or add 1010 Bank — Operating in Finance → Chart of Accounts"
+        )
 
     return await post_journal_entry(
         date=(payslip.get("paid_at") or payslip.get("date") or "")[:10],

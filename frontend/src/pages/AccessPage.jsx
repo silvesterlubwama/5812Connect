@@ -13,6 +13,7 @@ import api from '../services/api';
 import { toast } from 'sonner';
 import { Fingerprint, Smartphone } from 'lucide-react';
 import { ScanDialog } from '../components/access/ScanDialog';
+import { PersonPicker } from '../components/PersonPicker';
 
 const STATUS_VARIANT = { approved: 'outline', rejected: 'destructive', pending: 'secondary' };
 const STATUS_CLASS = { approved: 'border-green-500 text-green-600', rejected: '', pending: '' };
@@ -47,7 +48,7 @@ export default function AccessPage() {
 
   const [residentForm, setResidentForm] = useState({ member_id: '', tags: '', search: '', searchResults: [] });
   const [staffForm, setStaffForm] = useState({ staff_id: '' });
-  const [guestForm, setGuestForm] = useState({ guest_name: '', guest_phone: '', guest_id_number: '', purpose: '', visit_date: new Date().toISOString().split('T')[0], visit_time: '' });
+  const [guestForm, setGuestForm] = useState({ guest_name: '', guest_phone: '', guest_email: '', guest_id_number: '', purpose: '', person_id: '', person_type: '', visit_from: new Date().toISOString().split('T')[0], visit_to: new Date().toISOString().split('T')[0], visit_time: '', visit_until_time: '' });
   const [scanForm, setScanForm] = useState({ member_id: '', action: 'in', guest_request_id: '', guest_name: '' });
   const [scanMode, setScanMode] = useState('member');
   const [saving, setSaving] = useState(false);
@@ -176,7 +177,7 @@ export default function AccessPage() {
       await accessApi.requestGuestVisit({ ...guestForm, location_id: selectedLocation });
       toast.success('Guest visit request submitted');
       setShowGuestRequest(false);
-      setGuestForm({ guest_name: '', guest_phone: '', guest_id_number: '', purpose: '', visit_date: new Date().toISOString().split('T')[0], visit_time: '' });
+      setGuestForm({ guest_name: '', guest_phone: '', guest_email: '', guest_id_number: '', purpose: '', person_id: '', person_type: '', visit_from: new Date().toISOString().split('T')[0], visit_to: new Date().toISOString().split('T')[0], visit_time: '', visit_until_time: '' });
       fetchLocationData();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
@@ -386,7 +387,12 @@ export default function AccessPage() {
                       <CardContent className="p-4 flex items-center justify-between">
                         <div>
                           <p className="text-sm font-medium">{g.guest_name}</p>
-                          <p className="text-xs text-muted-foreground">{g.visit_date} {g.visit_time && `at ${g.visit_time}`} — {g.purpose}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {g.visit_to && g.visit_to !== (g.visit_from || g.visit_date)
+                              ? `${g.visit_from || g.visit_date} → ${g.visit_to} (${g.days || ''} days)`
+                              : (g.visit_from || g.visit_date)}
+                            {g.visit_time && ` at ${g.visit_time}`} — {g.purpose}
+                          </p>
                         </div>
                         <div className="flex items-center gap-2">
                           <Badge variant={STATUS_VARIANT[g.status] || 'secondary'}
@@ -649,15 +655,36 @@ export default function AccessPage() {
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Request Guest Visit</DialogTitle></DialogHeader>
           <form onSubmit={handleGuestRequest} className="space-y-4 mt-2">
-            <div className="space-y-2"><Label>Guest Name *</Label><Input value={guestForm.guest_name} onChange={e => setGuestForm({ ...guestForm, guest_name: e.target.value })} required data-testid="guest-visit-name" /></div>
+            <div className="space-y-2"><Label>Guest *</Label>
+              <PersonPicker testId="guest-visit-name" kinds="guest,member,user"
+                value={guestForm.guest_name}
+                placeholder="Type their name to find them first…"
+                addNewLabel="as a new guest"
+                onChange={v => setGuestForm({ ...guestForm, guest_name: v, person_id: '', person_type: '' })}
+                onPick={p => setGuestForm({ ...guestForm, guest_name: p.name, person_id: p.id, person_type: p.type, guest_phone: p.phone || guestForm.guest_phone, guest_email: p.email || guestForm.guest_email })}
+                onAddNew={typed => setGuestForm({ ...guestForm, guest_name: typed, person_id: '', person_type: '' })}
+              />
+              {guestForm.person_id
+                ? <p className="text-xs text-emerald-700" data-testid="guest-linked-note">Linked to their existing profile — no duplicate will be created.</p>
+                : <p className="text-xs text-muted-foreground">Search first; only type a new name if nobody matches.</p>}
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Phone</Label><Input value={guestForm.guest_phone} onChange={e => setGuestForm({ ...guestForm, guest_phone: e.target.value })} /></div>
               <div className="space-y-2"><Label>ID Number</Label><Input value={guestForm.guest_id_number} onChange={e => setGuestForm({ ...guestForm, guest_id_number: e.target.value })} /></div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>Visit Date</Label><Input type="date" value={guestForm.visit_date} onChange={e => setGuestForm({ ...guestForm, visit_date: e.target.value })} /></div>
-              <div className="space-y-2"><Label>Visit Time</Label><Input type="time" value={guestForm.visit_time} onChange={e => setGuestForm({ ...guestForm, visit_time: e.target.value })} /></div>
+              <div className="space-y-2"><Label>First day</Label><Input type="date" value={guestForm.visit_from} data-testid="guest-visit-from" onChange={e => setGuestForm({ ...guestForm, visit_from: e.target.value, visit_to: guestForm.visit_to && guestForm.visit_to >= e.target.value ? guestForm.visit_to : e.target.value })} /></div>
+              <div className="space-y-2"><Label>Last day</Label><Input type="date" min={guestForm.visit_from} value={guestForm.visit_to} data-testid="guest-visit-to" onChange={e => setGuestForm({ ...guestForm, visit_to: e.target.value })} /></div>
             </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2"><Label>Daily from</Label><Input type="time" value={guestForm.visit_time} data-testid="guest-visit-time" onChange={e => setGuestForm({ ...guestForm, visit_time: e.target.value })} placeholder="06:00" /></div>
+              <div className="space-y-2"><Label>Daily until</Label><Input type="time" value={guestForm.visit_until_time} data-testid="guest-visit-until-time" onChange={e => setGuestForm({ ...guestForm, visit_until_time: e.target.value })} placeholder="22:00" /></div>
+            </div>
+            {guestForm.visit_to > guestForm.visit_from && (
+              <p className="text-xs text-muted-foreground" data-testid="guest-stay-note">
+                Extended stay — one pass covers all {Math.round((new Date(guestForm.visit_to) - new Date(guestForm.visit_from)) / 86400000) + 1} days (06:00–22:00 unless you set times).
+              </p>
+            )}
             <div className="space-y-2"><Label>Purpose</Label><Input value={guestForm.purpose} onChange={e => setGuestForm({ ...guestForm, purpose: e.target.value })} placeholder="Reason for visit" /></div>
             <div className="flex gap-3"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowGuestRequest(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving || !guestForm.guest_name} data-testid="submit-guest-request-btn">{saving ? 'Submitting...' : 'Submit Request'}</Button></div>
           </form>

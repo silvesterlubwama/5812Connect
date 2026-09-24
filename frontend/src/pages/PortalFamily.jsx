@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Heart, Baby, UserPlus, Plus, Edit, Trash2, Shield, Phone, Mail, RefreshCw } from 'lucide-react';
+import { Heart, Baby, UserPlus, Plus, Edit, Shield, RefreshCw, Lock, Clock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -8,42 +8,42 @@ import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
-import { portalApi, childrenApi } from '../services/api';
+import { portalApi } from '../services/api';
 import api from '../services/api';
+import { PersonPicker } from '../components/PersonPicker';
+import { FamilyMemberFields } from '../components/family/HouseholdPersonForm';
+import { HouseholdAdultRow } from '../components/family/HouseholdAdultRow';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
 
-const RELATIONSHIPS = ['Spouse', 'Guardian', 'Grandparent', 'Aunt/Uncle', 'Sibling', 'Nanny', 'Emergency contact', 'Other'];
+const BLANK_GUARDIAN = {
+  name: '', phone: '', email: '', role: 'Guardian', can_pickup: true,
+  person_id: '', person_type: '', is_new: false, date_of_birth: '', gender: '', national_id: '', address: '',
+};
 
 export default function PortalFamily() {
   const { user } = useAuth();
   const [familyData, setFamilyData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Add child dialog
   const [showAddChild, setShowAddChild] = useState(false);
   const [childForm, setChildForm] = useState({ name: '', date_of_birth: '', gender: '', class_group: '', medical_notes: '', allergies: '' });
   const [savingChild, setSavingChild] = useState(false);
 
-  // Add guardian dialog
   const [showAddGuardian, setShowAddGuardian] = useState(false);
-  const [guardianForm, setGuardianForm] = useState({ name: '', phone: '', email: '', relationship: 'Guardian' });
+  const [guardianForm, setGuardianForm] = useState(BLANK_GUARDIAN);
   const [savingGuardian, setSavingGuardian] = useState(false);
 
-  // Edit child dialog
   const [editChild, setEditChild] = useState(null);
   const [editChildForm, setEditChildForm] = useState({});
   const [savingEditChild, setSavingEditChild] = useState(false);
 
-  // Edit family
   const [editingFamily, setEditingFamily] = useState(false);
   const [familyEditForm, setFamilyEditForm] = useState({});
 
-  // Household member edit
   const [editGuardian, setEditGuardian] = useState(null);
   const [editGuardianForm, setEditGuardianForm] = useState({});
 
-  // Self-service household creation
   const [creating, setCreating] = useState(false);
 
   const fetchFamily = useCallback(async () => {
@@ -62,7 +62,7 @@ export default function PortalFamily() {
     setSavingChild(true);
     try {
       await portalApi.addChild(childForm);
-      toast.success('Child added!');
+      toast.success('Sent for review — an admin approves new children before badges work');
       setShowAddChild(false);
       setChildForm({ name: '', date_of_birth: '', gender: '', class_group: '', medical_notes: '', allergies: '' });
       fetchFamily();
@@ -74,12 +74,15 @@ export default function PortalFamily() {
     e.preventDefault();
     setSavingGuardian(true);
     try {
-      await portalApi.addGuardian(guardianForm);
-      toast.success('Guardian added!');
+      // One endpoint whether they already exist or are brand new.
+      await api.post('/portal/family/members', guardianForm);
+      toast.success(guardianForm.person_id
+        ? 'Linked to your family — pending review'
+        : 'Sent for approval — an admin will review the new profile');
       setShowAddGuardian(false);
-      setGuardianForm({ name: '', phone: '', email: '', relationship: 'Guardian' });
+      setGuardianForm(BLANK_GUARDIAN);
       fetchFamily();
-    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to add guardian'); }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to add'); }
     finally { setSavingGuardian(false); }
   };
 
@@ -87,8 +90,8 @@ export default function PortalFamily() {
     if (!editChild) return;
     setSavingEditChild(true);
     try {
-      await childrenApi.update(editChild.id, editChildForm);
-      toast.success('Child updated');
+      const r = await portalApi.updateChild(editChild.id, editChildForm);
+      toast.success(r.data?.message || 'Sent for review');
       setEditChild(null);
       fetchFamily();
     } catch (err) { toast.error(err.response?.data?.detail || 'Update failed'); }
@@ -106,8 +109,8 @@ export default function PortalFamily() {
   const handleSaveGuardian = async () => {
     if (!editGuardian) return;
     try {
-      await portalApi.updateGuardian(editGuardian.id, editGuardianForm);
-      toast.success('Household member updated');
+      const r = await portalApi.updateGuardian(editGuardian.id, editGuardianForm);
+      toast.success(r.data?.message || 'Sent for review');
       setEditGuardian(null);
       fetchFamily();
     } catch (err) { toast.error(err.response?.data?.detail || 'Update failed'); }
@@ -125,8 +128,8 @@ export default function PortalFamily() {
 
   const handleUpdateFamily = async () => {
     try {
-      await portalApi.updateFamily(familyEditForm);
-      toast.success('Family updated');
+      const r = await portalApi.updateFamily(familyEditForm);
+      toast.success(r.data?.message || 'Sent for review');
       setEditingFamily(false);
       fetchFamily();
     } catch (err) { toast.error(err.response?.data?.detail || 'Update failed'); }
@@ -143,11 +146,8 @@ export default function PortalFamily() {
 
   const family = familyData?.family;
   const children = familyData?.children || [];
-  const parents = familyData?.parents || [];
-  const guardians = family?.guardians || [];
-  // iter343 guest-portal lockdown — unapproved users must not add/remove
-  // family members. The screen still renders in read-only mode so they
-  // can view what's on file while an admin approves them.
+  const pendingChanges = familyData?.pending_changes || {};
+  const familyMembers = familyData?.family_members || [];
   const isPending = (user?.status || '').toLowerCase() === 'pending';
   const isApproved = !isPending;
 
@@ -175,6 +175,14 @@ export default function PortalFamily() {
     );
   }
 
+  const openGuardianEdit = (g) => {
+    setEditGuardian(g);
+    setEditGuardianForm({
+      name: g.name || '', phone: g.phone || '', email: g.email || '',
+      role: g.role || g.relationship || 'Guardian', can_pickup: g.can_pickup !== false,
+    });
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -193,13 +201,14 @@ export default function PortalFamily() {
       )}
       {isApproved && (
         <Card className="border-blue-200 bg-blue-50/40" data-testid="family-review-notice">
-          <CardContent className="p-3 text-xs text-blue-800">
-            Note: adding a child or guardian creates a pending record — an admin reviews it before badges or check-ins are enabled.
+          <CardContent className="p-3 text-xs text-blue-800 flex items-start gap-2">
+            <Clock size={14} className="mt-0.5 shrink-0" />
+            <span>Anything you add or change here is reviewed by an admin before it goes live — including edits to names and phone numbers.</span>
           </CardContent>
         </Card>
       )}
 
-      {/* Family Info Card */}
+      {/* Family Info */}
       <Card className="shadow-soft rounded-xl" data-testid="family-info-card">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
@@ -214,37 +223,37 @@ export default function PortalFamily() {
             <div><span className="text-xs text-muted-foreground">Phone</span><p>{family.primary_contact_phone || '—'}</p></div>
             <div><span className="text-xs text-muted-foreground">Address</span><p>{family.address || '—'}</p></div>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Parents Section */}
-      <Card className="shadow-soft rounded-xl" data-testid="parents-card">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2"><UserPlus size={16} className="text-blue-500" /> Parents ({parents.length})</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {parents.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">No parents linked</p>
-          ) : (
-            <div className="space-y-2">
-              {parents.map(p => (
-                <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/30" data-testid={`parent-${p.id}`}>
-                  <div>
-                    <p className="text-sm font-medium">{p.name}</p>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                      {p.phone && <span className="flex items-center gap-1"><Phone size={10} />{p.phone}</span>}
-                      {p.email && <span className="flex items-center gap-1"><Mail size={10} />{p.email}</span>}
-                    </div>
-                  </div>
-                  <Badge variant="secondary" className="text-[10px]">Parent</Badge>
-                </div>
-              ))}
-            </div>
+          {pendingChanges[family.id]?.length > 0 && (
+            <p className="text-[11px] text-amber-700 flex items-center gap-1 pt-1" data-testid="family-details-pending">
+              <Clock size={11} /> Awaiting review: {Object.values(pendingChanges[family.id][0].fields || {}).join(', ')}
+            </p>
           )}
         </CardContent>
       </Card>
 
-      {/* Children Section */}
+      {/* iter368 — ONE family-members list (role + can-pick-up), no parents/guardians split */}
+      <Card className="shadow-soft rounded-xl" data-testid="parents-card">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2"><UserPlus size={16} className="text-blue-500" /> Family members ({familyMembers.length})</CardTitle>
+            {isApproved && <Button size="sm" className="gap-1.5" onClick={() => { setGuardianForm({ ...BLANK_GUARDIAN }); setShowAddGuardian(true); }} data-testid="add-guardian-btn"><Plus size={13} /> Add Person</Button>}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {familyMembers.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-2">Nobody yet. Add the other adults in your family — and tick who may collect the children.</p>
+          ) : familyMembers.map(g => (
+            <HouseholdAdultRow key={g.id || g.person_id} person={g} pending={pendingChanges[g.id]}
+              readOnly={!isApproved} testId={`guardian-${g.id || g.person_id}`}
+              onEdit={() => openGuardianEdit(g)} onRemove={() => handleRemoveGuardian(g.id)} />
+          ))}
+          <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 pt-1">
+            <Lock size={11} /> Anything you add or change is reviewed by staff before it goes live.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* Children */}
       <Card className="shadow-soft rounded-xl" data-testid="children-card">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
@@ -267,8 +276,14 @@ export default function PortalFamily() {
                       {c.gender && <Badge variant="outline" className="text-[10px] capitalize">{c.gender}</Badge>}
                     </div>
                     {c.allergies && <Badge variant="destructive" className="text-[10px] mt-1">{c.allergies}</Badge>}
+                    {pendingChanges[c.id]?.length > 0 && (
+                      <p className="text-[11px] text-amber-700 mt-1 flex items-center gap-1" data-testid={`child-${c.id}-pending`}>
+                        <Clock size={10} /> Change awaiting review: {Object.values(pendingChanges[c.id][0].fields || {}).join(', ')}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1">
+                    {c.approval_status === 'pending' && <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">Pending review</Badge>}
                     <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" onClick={async () => {
                       try {
                         const r = await api.post(`/portal/children/${c.id}/wallet-badge`);
@@ -276,43 +291,6 @@ export default function PortalFamily() {
                       } catch (e) { toast.error(e?.response?.data?.detail || 'Badge issuance failed'); }
                     }} data-testid={`child-badge-${c.id}`}>Badge</Button>
                     <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditChild(c); setEditChildForm({ name: c.name, date_of_birth: c.date_of_birth || '', gender: c.gender || '', class_group: c.class_group || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '' }); }} data-testid={`edit-child-${c.id}`} disabled={!isApproved} title={!isApproved ? 'Available after your account is approved' : ''}><Edit size={13} /></Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Household members (spouse / guardians / emergency contacts) */}
-      <Card className="shadow-soft rounded-xl" data-testid="guardians-card">
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2"><Shield size={16} className="text-amber-500" /> Spouse &amp; Guardians ({guardians.length})</CardTitle>
-            {isApproved && <Button size="sm" className="gap-1.5" onClick={() => setShowAddGuardian(true)} data-testid="add-guardian-btn"><Plus size={13} /> Add Person</Button>}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {guardians.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">Nobody added yet. Add your spouse, a grandparent, or anyone allowed to collect your children.</p>
-          ) : (
-            <div className="space-y-2">
-              {guardians.map(g => (
-                <div key={g.id} className="flex items-center justify-between p-3 rounded-lg bg-accent/30" data-testid={`guardian-${g.id}`}>
-                  <div>
-                    <p className="text-sm font-medium">{g.name}</p>
-                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5">
-                      {g.phone && <span className="flex items-center gap-1"><Phone size={10} />{g.phone}</span>}
-                      {g.email && <span className="flex items-center gap-1"><Mail size={10} />{g.email}</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {g.approval_status === 'pending' && <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">Pending review</Badge>}
-                    <Badge variant="outline" className="text-[10px]">{g.relationship}</Badge>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0" disabled={!isApproved}
-                      onClick={() => { setEditGuardian(g); setEditGuardianForm({ name: g.name || '', phone: g.phone || '', email: g.email || '', relationship: g.relationship || 'Guardian' }); }}
-                      data-testid={`edit-guardian-${g.id}`}><Edit size={13} /></Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-destructive" onClick={() => handleRemoveGuardian(g.id)} data-testid={`remove-guardian-${g.id}`} disabled={!isApproved} title={!isApproved ? 'Available after your account is approved' : ''}><Trash2 size={13} /></Button>
                   </div>
                 </div>
               ))}
@@ -347,24 +325,51 @@ export default function PortalFamily() {
         </DialogContent>
       </Dialog>
 
-      {/* Add household member Dialog */}
+      {/* Add household adult Dialog */}
       <Dialog open={showAddGuardian} onOpenChange={setShowAddGuardian}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Add to my household</DialogTitle><DialogDescription>Your spouse, a guardian, or anyone authorised to collect your children</DialogDescription></DialogHeader>
+        <DialogContent className="max-w-md max-h-[88vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add to my household</DialogTitle>
+            <DialogDescription>Search first — if they already have a profile we link it instead of creating a duplicate</DialogDescription>
+          </DialogHeader>
           <form onSubmit={handleAddGuardian} className="space-y-3 mt-2">
-            <div className="space-y-1.5"><Label>Name *</Label><Input value={guardianForm.name} onChange={e => setGuardianForm({ ...guardianForm, name: e.target.value })} required data-testid="guardian-name-input" /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Phone</Label><Input value={guardianForm.phone} onChange={e => setGuardianForm({ ...guardianForm, phone: e.target.value })} /></div>
-              <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={guardianForm.email} onChange={e => setGuardianForm({ ...guardianForm, email: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Name *</Label>
+              <PersonPicker portal testId="guardian-name-input"
+                value={guardianForm.name}
+                placeholder="Type their name to find them…"
+                addNewLabel="as a new person"
+                onChange={v => setGuardianForm({ ...guardianForm, name: v, person_id: '', person_type: '', is_new: false })}
+                onPick={p => setGuardianForm({ ...guardianForm, name: p.name, person_id: p.id, person_type: p.type, is_new: false })}
+                onAddNew={typed => setGuardianForm({ ...guardianForm, name: typed, person_id: '', person_type: '', is_new: true })}
+              />
+              {guardianForm.person_id && (
+                <p className="text-xs text-emerald-700" data-testid="guardian-linked-note">
+                  Linked to their existing profile — no duplicate will be created.
+                </p>
+              )}
+              {guardianForm.is_new && (
+                <p className="text-xs text-muted-foreground" data-testid="guardian-new-note">
+                  New profile — fill in what you know so we can set them up.
+                </p>
+              )}
             </div>
-            <div className="space-y-1.5"><Label>Relationship</Label>
-              <Select value={guardianForm.relationship} onValueChange={v => setGuardianForm({ ...guardianForm, relationship: v })}>
-                <SelectTrigger data-testid="guardian-relationship-select"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {RELATIONSHIPS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
+            <FamilyMemberFields form={guardianForm} setForm={setGuardianForm} testIdPrefix="guardian" />
+            {guardianForm.is_new && (
+              <div className="rounded-lg border p-3 space-y-3" data-testid="guardian-new-fields">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5"><Label>Date of birth</Label><Input type="date" value={guardianForm.date_of_birth} onChange={e => setGuardianForm({ ...guardianForm, date_of_birth: e.target.value })} data-testid="guardian-dob-input" /></div>
+                  <div className="space-y-1.5"><Label>Gender</Label>
+                    <Select value={guardianForm.gender} onValueChange={v => setGuardianForm({ ...guardianForm, gender: v })}>
+                      <SelectTrigger data-testid="guardian-gender-select"><SelectValue placeholder="Select" /></SelectTrigger>
+                      <SelectContent><SelectItem value="male">Male</SelectItem><SelectItem value="female">Female</SelectItem></SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-1.5"><Label>National ID / passport</Label><Input value={guardianForm.national_id} onChange={e => setGuardianForm({ ...guardianForm, national_id: e.target.value })} data-testid="guardian-nid-input" /></div>
+                <div className="space-y-1.5"><Label>Address</Label><Input value={guardianForm.address} onChange={e => setGuardianForm({ ...guardianForm, address: e.target.value })} data-testid="guardian-address-input" /></div>
+                <p className="text-xs text-muted-foreground">New people are reviewed by an admin before they go live.</p>
+              </div>
+            )}
             <div className="flex gap-3 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => setShowAddGuardian(false)}>Cancel</Button>
               <Button type="submit" className="flex-1" disabled={savingGuardian || !guardianForm.name} data-testid="save-guardian-btn">{savingGuardian ? 'Saving...' : 'Add'}</Button>
@@ -373,25 +378,19 @@ export default function PortalFamily() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit household member Dialog */}
+      {/* Edit household adult Dialog */}
       <Dialog open={!!editGuardian} onOpenChange={(o) => { if (!o) setEditGuardian(null); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Edit {editGuardian?.name}</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-md max-h-[88vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit {editGuardian?.name}</DialogTitle>
+            <DialogDescription>Changes are reviewed by an admin before they go live</DialogDescription>
+          </DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5"><Label>Name *</Label><Input value={editGuardianForm.name || ''} onChange={e => setEditGuardianForm({ ...editGuardianForm, name: e.target.value })} data-testid="edit-guardian-name" /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Phone</Label><Input value={editGuardianForm.phone || ''} onChange={e => setEditGuardianForm({ ...editGuardianForm, phone: e.target.value })} /></div>
-              <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={editGuardianForm.email || ''} onChange={e => setEditGuardianForm({ ...editGuardianForm, email: e.target.value })} /></div>
-            </div>
-            <div className="space-y-1.5"><Label>Relationship</Label>
-              <Select value={editGuardianForm.relationship || 'Guardian'} onValueChange={v => setEditGuardianForm({ ...editGuardianForm, relationship: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{RELATIONSHIPS.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
+            <FamilyMemberFields form={editGuardianForm} setForm={setEditGuardianForm} testIdPrefix="edit-guardian" />
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditGuardian(null)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleSaveGuardian} data-testid="save-guardian-edit-btn">Save</Button>
+              <Button className="flex-1" onClick={handleSaveGuardian} data-testid="save-guardian-edit-btn">Submit for review</Button>
             </div>
           </div>
         </DialogContent>
@@ -400,9 +399,12 @@ export default function PortalFamily() {
       {/* Edit Child Dialog */}
       <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) setEditChild(null); }}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Edit Child: {editChild?.name}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Edit Child: {editChild?.name}</DialogTitle>
+            <DialogDescription>Changes are reviewed by an admin before they go live</DialogDescription>
+          </DialogHeader>
           <div className="space-y-3 mt-2">
-            <div className="space-y-1.5"><Label>Name *</Label><Input value={editChildForm.name || ''} onChange={e => setEditChildForm({ ...editChildForm, name: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Name *</Label><Input value={editChildForm.name || ''} onChange={e => setEditChildForm({ ...editChildForm, name: e.target.value })} data-testid="edit-child-name" /></div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Date of Birth</Label><Input type="date" value={editChildForm.date_of_birth || ''} onChange={e => setEditChildForm({ ...editChildForm, date_of_birth: e.target.value })} /></div>
               <div className="space-y-1.5"><Label>Gender</Label>
@@ -417,7 +419,7 @@ export default function PortalFamily() {
             <div className="space-y-1.5"><Label>Allergies</Label><Input value={editChildForm.allergies || ''} onChange={e => setEditChildForm({ ...editChildForm, allergies: e.target.value })} /></div>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditChild(null)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleEditChild} disabled={savingEditChild}>{savingEditChild ? 'Saving...' : 'Save'}</Button>
+              <Button className="flex-1" onClick={handleEditChild} disabled={savingEditChild} data-testid="save-child-edit-btn">{savingEditChild ? 'Saving...' : 'Submit for review'}</Button>
             </div>
           </div>
         </DialogContent>
@@ -426,7 +428,10 @@ export default function PortalFamily() {
       {/* Edit Family Dialog */}
       <Dialog open={editingFamily} onOpenChange={setEditingFamily}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Edit Family Details</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Edit Family Details</DialogTitle>
+            <DialogDescription>Changes are reviewed by an admin before they go live</DialogDescription>
+          </DialogHeader>
           <div className="space-y-3 mt-2">
             <div className="space-y-1.5"><Label>Family Name</Label><Input value={familyEditForm.family_name || ''} onChange={e => setFamilyEditForm({ ...familyEditForm, family_name: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Phone</Label><Input value={familyEditForm.primary_contact_phone || ''} onChange={e => setFamilyEditForm({ ...familyEditForm, primary_contact_phone: e.target.value })} /></div>
@@ -434,7 +439,7 @@ export default function PortalFamily() {
             <div className="space-y-1.5"><Label>Notes</Label><Textarea rows={2} value={familyEditForm.notes || ''} onChange={e => setFamilyEditForm({ ...familyEditForm, notes: e.target.value })} /></div>
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingFamily(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleUpdateFamily} data-testid="save-family-edit-btn">Save</Button>
+              <Button className="flex-1" onClick={handleUpdateFamily} data-testid="save-family-edit-btn">Submit for review</Button>
             </div>
           </div>
         </DialogContent>

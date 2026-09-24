@@ -22,9 +22,11 @@ from .receipts import router as _receipts_router
 from .reports import router as _reports_router
 from .admin import router as _admin_router
 from .setup import router as _setup_router
+from .assets import router as _assets_router
 
 router = APIRouter()
 router.include_router(_coa_router)
+router.include_router(_assets_router)
 router.include_router(_journal_router)
 router.include_router(_tx_router)
 router.include_router(_transfers_router)

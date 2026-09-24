@@ -1,0 +1,43 @@
+{
+  "summary": "iter362 (plan templates + run-sheet PDF + email leaders) end-to-end review. Backend pytest: iter362 templates+PDF suite 7/7 PASS, iter361 regression 12/12 PASS, added iter362 RBAC suite 4/4 PASS (23/23 total, 100%). PDF endpoint verified real %PDF bytes, empty-plan PDF renders, email-run-sheet returns 200 with sent/failed/no_email, refuses 400 with 'leader' message when no leaders, accepts extra_emails even with no leaders. Template snapshot verified: keeps topic/verse/theme/slots/songs/games/snacks/story/offering; drops event_id/event_title/date/notes_after/id/created_at; every slot has empty leader_id and leader_name. Rename+duplicate refusal work, delete works, unauth 401, Member 403, Volunteer 200. Frontend: page loads, all 5 header buttons (Run sheet PDF / Email leaders / Save as template / Raise order / Save plan) render and are clickable. Run sheet PDF *actually downloads* a blob named run-sheet-*.pdf with %PDF magic bytes (17KB). Save-as-template dialog opens; empty and duplicate names both refused with dialog still open (backend 400 surfaced). Templates tab lists the new template with slot/song/game counts. Rename works, delete confirms then removes. Email-leaders click hit the endpoint; on the sample plan (no leader assigned) it returned 400 as designed and the UI did not crash. Mobile 390x844 shows ZERO horizontal overflow on Templates tab, plan editor with the 5 header buttons (they wrap), and the save-template dialog. HOWEVER a CRITICAL frontend bug was found in the start-from-template flow (see below).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Start a plan from a template",
+        "issue": "The new plan is created but the template's slots/songs/games/snacks/materials/story.questions are ALL empty in the resulting plan. Only scalar fields like topic_title/memory_verse survive. Root cause: LessonPlanningPage.jsx openPlan() line 76 sends {event_id, template_id, slots: []} in the POST body. Backend create_plan() line 289 merges the request body over the template snapshot with `{k: v for k, v in data.items() if v not in (None, \"\")}` — the filter does NOT exclude empty lists, so the empty `slots: []` from the frontend clobbers the template's slots. In practice the user picks 'Standard Saturday kids club', gets a plan with just the topic and everything else blank — the whole point of templates. Reproduced twice; screenshot at /app/test_reports/pytest/ui_error.png-equivalent flow shows 'No slots yet — add the welcome, worship, story, games and snacks.' even though the template had 3 slots. Backend pytest didn't catch this because the pytest client posts `{event_id, template_id}` only, without `slots: []`.",
+        "affected_selectors": ["lp-start-template-<id>", "lp-slots"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter362_templates_and_pdf.py",
+    "/app/backend/tests/test_iter362_rbac.py",
+    "/app/backend/tests/test_iter361_lesson_planning.py",
+    "/app/backend/tests/test_iter361_lesson_planning_rbac.py",
+    "/app/test_reports/pytest/iter362.xml",
+    "/app/test_reports/pytest/iter362_rbac.xml",
+    "/app/test_reports/pytest/iter361_regression.xml"
+  ],
+  "action_items": [
+    "FIX start-from-template regression: EITHER stop the frontend from posting `slots: []` (LessonPlanningPage.jsx openPlan line 76 — drop `slots: []` from the POST body when template_id is set, or drop it always) OR harden the backend filter at lesson_planning.py:289 to also skip empty lists/dicts (e.g. `if v not in (None, \"\") and v != [] and v != {}`). The backend fix is safer because it also protects future callers. Then add a regression test that POSTs `{event_id, template_id, slots: []}` and asserts slots is NOT wiped.",
+    "Consider tightening the frontend 'Save as template' dialog to show a visible red validation message when the name is empty or duplicate, so the user knows why the dialog stayed open (right now the toast fires but the dialog gives no inline hint)."
+  ],
+  "critical_code_review_comments": [
+    "lesson_planning.py create_plan line 289 uses a permissive merge (`if v not in (None, \"\")`) that lets empty lists/dicts overwrite template content — root cause of the start-from-template regression. Belongs in a helper and should have a unit test.",
+    "LessonPlanningPage.jsx has grown past 550 lines with the templates + email additions — still one file; splitting the plan editor and the dialogs into their own components would help.",
+    "Prior round's scoping notes (list_library / outreach_events / duplicate_plan target-campus check) have been addressed as promised."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter362_rbac.py"
+  ],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "90% — start-from-template loses list content"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 ; member@5812uganda.org / Member@5812 ; ephemeral Volunteer created and deleted per RBAC test run",
+  "seed_data_creation": "One template + a couple of outreach events were created and deleted per test run. iter362 pytest fixture events are prefixed 'Outreach ' with description 'iter362 template test' and 'iter362 rbac' — cleanup relies on the sample event remaining as the only sample outreach. No plans, POs, templates or themes left behind on the UI run (verified via explicit cleanup at end of playwright script).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter362 backend is solid — the failure is the frontend/backend merge in start-from-template. Backend pytest (test_iter362_templates_and_pdf.py::test_start_a_plan_from_a_template) currently passes because it does NOT reproduce the frontend's payload. Once main agent fixes it, add a regression test with body `{event_id, template_id, slots: []}` and assert `len(plan['slots']) == template['plan']['slots'] length`. Everything else (PDF, email leaders, save/rename/delete template, RBAC, mobile) is verified green.",
+  "rca of the issue": "Start-from-template regression: user clicks lp-start-template-<id> → openPlan(ev, tplId) fires → POST /api/lesson-planning/plans body = {event_id, template_id, slots: []}. Server create_plan() loads the template snapshot then merges the request body over it with `if v not in (None, \"\")`; empty list `[]` passes the filter and overwrites template's slots. All other list fields (songs, games, snacks, materials, offering) survive only because the frontend body doesn't include them explicitly — but the slots array does. Fix at either end; recommended: harden backend filter to skip empty containers AND drop `slots: []` from the frontend POST when it's meaningless (fresh plan from template)."
+}

@@ -3,8 +3,8 @@
 // visibility toggle for task scope, an event/task detail drawer, quick create,
 // and shareable public feed URLs (JSON + iCal).
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat, Share2, Copy, Check, Link as LinkIcon, X, Calendar as CalIcon, MapPin, Filter, Clock, Users as UsersIcon } from 'lucide-react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat, Share2, Copy, Check, Link as LinkIcon, X, Calendar as CalIcon, MapPin, Filter, Clock, Users as UsersIcon, BookOpen } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
@@ -91,6 +91,7 @@ export default function CalendarPage() {
   const [showRecurring, setShowRecurring] = useState(false);
   const [showImportCal, setShowImportCal] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   useEffect(() => localStorage.setItem('5812_cal_view', view), [view]);
   useEffect(() => localStorage.setItem('5812_cal_task_scope', taskScope), [taskScope]);
@@ -577,6 +578,11 @@ export default function CalendarPage() {
               <EventDetailTabs event={selected} onRefresh={refreshSelected} />
               <div className="flex gap-2 pt-3 flex-wrap">
                 <Button variant="destructive" size="sm" onClick={deleteEvent} data-testid="delete-event-btn">Delete</Button>
+                {selected.type === 'outreach' && !selected._isSession && (
+                  <Button variant="outline" size="sm" onClick={() => navigate(`/lesson-planning?event=${selected.id}`)} data-testid="plan-this-event-btn">
+                    <BookOpen size={14} className="mr-1" />Plan this
+                  </Button>
+                )}
                 <div className="flex-1" />
                 <Button variant="outline" size="sm" onClick={duplicateSelected} data-testid="duplicate-event-btn"><Copy size={14} className="mr-1" />Duplicate</Button>
                 <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(buildViewUrl('global', '', shareLinks?.global?.token || '')); toast.success('Link copied'); }} disabled={!shareLinks}><LinkIcon size={14} className="mr-1" />Copy</Button>

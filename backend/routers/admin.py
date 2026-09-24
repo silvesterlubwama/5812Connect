@@ -1,7 +1,8 @@
 """Admin user management: edit all users, password reset, bulk operations, audit"""
 from fastapi import APIRouter, Depends, HTTPException
+from pymongo.errors import DuplicateKeyError
 from pin_security import pin_digest, apply_pin_fields
-from deps import db, get_current_user, require_admin, require_director, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus, get_role_level
+from deps import db, get_current_user, require_admin, require_director, require_manager, require_staff, hash_password, _audit, logger, is_system_admin, get_campus_filter, generate_title, resolve_parent_campus, get_role_level, find_linked_member
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 import uuid
@@ -75,10 +76,7 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
     loc_cache = {}
     sec_co_cache = {}
     for u in users:
-        member = await db.members.find_one(
-            {"$or": [{"user_id": u["id"]}, {"email": u.get("email", "__none__")}]},
-            {"_id": 0, "id": 1}
-        )
+        member = await find_linked_member(u["id"], u.get("email"), {"_id": 0, "id": 1}, u.get("name"))
         u["has_member_profile"] = bool(member)
         if member:
             u["member_id"] = member["id"]
@@ -125,8 +123,7 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         if existing:
             raise HTTPException(status_code=400, detail="Email already registered")
     password = data.get("password") or "Test@5812!"
-    user_id = str(uuid.uuid4())
-    # Support multi-campus: accept location_ids array + expand with parent campuses
+    user_id = str(uuid.uuid4())    # Support multi-campus: accept location_ids array + expand with parent campuses
     primary_loc = data.get("location_id", "") or ""
     loc_ids = list(data.get("location_ids") or [])
     if primary_loc and primary_loc not in loc_ids:
@@ -163,7 +160,10 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
-    await db.users.insert_one(user)
+    try:
+        await db.users.insert_one(user)
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="That email address is already registered")
     # Auto-generate badge_id if the admin didn't supply one. Runs AFTER insert
     # so we can use MongoDB's atomic counter (findAndModify) to get a unique
     # sequential number even when multiple admins invite users concurrently.
@@ -290,14 +290,13 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
     """Return merged user + member profile for admin full-edit"""
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user: raise HTTPException(status_code=404, detail="User not found")
-    # Merge with member record
-    member = await db.members.find_one(
-        {"$or": [{"user_id": user_id}, {"id": user_id}, {"email": user.get("email", "__none__")}]},
-        {"_id": 0}
-    )
+    # Merge with member record. Priority order + no blank-email matching —
+    # a user with no email on file used to merge with a random member row,
+    # so the edit dialog opened on somebody else's name and campus.
+    member = await find_linked_member(user_id, user.get("email"), None, user.get("name"))
     if member:
         # member data takes precedence for profile fields; user for account fields
-        merged = {**member, **{k: v for k, v in user.items() if k in {"id", "email", "role", "status"}}}
+        merged = {**member, **{k: v for k, v in user.items() if k in {"id", "email", "role", "status", "name", "location_id", "location_ids", "department"}}}
         merged["member_id"] = member.get("id")
         merged.pop("pin", None)
         merged.pop("pin_lookup", None)
@@ -358,7 +357,7 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
                       "gender", "date_of_birth", "group", "program",
                       "security_company_id", "security_rank",
                       # Human-friendly badge number an admin can assign (unique within tenant).
-                      "badge_id"}
+                      "badge_id", "photo_url"}
     update = {k: v for k, v in data.items() if k in ACCOUNT_FIELDS}
     # iter353 — an inbound `pin` becomes a digest; blank means "leave as is"
     # (the UI can no longer read the PIN back) and `clear_pin` removes it.
@@ -370,8 +369,10 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
 
     loc_id, expanded = await _expand_user_locations(update, data)
 
+    prev = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1, "email": 1, "role": 1, "member_id": 1}) or {}
+
     if "title" not in data or not data.get("title"):
-        role = update.get("role") or (await db.users.find_one({"id": user_id}, {"_id": 0, "role": 1}) or {}).get("role", "")
+        role = update.get("role") or prev.get("role", "")
         dept = update.get("department") or ""
         update["title"] = await generate_title(role, expanded or ([loc_id] if loc_id else []), dept)
 
@@ -380,7 +381,7 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
         await db.users.update_one({"id": user_id}, {"$set": user_update})
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
 
-    await _sync_member_profile(user_id, user, update, ACCOUNT_FIELDS, loc_id, expanded)
+    await _sync_member_profile(user_id, user, update, ACCOUNT_FIELDS, loc_id, expanded, prev)
     # Auto-add to restricted residents if is_resident + resident_location_id set
     if update.get("is_resident") and update.get("resident_location_id"):
         existing_res = await db.residents.find_one({"member_id": user_id, "location_id": update["resident_location_id"], "status": "active"})
@@ -419,23 +420,31 @@ async def _expand_user_locations(update: dict, data: dict) -> tuple:
     return loc_id, expanded
 
 
-async def _sync_member_profile(user_id: str, user: dict, update: dict, account_fields: set, loc_id: str, expanded: list):
-    """Sync user update to linked member profile, creating if missing."""
-    if not user or not user.get("email"):
+async def _sync_member_profile(user_id: str, user: dict, update: dict, account_fields: set, loc_id: str, expanded: list, prev: dict = None):
+    """Sync a user update to their linked member profile, creating if missing.
+
+    The link is resolved from `users.member_id` first, then from the values the
+    user had BEFORE this edit — otherwise renaming somebody breaks the match
+    and a duplicate member row is created. Once resolved the link is pinned on
+    the user record so later edits are unambiguous.
+    """
+    if not user:
         return
     member_update = {k: v for k, v in update.items() if k in account_fields}
     if not member_update:
         return
-    member_exists = await db.members.find_one(
-        {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
-        {"_id": 0, "id": 1}
-    )
+    prev = prev or {}
+    member_exists = None
+    if prev.get("member_id"):
+        member_exists = await db.members.find_one({"id": prev["member_id"]}, {"_id": 0, "id": 1})
+    if not member_exists:
+        member_exists = await find_linked_member(
+            user_id, prev.get("email") or user.get("email"), {"_id": 0, "id": 1},
+            prev.get("name") or user.get("name"))
     if member_exists:
-        await db.members.update_one(
-            {"$or": [{"user_id": user_id}, {"email": user["email"]}]},
-            {"$set": member_update}
-        )
-    else:
+        await db.members.update_one({"id": member_exists["id"]}, {"$set": {**member_update, "user_id": user_id}})
+        await db.users.update_one({"id": user_id}, {"$set": {"member_id": member_exists["id"]}})
+    elif user.get("email"):
         member_id = str(uuid.uuid4())
         await db.members.insert_one({
             "id": member_id, "user_id": user_id,
@@ -450,6 +459,7 @@ async def _sync_member_profile(user_id: str, user: dict, update: dict, account_f
             "created_at": datetime.now(timezone.utc).isoformat(),
             **{k: v for k, v in member_update.items() if k in account_fields},
         })
+        await db.users.update_one({"id": user_id}, {"$set": {"member_id": member_id}})
 
 
 @router.post("/users/{user_id}/reset-password")

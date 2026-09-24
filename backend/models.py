@@ -91,6 +91,9 @@ class FamilyCreate(BaseModel):
     primary_contact_name: str
     primary_contact_email: Optional[str] = None
     primary_contact_phone: Optional[str] = None
+    # iter371 — the contact is picked from the directory, so keep the link
+    primary_contact_person_id: Optional[str] = None
+    primary_contact_person_type: Optional[str] = None
     address: Optional[str] = None
     notes: Optional[str] = None
     parent_ids: Optional[List[str]] = []

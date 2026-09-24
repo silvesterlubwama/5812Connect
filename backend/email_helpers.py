@@ -23,10 +23,13 @@ def _base_html(body: str) -> str:
 </div>"""
 
 
-async def send_notification_email(to_email: str, subject: str, body_html: str) -> bool:
+async def send_notification_email(to_email: str, subject: str, body_html: str, attachments: list = None) -> bool:
     """Send an email notification via the active configured provider.
     Reads system_settings on every call so admin updates take effect instantly
-    without redeploying. Returns True on success."""
+    without redeploying. Returns True on success.
+
+    `attachments`: optional [{filename, content: bytes, content_type}].
+    """
     if not to_email:
         return False
     try:
@@ -56,6 +59,12 @@ async def send_notification_email(to_email: str, subject: str, body_html: str) -
                 "subject": subject,
                 "html": _base_html(body_html),
             }
+            if attachments:
+                import base64
+                params["attachments"] = [{
+                    "filename": a["filename"],
+                    "content": base64.b64encode(a["content"]).decode(),
+                } for a in attachments]
             await asyncio.to_thread(resend.Emails.send, params)
             return True
         except Exception as e:
@@ -71,6 +80,10 @@ async def send_notification_email(to_email: str, subject: str, body_html: str) -
             msg["To"] = to_email
             msg.set_content("(HTML version)")
             msg.add_alternative(_base_html(body_html), subtype="html")
+            for a in attachments or []:
+                main, _, sub = (a.get("content_type") or "application/pdf").partition("/")
+                msg.add_attachment(a["content"], maintype=main, subtype=sub or "octet-stream",
+                                   filename=a["filename"])
             host = cfg.get("smtp_host"); port = cfg.get("smtp_port") or 587
             user = cfg.get("smtp_user"); password = cfg.get("smtp_password")
             use_tls = cfg.get("smtp_tls", True)

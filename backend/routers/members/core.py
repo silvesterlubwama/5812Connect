@@ -20,6 +20,7 @@ async def list_members(
     status: Optional[str] = None,
     role: Optional[str] = None,
     location_id: Optional[str] = None,
+    family_id: Optional[str] = None,
     staff_only: Optional[bool] = None,
     welfare_category: Optional[str] = None,  # sponsored|restricted_location|welfare_support|multiple|any
     kind: Optional[str] = None,  # member|guest|parent|any — empty = legacy "member-or-unspecified"
@@ -57,6 +58,8 @@ async def list_members(
         query["role"] = role
     if location_id and location_id != "all":
         query["location_id"] = location_id
+    if family_id:
+        query["family_id"] = family_id
     # Welfare-category filter: restrict to members who have an active social_work case
     if welfare_category and welfare_category != "all":
         case_query = {"subject_kind": "member", "status": "active"}
@@ -92,6 +95,15 @@ async def list_members(
             m["location_name"] = loc_cache.get(lid, "")
         if m["id"] in welfare_map:
             m["welfare_case"] = welfare_map[m["id"]]
+    # Household name, so People can group a family together the same way the
+    # portal and the kiosk see it.
+    fam_ids = list({m["family_id"] for m in members if m.get("family_id")})
+    if fam_ids:
+        fam_names = {f["id"]: f.get("family_name") or "" async for f in
+                     db.families.find({"id": {"$in": fam_ids}}, {"_id": 0, "id": 1, "family_name": 1})}
+        for m in members:
+            if m.get("family_id"):
+                m["family_name"] = fam_names.get(m["family_id"], "")
     return {"members": members, "total": total}
 
 

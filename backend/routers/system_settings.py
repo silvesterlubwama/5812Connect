@@ -78,6 +78,11 @@ _DEFAULTS = {
         # doesn't need a redeploy. Picked up by the backend within 60s.
         "cors_origins": [],
     },
+    "kiosk": {
+        # How early (minutes) an event shows on the kiosk's "checking in for"
+        # list. It stays listed until the event's end time.
+        "event_window_minutes": 60,
+    },
     "branding": {
         # App-wide white-labelling. `nav_overrides` is a flat map from route path
         # → {label, hidden, order} so admins can rename / hide / reorder sidebar
@@ -324,7 +329,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
                 block[k] = v
             merged[pid] = block
         data["payments"]["providers"] = merged
-    for top in ("email", "sentry", "org", "branding", "payments", "security"):
+    for top in ("email", "sentry", "org", "branding", "payments", "security", "kiosk"):
         if top in data and isinstance(data[top], dict):
             current_block = raw.get(top) or {}
             for k, v in data[top].items():
@@ -340,7 +345,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     await db.system_settings.update_one({"id": SETTINGS_ID}, {"$set": raw}, upsert=True)
     await _audit(
         current_user["id"], "update", "system_settings", SETTINGS_ID,
-        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding", "payments", "security"})},
+        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding", "payments", "security", "kiosk"})},
     )
     return _mask_for_read(raw)
 

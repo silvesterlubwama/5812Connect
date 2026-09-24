@@ -1042,11 +1042,16 @@ async def get_balance_sheet(location_id: Optional[str] = None, date_from: Option
     net_profit_loss = total_revenue - total_expenses
     is_profit = net_profit_loss >= 0
 
-    # Net Worth: include assets (current value) — assets_total - net_loss is informative
+    # Net Worth: include assets at their carried cost (purchase + capitalised
+    # improvements) or latest valuation when one has been recorded.
     asset_query = {**campus}
     if location_id: asset_query["location_id"] = location_id
-    assets = await db.financial_assets.find(asset_query, {"_id": 0, "current_value": 1, "purchase_value": 1}).to_list(500)
-    assets_total = sum(float(a.get("current_value") or a.get("purchase_value") or 0) for a in assets)
+    assets = await db.finance_assets.find(asset_query, {"_id": 0, "value": 1, "current_value": 1, "spend": 1}).to_list(500)
+    assets_total = round(sum(
+        float(a.get("current_value") or 0)
+        or (float(a.get("value") or 0) + sum(float(r.get("amount") or 0)
+                                             for r in (a.get("spend") or []) if r.get("kind") == "improvement"))
+        for a in assets), 2)
     net_worth = assets_total + net_profit_loss
 
     return {
@@ -1628,6 +1633,38 @@ async def delete_financial_category(cat_id: str, current_user: dict = Depends(re
 # ========== ASSETS (appreciation default, manual depreciation) ==========
 
 @router.put("/financial/assets/{asset_id}/valuation")
+async def update_asset_valuation(asset_id: str, data: dict, current_user: dict = Depends(require_manager)):
+    """Record a revaluation of an asset.
+
+    The decorator used to dangle above the reconciliation handler, so this
+    route quietly ran the wrong function and always failed. Body:
+    {current_value, valued_on?, basis?, notes?}
+    """
+    asset = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    try:
+        value = round(float(data.get("current_value")), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="current_value must be a number")
+    entry = {
+        "id": f"val_{str(uuid.uuid4())[:8]}",
+        "current_value": value,
+        "valued_on": data.get("valued_on") or datetime.now(timezone.utc).date().isoformat(),
+        "basis": (data.get("basis") or "").strip()[:120],
+        "notes": (data.get("notes") or "").strip()[:300],
+        "by": current_user["id"],
+        "by_name": current_user.get("name", ""),
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.assets.update_one({"id": asset_id}, {
+        "$set": {"current_value": value, "valued_on": entry["valued_on"],
+                 "updated_at": entry["at"]},
+        "$push": {"valuations": entry},
+    })
+    fresh = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    await _audit(current_user["id"], "update", "asset_valuation", asset_id, {"current_value": value})
+    return fresh
 
 
 # ========== RECONCILIATION (Finance <-> Chart cash accounts) ==========
@@ -1733,20 +1770,6 @@ async def reconciliation_auto_tag(data: dict, current_user: dict = Depends(requi
         results["expenses_tagged"] = r.modified_count
     await _audit(current_user["id"], "batch_tag", "reconciliation", None, {"location_id": location_id, **results})
     return results
-
-async def update_asset_valuation(asset_id: str, data: dict, current_user: dict = Depends(require_manager)):
-    """Manually update asset current value. Supports appreciation (default) or depreciation."""
-    new_value = data.get("current_value")
-    method = data.get("method", "appreciation")  # appreciation or depreciation
-    if new_value is None:
-        raise HTTPException(status_code=400, detail="current_value required")
-    await db.assets.update_one({"id": asset_id}, {"$set": {
-        "current_value": float(new_value), "valuation_method": method,
-        "last_valued_at": datetime.now(timezone.utc).isoformat(), "valued_by": current_user["id"],
-    }})
-    return await db.assets.find_one({"id": asset_id}, {"_id": 0})
-
-
 
 
 

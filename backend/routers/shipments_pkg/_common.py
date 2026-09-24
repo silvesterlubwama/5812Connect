@@ -367,6 +367,13 @@ def _sort_items_for_invoice(items: list, packing_units: list) -> list:
 
 def _loc_str(it: dict, packing_units: Optional[list] = None) -> str:
     parts = []
+    # A line consolidated for customs spans several boxes — print "Boxes 24 & 25"
+    # instead of only the box the surviving row happened to sit in.
+    if it.get("box_label"):
+        parts.append(str(it["box_label"])[:60])
+        if it.get("pallet_id"):
+            parts.append(f"Pallet {it['pallet_id'][-4:]}")
+        return " · ".join(parts)
     # iter 255 — prefer the human-readable box name so the manifest shows
     # "Box 12 – Kitchen" instead of an opaque pallet id fragment.
     uid = it.get("packing_unit_id")

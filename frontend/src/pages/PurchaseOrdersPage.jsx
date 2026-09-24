@@ -7,6 +7,8 @@ import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { VendorPicker } from '../components/VendorPicker';
+import { guardPickerEscape } from '../components/SearchSelect';
 import { Textarea } from '../components/ui/textarea';
 import { purchaseOrdersApi, locationsApi } from '../services/api';
 import api from '../services/api';
@@ -207,12 +209,16 @@ export default function PurchaseOrdersPage() {
 
       {/* Create dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl w-[calc(100vw-1.5rem)] sm:w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6" onEscapeKeyDown={guardPickerEscape}>
           <DialogHeader><DialogTitle>New Purchase Order</DialogTitle><DialogDescription>Line items are required. Number auto-generated on save.</DialogDescription></DialogHeader>
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Vendor name *</Label><Input value={form.vendor_name} onChange={e => setForm({ ...form, vendor_name: e.target.value })} placeholder="Vendor / supplier" data-testid="po-vendor-name" list="po-vendor-list" />
-                <datalist id="po-vendor-list">{vendors.map(v => <option key={v.id} value={v.name} />)}</datalist>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><Label>Vendor name *</Label>
+                <VendorPicker testId="po-vendor-name"
+                  value={form.vendor_name}
+                  onChange={v => setForm({ ...form, vendor_name: v })}
+                  onPick={v => setForm(f => ({ ...f, vendor_name: v.name, vendor_id: v.id }))}
+                  placeholder="Vendor / supplier" />
               </div>
               <div><Label>Campus</Label>
                 <Select value={form.location_id || '_none'} onValueChange={v => setForm({ ...form, location_id: v === '_none' ? '' : v })}>
@@ -221,25 +227,28 @@ export default function PurchaseOrdersPage() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div><Label>Currency</Label><Input value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value.toUpperCase() })} maxLength={5} /></div>
               <div><Label>Requested</Label><Input type="date" value={form.requested_date} onChange={e => setForm({ ...form, requested_date: e.target.value })} /></div>
               <div><Label>Delivery by</Label><Input type="date" value={form.delivery_date} onChange={e => setForm({ ...form, delivery_date: e.target.value })} /></div>
             </div>
             <div>
               <div className="flex items-center justify-between mb-1"><Label>Line items *</Label><Button type="button" size="sm" variant="ghost" onClick={() => setForm({ ...form, lines: [...form.lines, emptyLine()] })} data-testid="po-add-line"><Plus size={12} className="mr-1" />Add line</Button></div>
+              {/* Flex, not a 12-col grid: the grid's columns sized to the
+                  inputs' intrinsic width and pushed the price field and bin
+                  icon off a phone screen. */}
               <div className="space-y-1">
                 {form.lines.map((ln, i) => (
-                  <div key={i} className="grid grid-cols-12 gap-1 items-center">
-                    <Input className="col-span-6 h-8 text-xs" placeholder="Description" value={ln.description} onChange={e => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, description: e.target.value } : l) })} data-testid={`po-line-desc-${i}`} />
-                    <Input className="col-span-2 h-8 text-xs" type="number" min="0" step="any" placeholder="Qty" value={ln.qty} onChange={e => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, qty: e.target.value } : l) })} data-testid={`po-line-qty-${i}`} />
-                    <Input className="col-span-3 h-8 text-xs" type="number" min="0" step="any" placeholder="Unit price" value={ln.unit_price} onChange={e => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, unit_price: e.target.value } : l) })} data-testid={`po-line-price-${i}`} />
-                    <Button type="button" size="sm" variant="ghost" className="col-span-1 h-8 w-8 p-0 text-destructive" onClick={() => setForm({ ...form, lines: form.lines.filter((_, j) => j !== i) })} disabled={form.lines.length === 1}><Trash2 size={12} /></Button>
+                  <div key={i} className="flex flex-wrap sm:flex-nowrap gap-1 items-center">
+                    <Input className="w-full sm:flex-[3] min-w-0 h-8 text-xs" placeholder="Description" value={ln.description} onChange={e => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, description: e.target.value } : l) })} data-testid={`po-line-desc-${i}`} />
+                    <Input className="flex-1 min-w-0 h-8 text-xs" type="number" min="0" step="any" placeholder="Qty" value={ln.qty} onChange={e => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, qty: e.target.value } : l) })} data-testid={`po-line-qty-${i}`} />
+                    <Input className="flex-[2] min-w-0 h-8 text-xs" type="number" min="0" step="any" placeholder="Unit price" value={ln.unit_price} onChange={e => setForm({ ...form, lines: form.lines.map((l, j) => j === i ? { ...l, unit_price: e.target.value } : l) })} data-testid={`po-line-price-${i}`} />
+                    <Button type="button" size="sm" variant="ghost" className="h-8 w-8 shrink-0 p-0 text-destructive" onClick={() => setForm({ ...form, lines: form.lines.filter((_, j) => j !== i) })} disabled={form.lines.length === 1}><Trash2 size={12} /></Button>
                   </div>
                 ))}
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3 items-center">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
               <div><Label>Tax</Label><Input type="number" min="0" step="any" value={form.tax} onChange={e => setForm({ ...form, tax: e.target.value })} /></div>
               <div className="text-right text-sm"><p className="text-muted-foreground">Subtotal: <strong>{form.currency} {totals().subtotal}</strong></p><p className="text-lg font-bold">Total: {form.currency} {totals().total}</p></div>
             </div>
@@ -251,7 +260,7 @@ export default function PurchaseOrdersPage() {
 
       {/* Detail dialog */}
       <Dialog open={!!openPo} onOpenChange={o => { if (!o) setOpenPo(null); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl w-[calc(100vw-1.5rem)] sm:w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6" onEscapeKeyDown={guardPickerEscape}>
           {openPo && <>
             <DialogHeader>
               <DialogTitle className="flex items-center gap-3">{openPo.po_number} <Badge className={STATUS_COLORS[openPo.status]}>{openPo.status}</Badge></DialogTitle>
@@ -259,7 +268,8 @@ export default function PurchaseOrdersPage() {
             </DialogHeader>
             <div className="space-y-2">
               <div className="text-xs text-muted-foreground">Requested by <strong>{openPo.requested_by_name || openPo.requested_by}</strong>{openPo.delivery_date ? ` · Delivery by ${openPo.delivery_date}` : ''}</div>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto -mx-1">
+              <table className="w-full text-sm min-w-[420px]">
                 <thead><tr className="border-b text-xs text-muted-foreground text-left"><th>Description</th><th className="text-right">Qty</th><th className="text-right">Unit price</th><th className="text-right">Line total</th><th className="text-right">Received</th></tr></thead>
                 <tbody>
                   {(openPo.lines || []).map((l, i) => (
@@ -272,6 +282,7 @@ export default function PurchaseOrdersPage() {
                   <tr className="font-bold"><td colSpan={3} className="text-right">Total:</td><td className="text-right">{(openPo.total || 0).toLocaleString()}</td><td /></tr>
                 </tfoot>
               </table>
+              </div>
               {openPo.notes && <p className="text-xs text-muted-foreground italic border-t pt-2">{openPo.notes}</p>}
             </div>
             <div className="flex gap-2 pt-3 flex-wrap border-t">
@@ -291,28 +302,21 @@ export default function PurchaseOrdersPage() {
 
       {/* Edit PO (draft / submitted) */}
       <Dialog open={!!editPo} onOpenChange={o => { if (!o) setEditPo(null); }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" data-testid="po-edit-dialog">
+        <DialogContent className="max-w-2xl w-[calc(100vw-1.5rem)] sm:w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6" data-testid="po-edit-dialog" onEscapeKeyDown={guardPickerEscape}>
           {editPo && <>
             <DialogHeader>
               <DialogTitle>Edit {editPo.po_number}</DialogTitle>
               <DialogDescription>Change anything while the order is a draft or awaiting approval.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Vendor</Label>
-                  <Select value={editPo.vendor_id || '__manual__'} onValueChange={v => {
-                    if (v === '__manual__') { setEditPo({ ...editPo, vendor_id: '' }); return; }
-                    const ven = vendors.find(x => x.id === v);
-                    setEditPo({ ...editPo, vendor_id: v, vendor_name: ven?.name || editPo.vendor_name });
-                  }}>
-                    <SelectTrigger data-testid="po-edit-vendor"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__manual__">Type a name</SelectItem>
-                      {vendors.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                  <Input value={editPo.vendor_name || ''} onChange={e => setEditPo({ ...editPo, vendor_name: e.target.value })} placeholder="Vendor name" data-testid="po-edit-vendor-name" />
+                  <VendorPicker testId="po-edit-vendor-name"
+                    value={editPo.vendor_name || ''}
+                    onChange={v => setEditPo({ ...editPo, vendor_name: v, vendor_id: '' })}
+                    onPick={v => setEditPo(p => ({ ...p, vendor_name: v.name, vendor_id: v.id }))}
+                    placeholder="Vendor name" />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Delivery by</Label>
@@ -325,20 +329,20 @@ export default function PurchaseOrdersPage() {
               <div className="space-y-2">
                 <Label>Line items</Label>
                 {(editPo.lines || []).map((l, i) => (
-                  <div key={i} className="grid grid-cols-12 gap-2 items-center" data-testid={`po-edit-line-${i}`}>
-                    <Input className="col-span-5" value={l.description || ''} placeholder="Description" onChange={e => {
+                  <div key={i} className="flex flex-wrap sm:flex-nowrap gap-2 items-center" data-testid={`po-edit-line-${i}`}>
+                    <Input className="w-full sm:flex-[3] min-w-0" value={l.description || ''} placeholder="Description" onChange={e => {
                       const lines = [...editPo.lines]; lines[i] = { ...l, description: e.target.value }; setEditPo({ ...editPo, lines });
                     }} data-testid={`po-edit-line-desc-${i}`} />
-                    <Input className="col-span-2" type="number" step="any" value={l.qty ?? 1} placeholder="Qty" onChange={e => {
+                    <Input className="flex-1 min-w-0" type="number" step="any" value={l.qty ?? 1} placeholder="Qty" onChange={e => {
                       const lines = [...editPo.lines]; lines[i] = { ...l, qty: e.target.value }; setEditPo({ ...editPo, lines });
                     }} data-testid={`po-edit-line-qty-${i}`} />
-                    <Input className="col-span-2" value={l.unit || 'ea'} placeholder="Unit" onChange={e => {
+                    <Input className="flex-1 min-w-0" value={l.unit || 'ea'} placeholder="Unit" onChange={e => {
                       const lines = [...editPo.lines]; lines[i] = { ...l, unit: e.target.value }; setEditPo({ ...editPo, lines });
                     }} />
-                    <Input className="col-span-2" type="number" step="any" value={l.unit_price ?? 0} placeholder="Unit price" onChange={e => {
+                    <Input className="flex-[2] min-w-0" type="number" step="any" value={l.unit_price ?? 0} placeholder="Unit price" onChange={e => {
                       const lines = [...editPo.lines]; lines[i] = { ...l, unit_price: e.target.value }; setEditPo({ ...editPo, lines });
                     }} data-testid={`po-edit-line-price-${i}`} />
-                    <Button variant="ghost" size="sm" className="col-span-1 text-destructive px-0" onClick={() => {
+                    <Button variant="ghost" size="sm" className="shrink-0 text-destructive px-0" onClick={() => {
                       setEditPo({ ...editPo, lines: editPo.lines.filter((_, x) => x !== i) });
                     }} data-testid={`po-edit-line-remove-${i}`}><Trash2 size={13} /></Button>
                   </div>

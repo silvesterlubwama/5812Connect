@@ -1,0 +1,36 @@
+{
+  "summary": "iter365 review — 17/17 backend pytest tests pass and the four flagged search-first UI pickers are wired end-to-end. New suite /app/backend/tests/test_iter365_pickers_and_merge.py covers: duplicate-merge placeholder-email guard, alt_emails handling, skip_fields, reference repointing (checkins.member_id), campus-less duplicate detection, real-data-clean state (no Henry Lubega / Katelyn Lubwama groups), Henry+Katelyn post-merge state, manual check-in with member_id, walk-in visitor with empty member_id, parent-lookup phone regression, social-work new case rejects missing subject_id and accepts subject_kind=child|member, POS customer created with person_id/person_type, /people/suggest kinds filter. Frontend Playwright pass (1440x900) — admin login → /check-ins Manual Check-In: manual-checkin-name suggests 13 people, picking one shows manual-checkin-linked, a bogus name surfaces manual-checkin-name-add-new walk-in option. /social-work New Case: sw-form-subject present and sw-form-subject-options renders. /hr Salaries → Add Salary: salary-staff-picker + options visible. All the picker testids in the review request are live in the DOM.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/admin/users (no email in body)", "issue": "Request hangs 60s and returns 502. Repro: POST {name, role:'Member'} (no email, no password) → default password 'Test@5812!' is used and the request never finishes. Same behaviour on PUT /api/admin/users/{id} with body {\"email\": \"\"}: 60s → 502. GET, and POST/PUT with a real email, respond in <500ms, so it isn't rate limiting; it looks like something in the members-sync / auto-guest-link path deadlocks or times out when the account has no email. Tests worked around by always sending an email and using guests for blank-email keeper scenarios.", "priority": "HIGH"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter365_pickers_and_merge.py",
+    "/app/test_reports/pytest/iter365.xml"
+  ],
+  "action_items": [
+    "Investigate the 60s hang on POST /api/admin/users when body has no 'email' and on PUT /api/admin/users/{id} when 'email' is set to ''. Prime suspect: _sync_member_profile / find_linked_member behaviour when email is '', causing a slow/looped scan of the members collection."
+  ],
+  "critical_code_review_comments": [
+    "dedupe.py — merge_identity's alt_emails only fills the FIRST duplicate that has a different real email. If a keeper is merged against three duplicates each carrying a distinct real email, the second and third are dropped once the first has been queued because the `f in fill` guard is checked but alt_emails is not treated the same way. Not exercised in the current review but worth a review.",
+    "admin.py create_user — silently hangs when no email is supplied because members-sync appears to iterate every row on empty email; add a fast-path guard so accounts without email skip the sync (or short-circuit the linked-member lookup when both email and name are unresolved).",
+    "customers.py create_customer — when person_type='member' or 'user' (not 'guest'), the guest_id link isn't populated even though person_id/person_type are; the follow-on 'is_customer' flag then never lands on the linked person. Consider mirroring the guest branch for member/user."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter365_pickers_and_merge.py (NEW, 17 tests, all passing)"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "100% of the review's picker testids surfaced in the DOM"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 ✓ ; member@5812uganda.org / Member@5812 ✓ (from /app/memory/test_credentials.md).",
+  "seed_data_creation": "All test data prefixed ITER365_ (users, guests, checkins, customers, cases). teardown_module deletes them. The merge tests dispose duplicates through /api/people/duplicates/merge; the last no-campus test also self-merges to clear the review list.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter365 backend suite is /app/backend/tests/test_iter365_pickers_and_merge.py — depends on member@5812uganda.org, an admin token, and at least one location in /api/locations. Frontend picker testids confirmed live: manual-checkin-name, manual-checkin-name-options, manual-checkin-linked, manual-checkin-name-add-new, sw-form-subject, sw-form-subject-options, salary-staff-picker, salary-staff-picker-options. The one blocker for wider testing is the POST /api/admin/users hang whenever email is omitted — tests should always send an email when using that endpoint.",
+  "rca of the issue": "Backend POST /api/admin/users hang: no email in payload → default password 'Test@5812!' path runs, and afterwards the members-sync / staff-guest-auto-link block appears to make a large scan (matching on empty email) that never completes and the k8s gateway returns 502 after 60s. Mitigation for tests: always send an email; for production: add a short-circuit when email is empty in _sync_member_profile / staff-guest match query so the '$or: [{email:''}, {user_id:...}]' clause doesn't fan out."
+}

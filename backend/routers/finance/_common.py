@@ -40,6 +40,7 @@ FINANCE_COLLECTIONS = [
     "financial_categories",
     "financial_budgets",
     "financial_assets",
+    "finance_assets",
     "financial_settings",
     # Banking
     "bank_accounts",
@@ -272,12 +273,12 @@ async def post_journal_entry(
 async def reverse_journal_entry(je_id: str, *, reason: str, current_user: dict) -> dict:
     """Undo a posted JE.
 
-    While the fiscal period is still OPEN there is nothing to protect, so the
-    entry is simply VOIDED in place: it drops out of the journal, every balance
-    and every report, and no contra line is posted. Posting a mirror entry in
-    an open period was actively misleading — reports exclude the entry that was
-    marked reversed but kept its mirror, so the ledger ended up carrying the
-    upside-down copy instead of netting to zero.
+    While the fiscal period is still OPEN the entry is DELETED outright — it
+    leaves the journal, every balance and every report, and no mirror line is
+    posted. A full copy is kept in `finance_deleted_entries` together with who
+    deleted it, when and why, and the same lands in the audit trail; deleting
+    without a trail would be indefensible, but leaving a contra line in an open
+    period is what made the numbers unreadable.
 
     Once the period is LOCKED the original has to stay exactly as it was
     reported, so the classic contra entry is posted in the current period and
@@ -287,24 +288,12 @@ async def reverse_journal_entry(je_id: str, *, reason: str, current_user: dict) 
     orig = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
     if not orig:
         raise HTTPException(status_code=404, detail="Journal entry not found")
-    if orig.get("voided"):
-        raise HTTPException(status_code=400, detail="Already voided")
     if orig.get("reversed"):
         raise HTTPException(status_code=400, detail="Already reversed")
 
     if not await period_is_locked(orig.get("date") or "", orig.get("location_id")):
-        patch = {
-            "voided": True,
-            "reversed": True,          # keeps every legacy "is it live?" filter honest
-            "voided_at": _now(),
-            "voided_by": current_user.get("id"),
-            "voided_by_name": current_user.get("name"),
-            "reversed_at": _now(),
-            "reversed_reason": reason,
-        }
-        await db.finance_journal_entries.update_one({"id": je_id}, {"$set": patch})
-        logger.info(f"[finance] JE voided {je_id}: {reason}")
-        return {**orig, **patch}
+        await delete_journal_entry(je_id, reason=reason, current_user=current_user)
+        return {"deleted": True, "id": je_id, "entry": orig, "reason": reason}
 
     swapped = [
         {**ln, "debit": ln["credit"], "credit": ln["debit"]}
@@ -328,3 +317,54 @@ async def reverse_journal_entry(je_id: str, *, reason: str, current_user: dict) 
                   "reversed_by_je": rev["id"], "reversed_reason": reason}},
     )
     return rev
+
+
+async def delete_journal_entry(je_id: str, *, reason: str, current_user: dict) -> dict:
+    """Remove an entry from the ledger, keeping a full copy and an audit row.
+
+    Callers must have already established that the fiscal period is open.
+    """
+    from deps import _audit
+    orig = await db.finance_journal_entries.find_one({"id": je_id}, {"_id": 0})
+    if not orig:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    snapshot = {
+        "id": f"jedel_{uuid.uuid4().hex[:10]}",
+        "je_id": je_id,
+        "date": orig.get("date"),
+        "description": orig.get("description"),
+        "source": orig.get("source"),
+        "reference": orig.get("reference"),
+        "total": float(orig.get("total") or 0),
+        "location_id": orig.get("location_id"),
+        "lines": orig.get("lines") or [],
+        "reason": (reason or "")[:300],
+        "deleted_at": _now(),
+        "deleted_by": current_user.get("id"),
+        "deleted_by_name": current_user.get("name") or "",
+        "original_created_by_name": orig.get("created_by_name") or "",
+        "original_created_at": orig.get("created_at"),
+        "entry": orig,
+    }
+    await db.finance_deleted_entries.insert_one(snapshot)
+    await db.finance_journal_entries.delete_one({"id": je_id})
+    # A payroll JE carries `payslip:<id>`. Deleting it must un-say "posted to
+    # finance" on that payslip, otherwise HR reads a flag that no longer
+    # matches the ledger and the payday report has to argue with it.
+    key = orig.get("idempotency_key") or ""
+    if key.startswith("payslip:"):
+        await db.hr_payslips.update_one({"id": key.split(":", 1)[1]}, {"$set": {
+            "finance_posted": False,
+            "finance_post_error": (
+                f"Its journal entry was deleted by {current_user.get('name') or 'a director'}"
+                f" — {(reason or '').strip() or 'no reason given'}"
+            )[:300],
+        }})
+    await _audit(current_user.get("id"), "delete", "journal_entry", je_id, {
+        "date": orig.get("date"), "description": orig.get("description"),
+        "total": float(orig.get("total") or 0), "source": orig.get("source"),
+        "reason": (reason or "")[:300],
+    })
+    logger.info(f"[finance] JE deleted {je_id} by {current_user.get('name')}: {reason}")
+    snapshot.pop("_id", None)
+    return snapshot

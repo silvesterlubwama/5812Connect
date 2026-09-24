@@ -83,28 +83,27 @@ async def create_wallet_badge(member_id: str, current_user: dict = Depends(requi
 
 @router.post("/children/{child_id}/wallet-badge")
 async def create_child_wallet_badge(child_id: str, current_user: dict = Depends(require_staff)) -> dict:
-    """Generate a wallet badge for a child. Verifies parent has staff access if child is not at a restricted location."""
+    """Issue a child's badge.
+
+    A child automatically carries the access of the caregiver who already holds
+    it — a staff pass or residency at a restricted location — until their 18th
+    birthday, which is stamped on the badge. Staff can still issue a badge by
+    hand (`access/child-access/{id}/override` with mode=grant), and an explicit
+    block refuses issuing altogether.
+    """
     child = await db.children.find_one({"id": child_id}, {"_id": 0})
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
-    # Check if child is at restricted location OR has a staff parent
+    from routers.access_children import child_access
+    access = await child_access(child_id)
+    if access["mode"] == "block":
+        raise HTTPException(status_code=403, detail=access["reason"] or "Access blocked by staff")
     loc = await db.locations.find_one({"id": child.get("location_id", "")}, {"_id": 0}) if child.get("location_id") else None
     is_restricted = child.get("is_resident") or (loc and loc.get("is_restricted"))
-    if not is_restricted:
-        # Check if any parent is staff with access
-        parent_ids = child.get("parent_ids", [])
-        has_staff_parent = False
-        for pid in parent_ids:
-            parent_user = await db.users.find_one({"id": pid, "status": "active"}, {"_id": 0, "role": 1})
-            if not parent_user:
-                parent_member = await db.members.find_one({"id": pid}, {"_id": 0, "user_id": 1})
-                if parent_member and parent_member.get("user_id"):
-                    parent_user = await db.users.find_one({"id": parent_member["user_id"], "status": "active"}, {"_id": 0, "role": 1})
-            if parent_user and parent_user.get("role") in ("Staff", "Director", "Manager", "Coordinator", "Leader", "HR", "Volunteer", "admin", "system_admin", "Executive Director", "Adviser"):
-                has_staff_parent = True
-                break
-        if not has_staff_parent:
-            raise HTTPException(status_code=403, detail="Child's parent must be staff with access to issue a badge")
+    if not is_restricted and not access["eligible"]:
+        raise HTTPException(
+            status_code=403,
+            detail=access["reason"] or "Nobody in this child's family holds access — issue a grant first")
     # Get parent details for badge
     parents = []
     for pid in (child.get("parent_ids") or []):
@@ -122,6 +121,13 @@ async def create_child_wallet_badge(child_id: str, current_user: dict = Depends(
         "country_code": loc.get("country_code") if loc else "",
         "qr_data": child_id, "parents": parents,
         "campus_phone": loc.get("contact_phone") if loc else "",
+        # inherited access — refreshed nightly and re-checked live at the gate
+        "inherited_locations": access["locations"],
+        "inherited_location_ids": [l["location_id"] for l in access["locations"]],
+        "access_expires_on": access["expires_on"],
+        "access_mode": access["mode"],
+        "access_reason": access["reason"],
+        "access_synced_at": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(), "created_by": current_user["id"],
     }
     await db.wallet_badges.update_one({"member_id": child_id}, {"$set": badge_data}, upsert=True)

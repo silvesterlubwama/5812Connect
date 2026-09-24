@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend E2E of Finance > Fixed Assets tab (iter370 features) on 58:12 Uganda. Verified currency (UGX everywhere), add-with/without-expense, campus + paid-from + expense-account selects, log-spend Repair/Improvement, edit (name/value/condition), merge (sums values, moves spend history), and delete (persists after reload). Register left empty as required.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Finance > Fixed Assets — Add asset dialog / Log spend dialog", "issues": ["When 'Also record this as an expense' is toggled ON, the default Expense-account fallback on this campus resolves to 'Salaries & Wages DNU' (visible in Finance > Overview > Recent activity for the TEST_ entries). This is a COA/data configuration issue in the tenant, not a code bug, but it makes the default posting look wrong. Consider defaulting the expense account for asset purchases to 'Fixed Asset Purchases' (or similar) when the user leaves the picker on 'Default expenses account'. AssetsRegister.jsx:46-53"]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: in routers/finance/assets.py _post_expense(), when the caller omits expense_account_id, prefer a dedicated 'Fixed Asset Purchases' / 'Repairs & Maintenance' account instead of the first expense account found (currently posts to 'Salaries & Wages DNU' on 58:12 Uganda).",
+    "Optional UX: purchase-cost label in Add-asset dialog updates when Currency changes only because the input's Label reads assetForm.currency — good. Same for spend dialog. No action, just noted."
+  ],
+  "critical_code_review_comments": [
+    "AssetsRegister.jsx:129 — toast text for post_expense on create relies on r.data?.purchase_expense_id but toasts sometimes stack; not a bug, just noisy for automation.",
+    "AssetsRegister.jsx:162-164 — improvement/repair toasts are correct but overlap during quick sequences; consider dismissing previous toast on new op.",
+    "AssetsRegister.jsx:138 — PUT body currently spreads editForm including any residual keys; harmless because backend response confirmed only known fields returned, but consider explicitly whitelisting fields.",
+    "File length 618 lines is at the upper edge of the 700-line guideline — future work: extract ExpenseOption and the dialogs into siblings."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (skipped per request)", "frontend": "100%" },
+  "test_credentials": "Admin: admin@5812uganda.org / Admin@5812 (from review request)",
+  "seed_data_creation": "Created and deleted TEST_Asset_A, TEST_Asset_B, TEST_EditProbe(_Renamed). Register ends EMPTY. Note: expense-ledger entries the assets triggered ('Asset purchase — TEST_Asset_B', 'TEST_Asset_A — TEST oil change') remain in Finance ledger by design (delete-asset dialog explicitly states expenses stay).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Full iter370 asset UI flows all pass: (1) summary cards render in UGX, (2) add without expense shows the toast 'Asset added to the register' and appears in UGX in register, (3) add WITH expense picks a paid-from cash account and posts an expense entry (toast 'Asset added and the expense recorded'), (4) log-spend Repair auto-enables the expense toggle and history badge shows 'expensed', (5) Improvement adds to carried cost (1.5M -> 1.8M), (6) Edit reflects name/value/condition immediately and after reload (verified via /api/finance/assets JSON: name=TEST_EditProbe_Renamed, value=1234567, condition=fair, status=200), (7) selecting 2 assets shows 'Merge 2' button; merge with combine_values=true sums purchase costs and preserves spend history entries in the kept record (2.4M = 1.6M edited-A + 500k B + 300k improvement), (8) delete via confirm removes from register and stays gone after reload. Only cosmetic concern: default expense-account fallback resolves to 'Salaries & Wages DNU' on this campus — tenant COA config, not code.",
+  "rca of the issue": "None — no functional defects found."
+}

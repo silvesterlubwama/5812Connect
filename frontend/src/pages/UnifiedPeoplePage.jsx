@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield, ExternalLink, History } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Search, Plus, Users, Heart, Baby, UserPlus, Filter, Eye, Edit, Trash2, Download, Upload, Award, FileUp, Phone, Mail, RefreshCw, ChevronDown, CheckSquare, Key, Printer, X, Home, GraduationCap, Shield, ExternalLink, History } from 'lucide-react';
 import ClickToCallButton from '../components/ClickToCallButton';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -27,6 +28,12 @@ import { emitDataChanged } from '../services/dataEvents';
 import { BulkDeleteConfirm } from '../components/BulkDeleteConfirm';
 
 import MemberForm from '../components/people/MemberForm';
+import { PersonPicker } from '../components/PersonPicker';
+import { PersonNameField } from '../components/people/PersonNameField';
+import { StaffPicker } from '../components/StaffPicker';
+import { guardPickerEscape } from '../components/SearchSelect';
+import { ChildAccessPanel } from '../components/access/ChildAccessPanel';
+import { FamilyMemberFields, FAMILY_ROLES, MAX_FAMILY_MEMBERS, normaliseRole, defaultCanPickup } from '../components/family/HouseholdPersonForm';
 
 const initials = (name) => (name || '?').split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
 
@@ -55,17 +62,20 @@ export default function UnifiedPeoplePage() {
   // iter344 — family approvals queue (parent-submitted children/guardians)
   const [familyApprovals, setFamilyApprovals] = useState({ children: [], guardians: [] });
   const [familyApprovalsLoading, setFamilyApprovalsLoading] = useState(false);
+  // iter364 — member-submitted edits awaiting review
+  const [changeRequests, setChangeRequests] = useState([]);
   const reloadFamilyApprovals = React.useCallback(async () => {
     setFamilyApprovalsLoading(true);
     try {
       const { familiesApi: f } = await import('../services/api');
-      const r = await f.pendingApprovals();
+      const [r, cr] = await Promise.all([f.pendingApprovals(), f.changeRequests().catch(() => ({ data: [] }))]);
       setFamilyApprovals(r.data || { children: [], guardians: [] });
+      setChangeRequests(cr.data || []);
     } catch { /* silent — not everyone has access */ }
     finally { setFamilyApprovalsLoading(false); }
   }, []);
   useEffect(() => { reloadFamilyApprovals(); }, [reloadFamilyApprovals]);
-  const familyApprovalCount = (familyApprovals.children?.length || 0) + (familyApprovals.guardians?.length || 0);
+  const familyApprovalCount = (familyApprovals.children?.length || 0) + (familyApprovals.guardians?.length || 0) + changeRequests.length;
   // iter344c — family change history modal (per-family audit trail)
   const [historyDialog, setHistoryDialog] = useState({ open: false, familyId: null, familyName: '', rows: [] });
   const openHistoryFor = async (familyId, familyName) => {
@@ -123,7 +133,6 @@ export default function UnifiedPeoplePage() {
   const [editChild, setEditChild] = useState(null);
   const [editChildForm, setEditChildForm] = useState({});
   const [savingChild, setSavingChild] = useState(false);
-  const [parentSearch, setParentSearch] = useState('');
   const [uploadingChildPhoto, setUploadingChildPhoto] = useState(false);
   const [childSearch, setChildSearch] = useState('');
   const [guestSearch, setGuestSearch] = useState('');
@@ -162,9 +171,22 @@ export default function UnifiedPeoplePage() {
   // Edit family
   const [editFamily, setEditFamily] = useState(null);
   const [editFamilyForm, setEditFamilyForm] = useState({});
-  // iter344f — memberships editor
-  const [editFamilyMembers, setEditFamilyMembers] = useState({ parent_ids: [], guardian_ids: [], child_ids: [] });
+  // iter368 — one unified "family members" list (no parents vs guardians split)
+  const [editFamilyMembers, setEditFamilyMembers] = useState({ child_ids: [] });
+  const [famMembers, setFamMembers] = useState([]);
+  const [loadingFamMembers, setLoadingFamMembers] = useState(false);
+  // iter363 — type-to-find on the household editor, plus "add new" when nobody matches.
+  const [famPick, setFamPick] = useState({ member: '', child: '' });
+  const [newPerson, setNewPerson] = useState(null);
+  const [savingNewPerson, setSavingNewPerson] = useState(false);
   const [savingFamily, setSavingFamily] = useState(false);
+  // iter368 — edit one family member (role + pickup permission)
+  const [editAdult, setEditAdult] = useState(null);
+  const [editAdultForm, setEditAdultForm] = useState({});
+  const [savingAdult, setSavingAdult] = useState(false);
+  // iter368 — family members shown on a child's profile
+  const [childMembers, setChildMembers] = useState([]);
+  const [childPick, setChildPick] = useState('');
 
   const [allLocations, setAllLocations] = useState([]);
   const [filterLocation, setFilterLocation] = useState('all');
@@ -282,12 +304,20 @@ export default function UnifiedPeoplePage() {
     if (e) e.stopPropagation();
     setEditChild(c);
     setEditChildForm({ name: c.name || '', date_of_birth: c.date_of_birth || '', gender: c.gender || '', family_id: c.family_id || '', class_group: c.class_group || '', grade: c.grade || '', school: c.school || '', medical_notes: c.medical_notes || '', allergies: c.allergies || '', parent_ids: c.parent_ids || [], location_id: c.location_id || '', is_resident: c.is_resident || false, resident_location_id: c.resident_location_id || '', is_sponsored: c.is_sponsored || false, sponsor_first_name: c.sponsor_first_name || '', is_medical: c.is_medical || false, photo_url: c.photo_url || '' });
+    setChildMembers([]);
+    setChildPick('');
+    loadChildMembers(c.id);
   };
   const saveEditChild = async () => {
     if (!editChild) return;
     setSavingChild(true);
     try {
-      await childrenApi.update(editChild.id, editChildForm);
+      await childrenApi.update(editChild.id, {
+        ...editChildForm,
+        // the server owns this list now (it is written the moment somebody is
+        // added) — send what it last told us, never a stale copy
+        parent_ids: childMembers.filter(m => m.linked_to_child && m.person_id).map(m => m.person_id),
+      });
       setChildren(prev => prev.map(c => c.id === editChild.id ? { ...c, ...editChildForm } : c));
       setEditChild(null);
       toast.success('Child profile saved');
@@ -424,13 +454,71 @@ export default function UnifiedPeoplePage() {
     finally { setImportLoading(false); }
   };
 
+  // iter364 — deep links into this page: /people?open=<id>&kind=child|member|guest|family
+  // (the social-work case dialog links here) and the legacy ?tab= / ?child= /
+  // ?family= params used by notifications. Nothing read them before, so the
+  // link just dropped you on the default tab.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepDone = useRef(false);
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    if (tab) setActiveTab(tab);
+    const openId = searchParams.get('open') || searchParams.get('child') || searchParams.get('member') || searchParams.get('family');
+    if (!openId || deepDone.current) return;
+    deepDone.current = true;
+    const kind = searchParams.get('kind')
+      || (searchParams.get('child') ? 'child' : searchParams.get('family') ? 'family' : '');
+    (async () => {
+      // Fetch the target directly — waiting for the list state to load was
+      // racy and silently landed you on the default tab.
+      const tries = kind === 'family' ? ['family'] : kind === 'child' ? ['child', 'member'] : kind ? [kind, 'child'] : ['child', 'member', 'family'];
+      for (const t of tries) {
+        try {
+          if (t === 'child') {
+            const r = await api.get(`/children/${openId}`);
+            setActiveTab('children'); openEditChild(r.data); return;
+          }
+          if (t === 'family') {
+            const r = await familiesApi.get(openId);
+            setActiveTab('families'); openEditFamily(r.data); return;
+          }
+          const r = await membersApi.get(openId);
+          handleViewMember(r.data); return;
+        } catch { /* try the next collection */ }
+      }
+      toast.error('That person is no longer on file');
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  const clearDeepLink = useCallback(() => {
+    if (searchParams.get('open') || searchParams.get('child') || searchParams.get('member') || searchParams.get('family')) {
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   const openEditGuest = (g) => {
     setEditGuest(g);
     setEditGuestForm({ name: g.name || '', phone: g.phone || '', email: g.email || '', is_parent: g.is_parent || false, is_medical: g.is_medical || false, is_resident: g.is_resident || false, notes: g.notes || '', address: g.address || '', referred_by: g.referred_by || '', location_id: g.location_id || '', spouse_id: g.spouse_id || '', family_id: g.family_id || '' });
   };
 
-  const saveEditGuest = async () => {
-    if (!editGuest) return;
+  // Search-first: somebody typed a name that already belongs to a profile, so
+  // open THAT person instead of letting a second record be created.
+  const openExistingPerson = (p) => {
+    if (!p?.id) return;
+    setShowAddDialog(false); setShowChild(false); setShowGuest(false);
+    setNewMember(prev => ({ ...prev, name: '' }));
+    setChildForm(prev => ({ ...prev, name: '' }));
+    setGuestForm(prev => ({ ...prev, name: '' }));
+    toast.info(`${p.name} is already in the system — opening their profile`);
+    setTimeout(() => {
+      if (p.type === 'child') openEditChild(children.find(c => c.id === p.id) || { id: p.id, name: p.name });
+      else if (p.type === 'guest') openEditGuest(guests.find(g => g.id === p.id) || { id: p.id, name: p.name });
+      else handleViewMember(members.find(m => m.id === p.id) || { id: p.id, name: p.name });
+    }, 60);
+  };
+
+  const saveEditGuest = async () => {    if (!editGuest) return;
     setSavingGuest(true);
     try {
       await guestsApi.update(editGuest.id, editGuestForm);
@@ -447,28 +535,56 @@ export default function UnifiedPeoplePage() {
   const handleAddChild = async (e) => { e.preventDefault(); setSaving(true); try { await childrenApi.create(childForm); toast.success('Child added!'); setShowChild(false); setChildForm({ name: '', date_of_birth: '', gender: '', family_id: '', class_group: '', medical_notes: '', allergies: '', location_id: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
   const handleAddGuest = async (e) => { e.preventDefault(); setSaving(true); try { await guestsApi.create(guestForm); toast.success('Guest recorded!'); setShowGuest(false); setGuestForm({ name: '', email: '', phone: '', visit_date: new Date().toISOString().split('T')[0], referred_by: '', address: '', notes: '' }); fetchPeople(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } finally { setSaving(false); } };
 
+  // iter368 — one family-member list, shared by the household editor and a
+  // child's profile. Adults are written straight away by the backend so the
+  // link can never be lost by a half-finished form.
+  const loadFamilyMembers = async (fid) => {
+    setLoadingFamMembers(true);
+    try {
+      const r = await api.get(`/families/${fid}/members`);
+      setFamMembers(r.data?.members || []);
+    } catch { setFamMembers([]); }
+    finally { setLoadingFamMembers(false); }
+  };
+  const loadChildMembers = async (cid) => {
+    try {
+      const r = await api.get(`/children/${cid}/family-members`);
+      setChildMembers(r.data?.members || []);
+    } catch { setChildMembers([]); }
+  };
+  const addFamilyMember = async (payload) => {
+    try {
+      if (editChild) {
+        await api.post(`/children/${editChild.id}/family-members`, payload);
+        await loadChildMembers(editChild.id);
+      } else {
+        await api.post(`/families/${editFamily.id}/members`, payload);
+        await loadFamilyMembers(editFamily.id);
+      }
+      toast.success(`${payload.name} added to the family`);
+      fetchPeople();
+      return true;
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not add them');
+      return false;
+    }
+  };
+
   const openEditFamily = (f) => {
     setEditFamily(f);
     setEditFamilyForm({ family_name: f.family_name || '', primary_contact_name: f.primary_contact_name || '', primary_contact_email: f.primary_contact_email || '', primary_contact_phone: f.primary_contact_phone || '', address: f.address || '', notes: f.notes || '' });
-    // iter344f — preload the family's current members so the editor can
-    // show + edit parents / guardians / children with cap enforcement.
-    const famParents = guests.filter(g => g.family_id === f.id && g.is_parent).map(g => g.id);
-    const famChildren = children.filter(c => c.family_id === f.id).map(c => c.id);
-    setEditFamilyMembers({
-      parent_ids: famParents.slice(0, 2),
-      guardian_ids: (f.guardian_ids || []).slice(0, 6),
-      child_ids: famChildren,
-    });
+    setEditFamilyMembers({ child_ids: children.filter(c => c.family_id === f.id).map(c => c.id) });
+    loadFamilyMembers(f.id);
   };
   const saveEditFamily = async () => {
     if (!editFamily) return;
     setSavingFamily(true);
     try {
       await familiesApi.update(editFamily.id, editFamilyForm);
-      // Push membership changes through the dedicated members endpoint —
-      // caps (2 parents, 6 guardians) are enforced server-side.
-      await api.put(`/families/${editFamily.id}/members`, editFamilyMembers);
-      setFamilies(prev => prev.map(f => f.id === editFamily.id ? { ...f, ...editFamilyForm, guardian_ids: editFamilyMembers.guardian_ids } : f));
+      // Adults are saved the moment they are added; only the children list
+      // still needs pushing through the membership endpoint.
+      await api.put(`/families/${editFamily.id}/members`, { child_ids: editFamilyMembers.child_ids });
+      setFamilies(prev => prev.map(f => f.id === editFamily.id ? { ...f, ...editFamilyForm } : f));
       toast.success('Family saved');
       setEditFamily(null); fetchPeople();
     } catch (err) { toast.error(err.response?.data?.detail || 'Save failed'); }
@@ -520,7 +636,7 @@ export default function UnifiedPeoplePage() {
           <TabsTrigger value="families" className="gap-1.5" data-testid="tab-families"><Heart size={13} /> Families ({families.length})</TabsTrigger>
           <TabsTrigger value="children" className="gap-1.5" data-testid="tab-children"><Baby size={13} /> Children ({children.length})</TabsTrigger>
           {pendingMembers.length > 0 && <TabsTrigger value="pending" className="gap-1.5" data-testid="tab-pending"><Award size={13} /> Pending ({pendingMembers.length})</TabsTrigger>}
-          {familyApprovalCount > 0 && <TabsTrigger value="family-approvals" className="gap-1.5" data-testid="tab-family-approvals"><Heart size={13} /> Family Approvals ({familyApprovalCount})</TabsTrigger>}
+          <TabsTrigger value="family-approvals" className="gap-1.5" data-testid="tab-family-approvals"><Heart size={13} /> Family Approvals{familyApprovalCount > 0 ? ` (${familyApprovalCount})` : ''}</TabsTrigger>
         </TabsList>
 
         {/* MEMBERS TAB removed — staff/users are managed in /admin; guests & parents below cover non-staff people */}
@@ -565,7 +681,7 @@ export default function UnifiedPeoplePage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Badge variant="secondary" className="text-xs">{childrenForFamily(f.id).length} children</Badge>
+                        <Badge variant="secondary" className="text-xs">{(f.family_members || []).length} members · {childrenForFamily(f.id).length} children</Badge>
                         {isCoordinator && (
                           <div className="flex gap-1">
                             <Button size="sm" variant="ghost" className="h-7 w-7 p-0" data-testid={`edit-family-${f.id}`} onClick={() => openEditFamily(f)} title="Edit"><Eye size={13} /></Button>
@@ -575,10 +691,16 @@ export default function UnifiedPeoplePage() {
                       </div>
                     </div>
                     {childrenForFamily(f.id).length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-2">{childrenForFamily(f.id).map(c => <Badge key={c.id} variant="outline" className="text-[10px]">{c.name} ({c.class_group})</Badge>)}</div>
+                      <div className="flex flex-wrap gap-1.5 mt-2">{childrenForFamily(f.id).map(c => <Badge key={c.id} variant="outline" className="text-[10px]">{c.name}{c.class_group ? ` (${c.class_group})` : ''}</Badge>)}</div>
                     )}
-                    {(f.guardians || []).length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-1.5">{f.guardians.map(g => <Badge key={g.id} variant="secondary" className="text-[10px]">{g.name} ({g.relationship})</Badge>)}</div>
+                    {(f.family_members || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5" data-testid={`family-members-${f.id}`}>
+                        {f.family_members.map(m => (
+                          <Badge key={m.id} variant="secondary" className="text-[10px]">
+                            {m.name} ({m.role}){m.approval_status === 'pending' ? ' · pending' : ''}
+                          </Badge>
+                        ))}
+                      </div>
                     )}
                   </CardContent>
                 </Card>
@@ -663,7 +785,7 @@ export default function UnifiedPeoplePage() {
                             {c.is_resident && <span title="Resident" className="text-blue-500"><Home size={12} /></span>}
                             {c.is_sponsored && <span title="Sponsored" className="text-purple-500"><GraduationCap size={12} /></span>}
                           </div>
-                          {c.parent_ids?.length > 0 && <p className="text-[10px] text-muted-foreground mt-1">Parents: {c.parent_ids.map(pid => { const p = guests.find(g => g.id === pid) || members.find(s => s.id === pid); return p?.name; }).filter(Boolean).join(', ') || c.parent_ids.length}</p>}
+                          {c.parent_ids?.length > 0 && <p className="text-[10px] text-muted-foreground mt-1">Family members: {c.parent_ids.map(pid => { const p = guests.find(g => g.id === pid) || members.find(s => s.id === pid); return p?.name; }).filter(Boolean).join(', ') || c.parent_ids.length}</p>}
                         </div>
                       </div>
                       {isCoordinator && (
@@ -765,9 +887,8 @@ export default function UnifiedPeoplePage() {
           </TabsContent>
         )}
 
-        {/* FAMILY APPROVALS TAB — parent-submitted children + guardians awaiting review */}
-        {familyApprovalCount > 0 && (
-          <TabsContent value="family-approvals" className="mt-4" data-testid="family-approvals-tab">
+        {/* FAMILY APPROVALS TAB — parent-submitted children, guardians and edits */}
+        <TabsContent value="family-approvals" className="mt-4" data-testid="family-approvals-tab">
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs text-muted-foreground">Every action here is appended to the family&apos;s audit trail.</p>
               <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setHistoryDialog({ open: true, familyId: null, familyName: 'All families', rows: [] })} data-testid="fa-open-history"><History size={13} /> Change history</Button>
@@ -845,10 +966,65 @@ export default function UnifiedPeoplePage() {
                   ))}
                 </div>
               )}
+              {changeRequests.length > 0 && (
+                <div className="space-y-2" data-testid="fa-change-requests">
+                  <p className="text-xs font-semibold uppercase text-muted-foreground">Edits awaiting review ({changeRequests.length})</p>
+                  {changeRequests.map(r => (
+                    <Card key={r.id} className="shadow-soft rounded-xl" data-testid={`fa-change-${r.id}`}>
+                      <CardContent className="p-3 space-y-2">
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium">{r.target_name || r.kind} <span className="text-xs text-muted-foreground font-normal">— {r.kind}</span></p>
+                            <p className="text-[11px] text-muted-foreground">
+                              {r.family_name ? `Family: ${r.family_name} · ` : ''}submitted by {r.submitted_by_name || 'a member'}
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" className="h-7 gap-1 text-green-700 bg-green-100 hover:bg-green-200" data-testid={`fa-approve-change-${r.id}`} onClick={async () => {
+                              try {
+                                const { familiesApi: f } = await import('../services/api');
+                                await f.decideChangeRequest(r.id, 'approve');
+                                toast.success('Change applied'); reloadFamilyApprovals(); fetchPeople();
+                              } catch (err) { toast.error(err.response?.data?.detail || 'Approve failed'); }
+                            }}>Approve</Button>
+                            <Button size="sm" variant="outline" className="h-7 gap-1 text-red-600" data-testid={`fa-reject-change-${r.id}`} onClick={async () => {
+                              const reason = window.prompt('Reject this change? Optional reason (shared with the member):');
+                              if (reason === null) return;
+                              try {
+                                const { familiesApi: f } = await import('../services/api');
+                                await f.decideChangeRequest(r.id, 'reject', reason || '');
+                                toast.success('Rejected'); reloadFamilyApprovals();
+                              } catch (err) { toast.error(err.response?.data?.detail || 'Reject failed'); }
+                            }}>Reject</Button>
+                          </div>
+                        </div>
+                        <div className="rounded-lg border divide-y text-[11px]">
+                          {Object.entries(r.changes || {}).map(([field, diff]) => (
+                            <div key={field} className="flex items-center gap-2 p-2">
+                              <span className="w-32 shrink-0 text-muted-foreground">{r.field_labels?.[field] || field}</span>
+                              <span className="line-through text-muted-foreground truncate">{String(diff.from ?? '') || '—'}</span>
+                              <span>&rarr;</span>
+                              <span className="font-medium truncate">{String(diff.to ?? '') || '—'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
               {familyApprovalsLoading && <div className="animate-pulse h-16 bg-muted rounded-xl" />}
+              {!familyApprovalsLoading && familyApprovalCount === 0 && (
+                <Card className="shadow-soft rounded-xl" data-testid="fa-empty">
+                  <CardContent className="py-10 text-center">
+                    <Heart size={34} className="mx-auto mb-3 opacity-20" />
+                    <p className="text-sm text-muted-foreground">Nothing waiting for review</p>
+                    <p className="text-xs text-muted-foreground mt-1">New children, guardians and member edits from the portal land here first.</p>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </TabsContent>
-        )}
       </Tabs>
 
       {/* ADD MEMBER DIALOG */}
@@ -888,10 +1064,12 @@ export default function UnifiedPeoplePage() {
 
       {/* ADD MEMBER DIALOG */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Add Person</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto" onEscapeKeyDown={guardPickerEscape}>
+          <DialogHeader><DialogTitle>Add Person</DialogTitle><DialogDescription>Find them first — a match opens the profile that already exists.</DialogDescription></DialogHeader>
           <form onSubmit={handleAddMember}>
-            <MemberForm data={newMember} onChange={setNewMember} locations={allLocations} showDepartment={true} />
+            <MemberForm data={newMember} onChange={setNewMember} locations={allLocations} showDepartment={true}
+              nameField={<PersonNameField value={newMember.name} onChange={v => setNewMember({ ...newMember, name: v })}
+                kinds="member,user,guest,child" testId="add-person-name" onOpenExisting={openExistingPerson} />} />
             <div className="flex gap-3 pt-4"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowAddDialog(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={savingMember || !newMember.name} data-testid="save-member-btn">{savingMember ? 'Saving...' : 'Save'}</Button></div>
           </form>
         </DialogContent>
@@ -967,15 +1145,27 @@ export default function UnifiedPeoplePage() {
 
       {/* FAMILY DIALOG */}
       <Dialog open={showFamily} onOpenChange={setShowFamily}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Add Family</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" onEscapeKeyDown={guardPickerEscape}>
+          <DialogHeader><DialogTitle>Add Family</DialogTitle><DialogDescription>The contact can be linked to a profile that already exists.</DialogDescription></DialogHeader>
           <form onSubmit={handleAddFamily} className="space-y-3 mt-2">
             <div className="space-y-1.5"><Label>Family Name *</Label><Input value={familyForm.family_name} onChange={e => setFamilyForm({ ...familyForm, family_name: e.target.value })} required /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5"><Label>Contact Name</Label><Input value={familyForm.primary_contact_name} onChange={e => setFamilyForm({ ...familyForm, primary_contact_name: e.target.value })} /></div>
-              <div className="space-y-1.5"><Label>Contact Phone</Label><Input value={familyForm.primary_contact_phone} onChange={e => setFamilyForm({ ...familyForm, primary_contact_phone: e.target.value })} /></div>
+            <div className="space-y-1.5"><Label>Contact Name</Label>
+              <PersonPicker value={familyForm.primary_contact_name} kinds="member,user,guest"
+                testId="family-contact-picker" addNewLabel="as the contact"
+                placeholder="Type their name to find them first…"
+                onChange={v => setFamilyForm({ ...familyForm, primary_contact_name: v })}
+                onPick={p => setFamilyForm({
+                  ...familyForm, primary_contact_name: p.name,
+                  primary_contact_email: p.email || familyForm.primary_contact_email,
+                  primary_contact_phone: p.phone || familyForm.primary_contact_phone,
+                  primary_contact_person_id: p.id, primary_contact_person_type: p.type,
+                })}
+                onAddNew={name => setFamilyForm({ ...familyForm, primary_contact_name: name, primary_contact_person_id: '', primary_contact_person_type: '' })} />
             </div>
-            <div className="space-y-1.5"><Label>Contact Email</Label><Input type="email" value={familyForm.primary_contact_email} onChange={e => setFamilyForm({ ...familyForm, primary_contact_email: e.target.value })} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5"><Label>Contact Phone</Label><Input value={familyForm.primary_contact_phone} onChange={e => setFamilyForm({ ...familyForm, primary_contact_phone: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label>Contact Email</Label><Input type="email" value={familyForm.primary_contact_email} onChange={e => setFamilyForm({ ...familyForm, primary_contact_email: e.target.value })} /></div>
+            </div>
             <div className="flex gap-3 pt-2"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowFamily(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Saving...' : 'Add Family'}</Button></div>
           </form>
         </DialogContent>
@@ -983,10 +1173,15 @@ export default function UnifiedPeoplePage() {
 
       {/* CHILD DIALOG */}
       <Dialog open={showChild} onOpenChange={setShowChild}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Add Child</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" onEscapeKeyDown={guardPickerEscape}>
+          <DialogHeader><DialogTitle>Add Child</DialogTitle><DialogDescription>Search for the child first, then fill in the rest.</DialogDescription></DialogHeader>
           <form onSubmit={handleAddChild} className="space-y-3 mt-2">
-            <div className="space-y-1.5"><Label>Name *</Label><Input value={childForm.name} onChange={e => setChildForm({ ...childForm, name: e.target.value })} required /></div>
+            <div className="space-y-1.5"><Label>Name *</Label>
+              <PersonNameField value={childForm.name} onChange={v => setChildForm({ ...childForm, name: v })}
+                kinds="child" testId="add-child-name" addNewLabel="as a new child"
+                placeholder="Type the child's name to find them first…"
+                onOpenExisting={openExistingPerson} />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Date of Birth</Label><Input type="date" value={childForm.date_of_birth} onChange={e => setChildForm({ ...childForm, date_of_birth: e.target.value })} /></div>
               <div className="space-y-1.5"><Label>Gender</Label>
@@ -998,10 +1193,11 @@ export default function UnifiedPeoplePage() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Family</Label>
-                <Select value={childForm.family_id} onValueChange={v => setChildForm({ ...childForm, family_id: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                  <SelectContent>{families.map(f => <SelectItem key={f.id} value={f.id}>{f.family_name}</SelectItem>)}</SelectContent>
-                </Select>
+                <StaffPicker testId="add-child-family" value={childForm.family_id}
+                  placeholder="Type a family name… (or leave blank)"
+                  emptyLabel="No family by that name"
+                  options={families.map(f => ({ id: f.id, name: (f.family_name || '').replace(/\s+/g, ' ').trim(), hint: f.primary_contact_name || '' }))}
+                  onChange={id => setChildForm({ ...childForm, family_id: id || '' })} />
               </div>
               <div className="space-y-1.5"><Label>Class / Group</Label><Input value={childForm.class_group} onChange={e => setChildForm({ ...childForm, class_group: e.target.value })} /></div>
             </div>
@@ -1013,17 +1209,21 @@ export default function UnifiedPeoplePage() {
                 <SelectContent>{allLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
-            <div className="flex gap-3 pt-2"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowChild(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Saving...' : 'Add Child'}</Button></div>
+            <div className="flex gap-3 pt-2"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowChild(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving || !childForm.name.trim()} data-testid="save-child-btn">{saving ? 'Saving...' : 'Add Child'}</Button></div>
           </form>
         </DialogContent>
       </Dialog>
 
       {/* GUEST DIALOG */}
       <Dialog open={showGuest} onOpenChange={setShowGuest}>
-        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Record Guest Visit</DialogTitle></DialogHeader>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" onEscapeKeyDown={guardPickerEscape}>
+          <DialogHeader><DialogTitle>Record Guest Visit</DialogTitle><DialogDescription>Search for them first — members and past guests are already here.</DialogDescription></DialogHeader>
           <form onSubmit={handleAddGuest} className="space-y-3 mt-2">
-            <div className="space-y-1.5"><Label>Name *</Label><Input value={guestForm.name} onChange={e => setGuestForm({ ...guestForm, name: e.target.value })} required /></div>
+            <div className="space-y-1.5"><Label>Name *</Label>
+              <PersonNameField value={guestForm.name} onChange={v => setGuestForm({ ...guestForm, name: v })}
+                kinds="guest,member,user" testId="add-guest-name" addNewLabel="as a new guest"
+                onOpenExisting={openExistingPerson} />
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={guestForm.email} onChange={e => setGuestForm({ ...guestForm, email: e.target.value })} /></div>
               <div className="space-y-1.5"><Label>Phone</Label><Input value={guestForm.phone} onChange={e => setGuestForm({ ...guestForm, phone: e.target.value })} /></div>
@@ -1033,7 +1233,7 @@ export default function UnifiedPeoplePage() {
               <div className="space-y-1.5"><Label>Referred By</Label><Input value={guestForm.referred_by} onChange={e => setGuestForm({ ...guestForm, referred_by: e.target.value })} /></div>
             </div>
             <div className="space-y-1.5"><Label>Notes</Label><Textarea rows={2} value={guestForm.notes} onChange={e => setGuestForm({ ...guestForm, notes: e.target.value })} /></div>
-            <div className="flex gap-3 pt-2"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowGuest(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving}>{saving ? 'Saving...' : 'Record Visit'}</Button></div>
+            <div className="flex gap-3 pt-2"><Button type="button" variant="outline" className="flex-1" onClick={() => setShowGuest(false)}>Cancel</Button><Button type="submit" className="flex-1" disabled={saving || !guestForm.name.trim()} data-testid="save-guest-btn">{saving ? 'Saving...' : 'Record Visit'}</Button></div>
           </form>
         </DialogContent>
       </Dialog>
@@ -1082,7 +1282,7 @@ export default function UnifiedPeoplePage() {
       </Dialog>
 
       {/* EDIT CHILD DIALOG */}
-      <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) { setEditChild(null); setParentSearch(''); } }}>
+      <Dialog open={!!editChild} onOpenChange={(o) => { if (!o) { setEditChild(null); setChildPick(''); clearDeepLink(); } }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 flex-wrap">
@@ -1223,64 +1423,58 @@ export default function UnifiedPeoplePage() {
                 Medical Enabled
               </label>
             </div>
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label>Parents / Guardians</Label>
-                <Button size="sm" variant="outline" className="h-6 text-xs gap-1" onClick={() => setParentSearch(parentSearch ? '' : ' ')} data-testid="add-parent-btn"><Plus size={11} /> Add Parent</Button>
-              </div>
-              {/* Selected parents */}
-              {(editChildForm.parent_ids || []).length > 0 && (
+            <div className="space-y-1.5" data-testid="child-family-members">
+              <Label>Family members</Label>
+              <p className="text-[11px] text-muted-foreground">
+                Type a name to find anyone already in the system — they are linked as soon as you pick them.
+              </p>
+              {childMembers.length > 0 && (
                 <div className="space-y-1.5">
-                  {(editChildForm.parent_ids || []).map(pid => {
-                    const p = guests.find(g => g.id === pid) || members.find(s => s.id === pid);
-                    if (!p) return null;
-                    return (
-                      <div key={pid} className="flex items-center justify-between p-2 rounded-lg border border-border bg-accent/20">
-                        <div>
-                          <p className="text-sm font-medium">{p.name}</p>
-                          <p className="text-[10px] text-muted-foreground">{p.phone || p.email || ''} {p.role ? `(${p.role})` : p.is_parent ? '(Parent)' : ''}</p>
-                        </div>
-                        <button className="text-destructive" onClick={() => setEditChildForm({ ...editChildForm, parent_ids: (editChildForm.parent_ids || []).filter(id => id !== pid) })}><X size={14} /></button>
+                  {childMembers.map(m => (
+                    <div key={m.person_id || m.id} className="flex items-center justify-between p-2 rounded-lg border border-border bg-accent/20" data-testid={`child-member-${m.person_id || m.id}`}>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{m.name}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">
+                          {[m.role, m.phone || m.email, m.can_pickup === false ? 'no pickup' : 'can pick up',
+                            m.linked_to_child ? null : 'household only'].filter(Boolean).join(' · ')}
+                        </p>
                       </div>
-                    );
-                  })}
+                      <div className="flex items-center gap-1 shrink-0">
+                        {m.linked_to_child ? (
+                          <button className="text-destructive" title="Unlink from this child" data-testid={`child-member-remove-${m.person_id || m.id}`}
+                            onClick={async () => {
+                              try {
+                                await api.delete(`/children/${editChild.id}/family-members/${m.person_id}`);
+                                await loadChildMembers(editChild.id);
+                                toast.success('Unlinked from this child');
+                              } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+                            }}><X size={14} /></button>
+                        ) : (
+                          <Button size="sm" variant="outline" className="h-6 text-[10px]" data-testid={`child-member-link-${m.person_id || m.id}`}
+                            onClick={() => addFamilyMember({ name: m.name, person_id: m.person_id, person_type: m.person_type, role: m.role, can_pickup: m.can_pickup })}>
+                            Link to child
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
-              {/* Search to add parents */}
-              {parentSearch !== '' && (
-                <div className="space-y-1.5">
-                  <Input
-                    placeholder="Search staff or guests by name or phone..."
-                    value={parentSearch.trim() ? parentSearch : ''}
-                    onChange={e => setParentSearch(e.target.value)}
-                    className="h-8 text-xs"
-                    data-testid="parent-search-input"
-                    autoFocus
-                  />
-                  <div className="max-h-36 overflow-y-auto border rounded-lg p-1 space-y-0.5">
-                    {(() => {
-                      const q = parentSearch.trim().toLowerCase();
-                      const currentIds = new Set(editChildForm.parent_ids || []);
-                      // Search guests (parents) + all staff
-                      const guestMatches = guests.filter(g => !currentIds.has(g.id) && (q.length < 2 || (g.name || '').toLowerCase().includes(q) || (g.phone || '').includes(q)));
-                      const staffMatches = members.filter(s => !currentIds.has(s.id) && (q.length < 2 || (s.name || '').toLowerCase().includes(q) || (s.phone || '').includes(q)));
-                      const results = [...guestMatches.map(g => ({ ...g, _type: g.is_parent ? 'parent' : 'guest' })), ...staffMatches.map(s => ({ ...s, _type: 'staff' }))].slice(0, 20);
-                      if (results.length === 0) return <p className="text-xs text-muted-foreground text-center py-2">No matches found</p>;
-                      return results.map(r => (
-                        <button key={r.id} type="button" className="w-full text-left p-2 rounded hover:bg-accent/50 text-sm flex items-center justify-between"
-                          onClick={() => { setEditChildForm(prev => ({ ...prev, parent_ids: [...(prev.parent_ids || []), r.id] })); setParentSearch(''); }}>
-                          <span>{r.name} {r.phone ? <span className="text-muted-foreground text-xs">({r.phone})</span> : ''}</span>
-                          <Badge variant="outline" className="text-[9px] capitalize">{r._type}</Badge>
-                        </button>
-                      ));
-                    })()}
-                  </div>
-                </div>
-              )}
-              {(editChildForm.parent_ids || []).length === 0 && parentSearch === '' && (
-                <p className="text-xs text-muted-foreground py-2">No parents linked. Click "Add Parent" to search.</p>
+              <PersonPicker size="sm" testId="child-add-member" kinds="guest,member,user"
+                value={childPick} placeholder="Start typing their name…"
+                addNewLabel="as a new family member"
+                onChange={setChildPick}
+                onPick={async p => {
+                  setChildPick('');
+                  await addFamilyMember({ name: p.name, person_id: p.id, person_type: p.type, role: 'Guardian', can_pickup: true });
+                }}
+                onAddNew={typed => { setChildPick(''); setNewPerson({ name: typed, role: 'Guardian', can_pickup: true, is_child: false, child_id: editChild?.id, phone: '', email: '', gender: '', date_of_birth: '', national_id: '', address: '' }); }}
+              />
+              {childMembers.length === 0 && (
+                <p className="text-xs text-muted-foreground py-1">Nobody linked yet.</p>
               )}
             </div>
+            {editChild?.id && <ChildAccessPanel childId={editChild.id} childName={editChild.name} />}
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditChild(null)}>Cancel</Button>
               <Button className="flex-1" data-testid="save-child-btn" onClick={saveEditChild} disabled={savingChild}>{savingChild ? 'Saving...' : 'Save'}</Button>
@@ -1301,7 +1495,7 @@ export default function UnifiedPeoplePage() {
       </Dialog>
 
       {/* EDIT FAMILY DIALOG */}
-      <Dialog open={!!editFamily} onOpenChange={(o) => { if (!o) setEditFamily(null); }}>
+      <Dialog open={!!editFamily} onOpenChange={(o) => { if (!o) { setEditFamily(null); clearDeepLink(); } }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle>Edit Family: {editFamily?.family_name}</DialogTitle></DialogHeader>
           <div className="space-y-3 mt-2">
@@ -1313,53 +1507,50 @@ export default function UnifiedPeoplePage() {
             <div className="space-y-1.5"><Label>Contact Email</Label><Input type="email" value={editFamilyForm.primary_contact_email || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, primary_contact_email: e.target.value })} /></div>
             <div className="space-y-1.5"><Label>Address</Label><Input value={editFamilyForm.address || ''} onChange={e => setEditFamilyForm({ ...editFamilyForm, address: e.target.value })} /></div>
 
-            {/* iter344f — Members editor: parents (max 2), guardians (max 6), children */}
-            <div className="pt-3 border-t space-y-3">
+            {/* iter368 — ONE family-members list (roles + pickup), then children */}
+            <div className="pt-3 border-t space-y-3" data-testid="fam-members-editor">
               <div>
-                <Label className="text-xs">Parents ({editFamilyMembers.parent_ids.length}/2)</Label>
-                <div className="space-y-1.5 mt-1">
-                  {editFamilyMembers.parent_ids.map(pid => {
-                    const p = guests.find(g => g.id === pid);
-                    return (
-                      <div key={pid} className="flex items-center justify-between border rounded-lg p-2" data-testid={`fam-parent-${pid}`}>
-                        <span className="text-xs truncate">{p?.name || pid}{p?.phone ? ` · ${p.phone}` : ''}</span>
-                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => setEditFamilyMembers(m => ({ ...m, parent_ids: m.parent_ids.filter(x => x !== pid) }))} data-testid={`fam-parent-remove-${pid}`}><X size={12} /></Button>
-                      </div>
-                    );
-                  })}
-                  {editFamilyMembers.parent_ids.length < 2 && (
-                    <Select value="" onValueChange={v => setEditFamilyMembers(m => m.parent_ids.includes(v) ? m : { ...m, parent_ids: [...m.parent_ids, v].slice(0, 2) })}>
-                      <SelectTrigger className="h-8 text-xs" data-testid="fam-add-parent"><SelectValue placeholder="Add parent…" /></SelectTrigger>
-                      <SelectContent>
-                        {guests.filter(g => g.is_parent && !editFamilyMembers.parent_ids.includes(g.id)).slice(0, 200).map(g => (
-                          <SelectItem key={g.id} value={g.id}>{g.name}{g.phone ? ` · ${g.phone}` : ''}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">Family members ({famMembers.length}/{MAX_FAMILY_MEMBERS})</Label>
+                  {loadingFamMembers && <span className="text-[10px] text-muted-foreground">loading…</span>}
                 </div>
-              </div>
-              <div>
-                <Label className="text-xs">Guardians ({editFamilyMembers.guardian_ids.length}/6)</Label>
                 <div className="space-y-1.5 mt-1">
-                  {editFamilyMembers.guardian_ids.map(gid => {
-                    const g = guests.find(x => x.id === gid);
-                    return (
-                      <div key={gid} className="flex items-center justify-between border rounded-lg p-2" data-testid={`fam-guardian-${gid}`}>
-                        <span className="text-xs truncate">{g?.name || gid}{g?.phone ? ` · ${g.phone}` : ''}</span>
-                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => setEditFamilyMembers(m => ({ ...m, guardian_ids: m.guardian_ids.filter(x => x !== gid) }))} data-testid={`fam-guardian-remove-${gid}`}><X size={12} /></Button>
+                  {famMembers.length === 0 && !loadingFamMembers && (
+                    <p className="text-[11px] text-muted-foreground">Nobody yet — type a name below to add the first.</p>
+                  )}
+                  {famMembers.map(m => (
+                    <div key={m.id || m.person_id} className="flex items-center justify-between border rounded-lg p-2" data-testid={`fam-member-${m.id || m.person_id}`}>
+                      <span className="text-xs truncate">
+                        {m.name} · {m.role}
+                        {m.approval_status === 'pending' ? ' · pending review' : ''}
+                        {m.can_pickup === false ? ' · no pickup' : ''}
+                      </span>
+                      <div className="flex gap-1 shrink-0">
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0" data-testid={`fam-member-edit-${m.id}`}
+                          onClick={() => { setEditAdult(m); setEditAdultForm({ name: m.name || '', phone: m.phone || '', email: m.email || '', role: m.role || 'Guardian', can_pickup: m.can_pickup !== false }); }}><Edit size={12} /></Button>
+                        <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" data-testid={`fam-member-remove-${m.id}`}
+                          onClick={async () => {
+                            try {
+                              await api.delete(`/families/${editFamily.id}/members/${m.id}`);
+                              await loadFamilyMembers(editFamily.id);
+                              toast.success('Removed from the family');
+                              fetchPeople();
+                            } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+                          }}><X size={12} /></Button>
                       </div>
-                    );
-                  })}
-                  {editFamilyMembers.guardian_ids.length < 6 && (
-                    <Select value="" onValueChange={v => setEditFamilyMembers(m => m.guardian_ids.includes(v) ? m : { ...m, guardian_ids: [...m.guardian_ids, v].slice(0, 6) })}>
-                      <SelectTrigger className="h-8 text-xs" data-testid="fam-add-guardian"><SelectValue placeholder="Add guardian…" /></SelectTrigger>
-                      <SelectContent>
-                        {guests.filter(g => !editFamilyMembers.guardian_ids.includes(g.id) && !editFamilyMembers.parent_ids.includes(g.id)).slice(0, 200).map(g => (
-                          <SelectItem key={g.id} value={g.id}>{g.name}{g.phone ? ` · ${g.phone}` : ''}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    </div>
+                  ))}
+                  {famMembers.length < MAX_FAMILY_MEMBERS && (
+                    <PersonPicker size="sm" testId="fam-add-member" kinds="guest,member,user"
+                      value={famPick.member} placeholder="Type a name to find them…"
+                      addNewLabel="as a new family member"
+                      onChange={v => setFamPick(p => ({ ...p, member: v }))}
+                      onPick={async p => {
+                        setFamPick(x => ({ ...x, member: '' }));
+                        await addFamilyMember({ name: p.name, person_id: p.id, person_type: p.type, role: 'Guardian', can_pickup: true });
+                      }}
+                      onAddNew={typed => { setFamPick(x => ({ ...x, member: '' })); setNewPerson({ name: typed, role: 'Guardian', can_pickup: true, is_child: false, phone: '', email: '', gender: '', date_of_birth: '', national_id: '', address: '' }); }}
+                    />
                   )}
                 </div>
               </div>
@@ -1375,14 +1566,13 @@ export default function UnifiedPeoplePage() {
                       </div>
                     );
                   })}
-                  <Select value="" onValueChange={v => setEditFamilyMembers(m => m.child_ids.includes(v) ? m : { ...m, child_ids: [...m.child_ids, v] })}>
-                    <SelectTrigger className="h-8 text-xs" data-testid="fam-add-child"><SelectValue placeholder="Add child…" /></SelectTrigger>
-                    <SelectContent>
-                      {children.filter(c => !editFamilyMembers.child_ids.includes(c.id)).slice(0, 200).map(c => (
-                        <SelectItem key={c.id} value={c.id}>{c.name}{c.date_of_birth ? ` · ${c.date_of_birth}` : ''}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <PersonPicker size="sm" testId="fam-add-child" kinds="child"
+                    value={famPick.child} placeholder="Type a child's name to find them…"
+                    addNewLabel="as a new child"
+                    onChange={v => setFamPick(p => ({ ...p, child: v }))}
+                    onPick={p => { setEditFamilyMembers(m => m.child_ids.includes(p.id) ? m : { ...m, child_ids: [...m.child_ids, p.id] }); setFamPick(x => ({ ...x, child: '' })); }}
+                    onAddNew={typed => setNewPerson({ name: typed, role: 'Other', is_child: true, phone: '', email: '', gender: '', date_of_birth: '', national_id: '', address: '' })}
+                  />
                 </div>
               </div>
             </div>
@@ -1390,6 +1580,112 @@ export default function UnifiedPeoplePage() {
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditFamily(null)}>Cancel</Button>
               <Button className="flex-1" data-testid="save-family-btn" onClick={saveEditFamily} disabled={savingFamily}>{savingFamily ? 'Saving...' : 'Save'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* iter363 — nobody matched the search, so create the profile here */}
+      <Dialog open={!!newPerson} onOpenChange={o => { if (!o) setNewPerson(null); }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add {newPerson?.name || 'a new person'}</DialogTitle>
+            <DialogDescription>Creates their profile and attaches it to {editFamily?.family_name || 'this household'}</DialogDescription>
+          </DialogHeader>
+          {newPerson && (
+            <div className="space-y-3 mt-2">
+              <div className="space-y-1.5"><Label>Full name *</Label><Input value={newPerson.name} onChange={e => setNewPerson({ ...newPerson, name: e.target.value })} data-testid="new-person-name" /></div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5"><Label>{newPerson.is_child ? 'Relationship' : 'Role in the family'}</Label>
+                  {newPerson.is_child ? (
+                    <Input value="Child" disabled data-testid="new-person-relationship" />
+                  ) : (
+                    <Select value={normaliseRole(newPerson.role)} onValueChange={v => setNewPerson({ ...newPerson, role: v, can_pickup: defaultCanPickup(v) })}>
+                      <SelectTrigger data-testid="new-person-role"><SelectValue /></SelectTrigger>
+                      <SelectContent>{FAMILY_ROLES.map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
+                    </Select>
+                  )}
+                </div>
+                <div className="space-y-1.5"><Label>Date of birth</Label><Input type="date" value={newPerson.date_of_birth} onChange={e => setNewPerson({ ...newPerson, date_of_birth: e.target.value })} data-testid="new-person-dob" /></div>
+              </div>
+              {!newPerson.is_child && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5"><Label>Phone</Label><Input value={newPerson.phone} onChange={e => setNewPerson({ ...newPerson, phone: e.target.value })} data-testid="new-person-phone" /></div>
+                  <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={newPerson.email} onChange={e => setNewPerson({ ...newPerson, email: e.target.value })} data-testid="new-person-email" /></div>
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5"><Label>Gender</Label>
+                  <Select value={newPerson.gender} onValueChange={v => setNewPerson({ ...newPerson, gender: v })}>
+                    <SelectTrigger data-testid="new-person-gender"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent><SelectItem value="male">Male</SelectItem><SelectItem value="female">Female</SelectItem></SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5"><Label>National ID / passport</Label><Input value={newPerson.national_id} onChange={e => setNewPerson({ ...newPerson, national_id: e.target.value })} data-testid="new-person-nid" /></div>
+              </div>
+              <div className="space-y-1.5"><Label>Address</Label><Input value={newPerson.address} onChange={e => setNewPerson({ ...newPerson, address: e.target.value })} data-testid="new-person-address" /></div>
+              {!newPerson.is_child && (
+                <label className="flex items-start justify-between gap-3 rounded-lg border p-3 cursor-pointer" data-testid="new-person-pickup-row">
+                  <span className="text-xs">
+                    <span className="block font-medium text-sm">Can pick up children</span>
+                    <span className="text-muted-foreground">Allowed to collect the children from a campus or event</span>
+                  </span>
+                  <Switch checked={newPerson.can_pickup !== false}
+                    onCheckedChange={v => setNewPerson({ ...newPerson, can_pickup: v })}
+                    data-testid="new-person-pickup-toggle" />
+                </label>
+              )}
+              <div className="flex gap-3 pt-2">
+                <Button variant="outline" className="flex-1" onClick={() => setNewPerson(null)}>Cancel</Button>
+                <Button className="flex-1" disabled={savingNewPerson || !newPerson.name?.trim() || (!editFamily && !newPerson.child_id)} data-testid="new-person-save"
+                  onClick={async () => {
+                    setSavingNewPerson(true);
+                    try {
+                      if (newPerson.is_child) {
+                        const r = await api.post(`/families/${editFamily.id}/people`, { ...newPerson, relationship: 'Child' });
+                        const created = r.data?.person;
+                        setEditFamilyMembers(m => ({ ...m, child_ids: [...m.child_ids, created.id] }));
+                        toast.success(`${created?.name} added to the household`);
+                        setNewPerson(null);
+                        fetchPeople?.();
+                      } else if (await addFamilyMember(newPerson)) {
+                        setNewPerson(null);
+                      }
+                    } catch (e) { toast.error(e.response?.data?.detail || 'Could not add them'); }
+                    setSavingNewPerson(false);
+                  }}>{savingNewPerson ? 'Saving…' : 'Create profile'}</Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* iter368 — edit one family member (role + pickup permission) */}
+      <Dialog open={!!editAdult} onOpenChange={o => { if (!o) setEditAdult(null); }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit {editAdult?.name}</DialogTitle>
+            <DialogDescription>Family member on {editFamily?.family_name || 'this family'}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 mt-2">
+            <div className="space-y-1.5"><Label>Full name *</Label>
+              <Input value={editAdultForm.name || ''} onChange={e => setEditAdultForm({ ...editAdultForm, name: e.target.value })} data-testid="fam-adult-name" />
+            </div>
+            <FamilyMemberFields form={editAdultForm} setForm={setEditAdultForm} testIdPrefix="fam-adult" />
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setEditAdult(null)}>Cancel</Button>
+              <Button className="flex-1" data-testid="fam-adult-save" disabled={savingAdult || !editAdultForm.name?.trim()}
+                onClick={async () => {
+                  setSavingAdult(true);
+                  try {
+                    await api.put(`/families/${editFamily.id}/members/${editAdult.id}`, editAdultForm);
+                    await loadFamilyMembers(editFamily.id);
+                    toast.success('Family member updated');
+                    setEditAdult(null);
+                    fetchPeople();
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Save failed'); }
+                  setSavingAdult(false);
+                }}>{savingAdult ? 'Saving…' : 'Save'}</Button>
             </div>
           </div>
         </DialogContent>

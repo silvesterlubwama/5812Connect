@@ -1715,3 +1715,163 @@ now show a cover image with a thumbnail strip. Verified upload → serve
 
 Test data cleaned; Gala Ticket left published with one real generated photo so
 the shop is demonstrable (stock 97).
+
+## iter364 — 2026-06 (fork) — Family data-loss fixes, parent vs pickup, approval flow, duplicate merge, deep links
+
+### Bugs fixed (all reported by the user this session)
+1. **Families disappearing from the Families tab** — `PUT /api/families/{id}` replaced the whole
+   document from a `FamilyCreate` payload, so the admin edit dialog (which sends only name/contact/
+   address) blanked `location_id` (family fell out of the campus filter → looked deleted) and wiped
+   `guardians[]` / `parent_ids[]`. Now a whitelisted partial merge that can never clear the campus.
+   `GET /api/families` also lists families with no campus so nothing can become invisible again.
+   `scripts/repair_family_locations.py` backfilled 3 already-invisible families (incl. Lubwama Family).
+2. **`POST /api/families/bulk-delete`** had no cascade → orphaned children/guests/users/members.
+   Now soft-deletes to `deleted_items` and unlinks, same as the single delete.
+3. **`PUT /api/families/{id}/members`** unlinked ALL children/parents before re-linking. Now only
+   touches the dimensions present in the body and only unlinks ids that are no longer listed.
+4. **"Henry Lubega shows a different name / wrong campus" + "editing staff and users doesn't save"** —
+   `get_user_full_profile` matched a member row with `{"email": ""}`, so any user without an email
+   merged with a random member. New `deps.find_linked_member()` never matches on a blank email and
+   rejects `user_id` links whose name/email disagree. `_sync_member_profile` resolves the link from
+   `users.member_id` / pre-edit values (rename-safe) and pins `users.member_id`.
+   `scripts/repair_person_links.py` fixed a guest whose members-mirror carried another user's identity.
+   `photo_url` added to ACCOUNT_FIELDS (was silently dropped on save).
+5. **Profile pictures "change but don't"** — `_save_photo` wrote the same object key every time, so
+   the URL never changed and the browser/CDN served the cached old image. Keys now carry a random
+   suffix, and the new URL is mirrored onto every copy of the person (user, member, guest, guardian row).
+6. **Social case deep links** — `/social-work?case=<id>` / `?case_id=` / `?subject_id=` now open the
+   case (SocialWorkPage had no query-param handling); opening a case puts `?case=<id>` in the URL.
+   `GET /api/social-work/cases` accepts `subject_id`.
+7. **Social profile → child profile deep link** — `/people?open=<id>&kind=child|member|family`
+   (plus `?tab=`, `?child=`, `?family=`) now resolves the target with a direct GET and opens its dialog.
+8. **Outreach planning showed past/cancelled events** — `outreach-events` now starts at today (was
+   today-14d) and excludes cancelled/canceled/completed/closed/done/archived; `GET /plans` hides past
+   plans (`include_past=true` to opt in) and plans whose event was cancelled; `my-slots` drops
+   cancelled-event slots.
+
+### Features added
+- **Parent vs authorised pickup person**: household adults carry `is_parent` / `can_pickup` /
+  `parent_locked`. Spouse/Guardian/parent relationships lock to parent; anyone else can be
+  "authorised pickup only". Asked in both the portal and the admin household form
+  (`components/family/HouseholdPersonForm.jsx`). Kiosk household rows expose the flags.
+  `scripts/backfill_guardian_roles.py` migrated existing rows.
+- **Two parent sections** (portal + admin): read-only "On record with staff" (profiles staff own)
+  and editable "Added by your household", plus a separate "Authorised pickup only" card.
+- **Front-end approval flow for member edits**: new `family_change_requests` collection +
+  `routers/members/family_approvals.py`. Portal edits to a guardian, a child or family details are
+  queued with before→after diffs instead of saving; rows show "Change awaiting review"; the admin
+  Family Approvals tab is always visible and shows the diffs with Approve / Reject.
+- **Duplicate people detector + merge** (`routers/members/dedupe.py`,
+  `components/admin/DuplicatePeoplePanel.jsx` inside HR → Staff & Users):
+  `GET /api/people/duplicates` clusters records across users/members/guests/children by link and
+  name, flags "confident" groups (shared email/phone/national id), and merges by repointing ~25
+  reference fields, filling blanks on the keeper and archiving the duplicates. Auto-merge only
+  touches confident groups.
+
+### Testing
+- `tests/test_iter364_family_dedupe_photos.py` (14 tests, testing agent) and
+  `tests/test_iter364b_deeplinks_and_outreach.py` (6 tests) — all passing.
+- Report: `/app/test_reports/iteration_241.json` (0 critical, 2 minor — both fixed).
+
+## iter365 — 2026-06 — Duplicate merges executed + search-first rollout
+
+### Duplicates merged (user-approved)
+- **Henry Lubega**: kept the staff account with the login (`87785c67…`, Poultry, Zimba Farm) and folded
+  `mem_e5f9cdc0` into it; the placeholder email `example@test.com` was deliberately NOT inherited.
+- **Katelyn Lubwama**: kept the admin account (`8646388b…`, katelyn@lubwamas.org) and folded the
+  guest/gmail account into it — `katelynlubwama@gmail.com` is now stored in `alt_emails`, so her login
+  never changed underneath her.
+- Merge hardening: `POST /api/people/duplicates/merge` accepts `skip_fields`, never copies a
+  placeholder email (`@example.*`, `@test.*`, `no@`, `none@`, `na@`) onto a real account, and keeps a
+  second real email as `alt_emails` instead of overwriting the login address. The review list now also
+  includes records with no campus on file. Duplicate groups: 2 → **0**.
+
+### Search-first ("type to find before creating") rollout
+- New `components/StaffPicker.jsx` — type-to-find over an already-loaded list (no new endpoint).
+- **HR**: 7 long staff dropdowns replaced (salary, manual payslip, contract issue, document request,
+  leave allocations, leave "file for", timesheet-on-behalf).
+- **Check-ins**: manual check-in name is now a `PersonPicker` that links `member_id` (so attendance
+  lands on the person's record) and auto-sets the type; unmatched names become an explicit walk-in.
+  The parent check-in lookup now finds a parent by name too and runs the lookup on pick.
+- **Social Work**: the "new case" subject-kind + subject dropdowns (125+ children) are one search box
+  that spans children and adults and sets `subject_kind` from the picked record; the payment
+  sponsor/payee field searches existing people before accepting free text.
+- **Tasks**: board "Assign Members" is type-to-find, still campus-scoped.
+- **POS**: the customer box now also surfaces "Already in the system" people; picking one creates a
+  customer linked to that person (`person_id`/`person_type`, and their record is flagged
+  `is_customer`) instead of a fresh duplicate.
+
+### Bug fixed (found by the testing agent)
+- **Accounts without an email hung for 60s → 502.** `users.email` had a plain unique index, so every
+  email-less account collided on `email: ""`. The index is now unique only where an email exists
+  (`partialFilterExpression: {email: {$gt: ""}}`, recreated idempotently in `db_indexes.py`), and a
+  genuine duplicate email now returns a clean 400.
+
+### Testing
+- `tests/test_iter365_pickers_and_merge.py` (17), `tests/test_iter365c_users_without_email.py` (3),
+  plus iter364 suites — 40 tests passing. Report: `/app/test_reports/iteration_242.json`.
+
+## iter366 — 2026-06 — Shipments: similar-item consolidation for customs
+
+User request: "add one button to identify items with similar names or descriptions and whether they
+are in the same packaging or different boxes… similar items with different box numbers shown with one
+line but quantity and value adjusted, box numbers shown as 24 & 25… allow the user to combine in
+multiple scenarios or delete repeated items to avoid customs confusion."
+
+- **New `Similar items` button** on the shipment toolbar (`ship-similar-items-btn`) →
+  `components/shipments/SimilarItemsDialog.jsx`.
+- **Backend** `routers/shipments_pkg/similar.py`:
+  - `GET /api/shipments/{id}/similar-items?sensitivity=strict|normal|loose` — clusters items by token
+    overlap + fuzzy name match (barcode match = certain), reporting per group: same box vs N boxes,
+    box label written **"Boxes 24 & 25"**, total qty, total value, weight, an `exact_repeat` flag for
+    the same line typed twice, a suggested keeper and a suggested action.
+  - `POST /api/shipments/{id}/items/consolidate` — modes `combine` (all rows), `combine_same_box`
+    (only rows sharing the keeper's box) and `delete_repeats` (drop the repeats, keeper untouched).
+    Combining sums quantity, re-derives the unit value so the customs line total is unchanged, records
+    `box_label` / `combined_boxes` / `consolidated_from`, and keeps the original rows for undo.
+  - `POST /api/shipments/{id}/items/{item_id}/undo-consolidate` — "Split back" restores the originals.
+- Manifest/invoice PDFs print the combined box label for a consolidated line (`_loc_str`).
+- The combined line's name is editable in the dialog and pre-filled with the common wording
+  ("Children's clothes size 14/12/10" → "Children's clothes"); rows can be unticked to exclude a
+  false match, and the preview qty/value update live. Consolidated lines stay visible when
+  "hide packed" is on so the undo is reachable.
+- On the live 2026 Shipment (391 items): strict finds 19 groups / 25 extra lines / 13 spread across boxes.
+- Tests: `tests/test_iter366_similar_items.py` (7) + testing agent report
+  `/app/test_reports/iteration_243.json` — 0 issues, both suites green.
+
+## iter367 — 2026-06 — Sub-location departments fix + fixed-asset improvements vs repairs
+
+### Bug: "sublocation departments aren't being loaded" when entering a transaction
+- The transaction form resolved the picked sub-location back to its **parent campus** and asked for
+  `GET /api/departments?location_id=<campus>`. Departments here are tagged with the SUB-LOCATION id
+  (Poultry / Piggery / Gardening → Zimba Farm; Child Care / Kitchen / Medical → 58:12 Shelter), so
+  those never appeared — only the four campus-level ones did.
+- `list_departments` now accepts a `sublocation_id` **and** accepts a sub-location passed as
+  `location_id` (it resolves the parent itself). It returns the sub-location's own departments plus
+  the campus-wide ones, sub-location ones first. Fixed in both the QuickPost form and the
+  journal-entry edit form (FinancePage). Verified live: picking Zimba Farm now lists
+  Gardening / Piggery / Poultry ahead of 58:12 Education / Admin / Outreach / Social Work.
+
+### Fixed assets: improvement vs repair (user chose option "c" — the distinction only, no ledger postings yet)
+- New `routers/finance/assets.py` (`/api/finance/assets`) in the LIVE finance package with collection
+  `finance_assets`. NOTE: the old `routers/financial.py` asset endpoints are **dead code** — that
+  router is not registered since iter246; its dangling `PUT /financial/assets/{id}/valuation`
+  decorator (which silently attached to the reconciliation handler) was cleaned up.
+- Register: purchase cost, capitalised improvements, repairs to date, carried cost, plus roll-ups.
+- `POST /api/finance/assets/{id}/spend` with `kind: improvement|repair`:
+  * **improvement** — extends life or capacity (new roof, deeper borehole, replacement engine) →
+    added to the asset's carried cost, optional "extra years of life" extends `depreciation_years`.
+  * **repair** — keeps it working (servicing, paint, tyres) → logged as maintenance history only,
+    the asset's value never moves.
+  Deleting an improvement rolls the cost (and the extra life) back.
+- `PUT /api/finance/assets/{id}/valuation` records revaluations with history.
+- New **Fixed Assets** tab in Finance (`components/finance/AssetsRegister.jsx`) with the plain-English
+  improvement-vs-repair guidance, the register, and the "Log spend" chooser.
+- Assets with no campus on file still appear in the register (same class of bug as the families fix).
+- Out of scope for now (offered, user deferred): automatic depreciation journal entries, disposal
+  gain/loss postings, capitalisation threshold prompts, and the Fixed Asset / Accumulated
+  Depreciation / Repairs & Maintenance COA accounts.
+
+### Tests
+- `tests/test_iter367_departments_and_assets.py` (7) — sub-location department resolution both ways,
+  capitalise/repair behaviour, validation, rollback, valuation. All green (14 with iter366).

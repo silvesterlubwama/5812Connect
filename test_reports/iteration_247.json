@@ -1,0 +1,34 @@
+{
+  "summary": "Frontend E2E of iter371 search-first pickers across /people (Add Person, Add Child, Record Guest, Add Family contact). All UI wiring, duplicate-warning, add-new, escape guard and mobile overflow behaviours verified against 58:12 Uganda live data. POS terminal (/sales-portal) not tested — login requires staff last-name + PIN which is not in /app/memory/test_credentials.md.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "PersonPicker (Add Child → Family picker)", "issue": "After picking a family from the add-child-family dropdown, the input value comes back with multiple internal spaces (e.g. 'Aketch     Family' instead of 'Aketch Family'). Likely the backend /people/suggest payload for family kind carries a name with embedded whitespace/newline (option text visibly rendered on two lines: 'Aketch Family' + 'Aketch Margret'), and PersonPicker onChange forwards p.name verbatim. Save still works but the field looks off. Consider trimming/normalizing p.name (collapse whitespace) inside PersonPicker.onChange or in the family kind serializer.", "selector": "[data-testid=\"add-child-family\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Add Person / Add Child / Record Guest dialogs — DialogContent", "issues": ["Radix warning in console: 'Missing Description or aria-describedby={undefined} for {DialogContent}'. Not user-visible but affects a11y. Add DialogDescription to these three dialogs."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "LOW: normalize whitespace in family-kind names returned by /api/people/suggest (or defensively .replace(/\\s+/g,' ').trim() inside PersonPicker.onChange) so add-child-family input reads 'Aketch Family' after pick.",
+    "A11y (LOW): add DialogDescription to Add Person / Add Child / Record Guest / Add Family dialogs to silence Radix warning.",
+    "For future testing agents: /app/memory/test_credentials.md has no POS (last name + PIN) credentials — request them so /sales-portal PersonPicker flow (pos-customer-picker, pos-customer-clear, 'Linked … — no duplicate created' toast) can be regression-tested end-to-end."
+  ],
+  "critical_code_review_comments": [
+    "PersonNameField.jsx:9-43 — clean, small (46 lines). Amber duplicate banner correctly hides for typed<2 chars and when nothing matched. Good pattern.",
+    "PersonPicker.jsx:39 — `showNew = open && !!onAddNew && typed.length >= 2 && !exact && !searching` — 'exact' comparison is case-insensitive which is right, but does not trim; if user types trailing whitespace, exact will fail and Add-new row will appear alongside the exact-match option. Minor UX quibble.",
+    "UnifiedPeoplePage.jsx:507 openExistingPerson — closes the Add dialog by resetting the three show-* flags but does not reset the picker's search text. If the user re-opens Add Person the previous typed name may still be there. Not seen in this run but worth a guard.",
+    "SalesPortalPage.jsx:76-100 pickCustomer/createCustomerNamed — POST /customers with only {name} will inherit backend defaults; ensure backend rejects blank name (backend tests cover this per agent-to-agent note).",
+    "UnifiedPeoplePage.jsx is now ~1250 lines — over the 700-line guideline. The Add/Edit dialogs are prime candidates for extraction into siblings."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (skipped per request; iter371 backend suite noted 7/7 green)", "frontend": "100% for the flows tested (People page); POS not tested (untestable — no credentials)" },
+  "test_credentials": "Admin: admin@5812uganda.org / Admin@5812 (works). POS staff last-name + PIN NOT documented in /app/memory/test_credentials.md.",
+  "seed_data_creation": "None. All flows exercised were opened → verified → dismissed with Cancel/Escape. No people, children, guests, families or customers were created or deleted in this run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter371 verified on /people: (1) Add Person — add-person-name picker shows options + amber duplicate warning (add-person-name-duplicate-warning) with 'Open them instead' link (add-person-name-open-existing); clicking a match closes Add-Person and opens that member's profile dialog. Typing unknown name shows add-person-name-no-match + add-person-name-add-new; clicking Add-new keeps typed name in the field and hides the amber warning. (2) Children tab — add-child-name picker restricted to child kind; clicking an existing child opens 'Edit Child: <name>' dialog. add-child-family type-ahead over families works: type 'Ak' → 10 options → picking Aketch Family sets the value (with a whitespace quirk, see ui_bugs), clearing works. (3) Guests tab — add-guest-name picker searches guest+member+user; duplicate warning fires; picking match opens existing profile dialog. (4) Families tab — family-contact-picker searches people, options list renders, pickable. (5) Escape guard confirmed: first Escape closes dropdown (dialog stays open, typed value preserved), second Escape closes dialog. (6) Mobile 390x844 — all three add dialogs have no horizontal overflow, dropdown is usable. POS /sales-portal untested (login blocker: needs staff last-name + PIN).",
+  "rca of the issue": "N/A — only one low-severity UI polish issue (whitespace in family option name)."
+}

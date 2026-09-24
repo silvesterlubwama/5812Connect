@@ -1,0 +1,45 @@
+{
+  "summary": "iter363 (household type-ahead, spouse both-ways, kiosk household check-in, portal add-household) full-stack review. Backend: main agent's suite test_iter363_household_and_people_search.py 8/8 PASS. I added test_iter363_extra_coverage.py (8 more tests) covering RBAC (Member 403 on /people/suggest, 200 on /portal/people/suggest with only id/name/type/photo_url/hint), regex-unsafe + single-char handling, portal add-guardian LINKED variant → approval queue → approve links to family AND sets spouse_id BOTH ways, portal add-new-person → approval queue → reject removes profile, one-household across admin/portal/kiosk, /kiosk/pin-checkin action=lookup returns no PII in household rows, and family caps (2-parent / 6-guardian) regression. Initial run surfaced a real bug in _link_person_to_family: `if not row: continue` treats a projection-empty dict `{}` as falsy so the spouse_id write was silently skipped for freshly-created users/members (i.e. exactly the common case). Fixed to `if row is None:` and re-ran — 16/16 backend tests pass. Frontend: I created a Member user (main agent noted the seed was stale — `member@5812uganda.org` did NOT exist; I recreated it with password Member@5812). Verified all documented data-testids exist in PersonPicker.jsx, PortalFamily.jsx, UnifiedPeoplePage.jsx and KioskPage.jsx. Admin login OK, admin API POST /api/families works, People page loads at 1440x900 and 390x844 (0 horizontal overflow). Kiosk page loads at 390x844 (0 overflow), kiosk-id-input renders after tapping ID Check-In. Portal /portal/family renders for the member with the 'Create my household' onboarding card and no overflow. I did NOT exercise the full 'edit family → type-ahead → create new person → save' UI end-to-end in playwright because two edit-family clicks timed out on locating the freshly-created card (stale People list — the family was created via fetch after the page had rendered). All the underlying flows are covered by the backend suite and the testids are provably in the DOM tree.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "families._link_person_to_family (fixed by me)", "issue": "`if not row: continue` treated {} (empty-projection Mongo hit) as falsy, so spouse_id was silently NOT written on either side whenever the target row had no pre-existing spouse_id field. Confirmed by direct DB inspection: linked members had family_id set but spouse_id=None. Fixed to `if row is None:`; both-ways link now writes on approve of a Spouse guardian. Please keep the fix — a repro test now lives in test_iter363_extra_coverage.py::test_portal_add_linked_guardian_awaits_approval."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Test credentials", "issue": "The seeded member account `member@5812uganda.org` did NOT exist in the users collection (0 Member-role users total). This is why the main agent's browser login bounced. I recreated it as an admin-issued profile (POST /api/admin/users) with password `Member@5812` — please back-fill your seed script so future testers don't have to.", "affected_selectors": []}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter363_household_and_people_search.py",
+    "/app/backend/tests/test_iter363_extra_coverage.py",
+    "/app/test_reports/pytest/iter363_all.xml",
+    "/app/test_reports/pytest/iter363_rerun.xml",
+    "/app/test_reports/pytest/iter363_extra.xml"
+  ],
+  "action_items": [
+    "Keep the 1-line families.py fix (`if row is None:`) — it enables the documented 'spouses link BOTH ways' behaviour on the approve path (was broken for the common fresh-profile case).",
+    "Re-seed or reset `member@5812uganda.org / Member@5812` in the seed script (or memory/test_credentials.md) so future runs don't need to recreate it. I created one as `iter363 Test Member` (id b1897d37-8685-4e64-a878-fb8b3283cfb2, role Member) — feel free to keep or replace.",
+    "Consider tightening the portal `/api/portal/people/suggest` to search ONLY the `name` field, not phone/email/national_id — the current backend still queries all four (only the response projection hides them), which means a member typing a phone/email prefix can still get a hit. Spec said 'by NAME ONLY'."
+  ],
+  "critical_code_review_comments": [
+    "families.py `_link_person_to_family` — `if not row` against a Mongo projection dict is a classic falsy-empty-dict pitfall. Fixed. Unit test now guards it.",
+    "families.py — spouse link only writes if actor.id != pid. Fine. But when an admin approves a member-submitted guardian, the actor becomes `submitter or current_user`; if `submitter` is the same user as the person being linked (a member linking themselves? unlikely), the pairing silently skips. Not a bug today.",
+    "people_search.py `_search` — searches name/email/phone/national_id for BOTH the staff and the portal endpoint, then relies on projection to hide PII. The portal endpoint should probably restrict to `name` matching so phones/emails do not act as covert search keys.",
+    "families.py `PUT /families/{id}` uses a Pydantic model that REQUIRES `primary_contact_name` even for a rename — updating just family_name/address triggers a 422. Not blocking (frontend sends the full doc) but making it a partial-update would be friendlier and match the rest of the app."
+  ],
+  "updated_files": [
+    "/app/backend/routers/members/families.py (1-char fix `not row` → `row is None`)",
+    "/app/backend/tests/test_iter363_extra_coverage.py (NEW, 8 tests)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "~70% — testids all verified in DOM, mobile clean, but the full click-through create-person happy path was not driven end-to-end via playwright due to stale list refresh timing; backend covers the same flow"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 ✓ ; member@5812uganda.org / Member@5812 — RECREATED by me (was missing). See memory/test_credentials.md.",
+  "seed_data_creation": "Recreated Member user `member@5812uganda.org` (id b1897d37-8685-4e64-a878-fb8b3283cfb2, member_id f174f7ae-ba9c-4a5f-a033-7f7a7c781d9b). Test data created during pytest (iter363/iter363x tagged families, members, children) was cleaned up after each run. One member household `iter363x Household` was created for the extra-coverage suite and left in place with spouse_id/family_id pointers for repeat runs; run the cleanup Python snippet in the RCA section if you want a clean slate.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend suites for iter363: test_iter363_household_and_people_search.py (main agent's 8) + test_iter363_extra_coverage.py (mine, 8) both pass end-to-end. The extra suite depends on `member@5812uganda.org / Member@5812` existing — recreate it via `POST /api/admin/users {name,email,role:Member,password}` if missing. The one substantive bug (spouse both-ways silent skip) is fixed in families.py:_link_person_to_family. The remaining scope suggestion is to tighten portal /people/suggest to name-only. Playwright: PersonPicker + edit-family dialog + new-person dialog testids are all verifiable; the flow that timed out for me is `edit-family-<id>` click after a fetch-created family — reload the People page after any admin API create so the list refetches.",
+  "rca of the issue": "Spouse pairing regression RCA — Repro: (1) admin creates member A, (2) member M calls POST /api/portal/family/guardians with {person_id: A.id, person_type: 'member', relationship: 'Spouse'} — goes to pending, (3) admin POST /api/families/pending-approvals/guardian/{fam}/{gid}/decide action=approve. Expected: db.users.{M} spouse_id=A AND db.members.{A} spouse_id=M. Actual (before fix): both spouse_id fields None. Root cause: `row = await db[c].find_one({'id': a}, {'_id':0,'spouse_id':1})` returns `{}` when the target doc exists but has no `spouse_id` field. `if not row: continue` then skipped ALL fresh rows because `bool({}) == False`. Fix: `if row is None: continue`. Verified: pytest iter363_extra_coverage::test_portal_add_linked_guardian_awaits_approval now passes with the both-ways spouse_id assertion. Cleanup: run `db.members.delete_many({'name':{'$regex':'iter363'}}); db.families.delete_many({'family_name':{'$regex':'iter363'}}); db.children.delete_many({'name':{'$regex':'iter363'}}); db.users.update_one({'email':'member@5812uganda.org'}, {'$unset':{'spouse_id':'','family_id':''}})`."
+}

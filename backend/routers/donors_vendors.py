@@ -364,9 +364,27 @@ async def suggest_vendors(
     current_user: dict = Depends(get_current_user),
 ):
     campus_filter = await get_campus_filter(current_user)
-    query = {"active": {"$ne": False}, "name": {"$regex": f"^{q}", "$options": "i"}}
+    # Match anywhere in the name, not just the start — typing "supplies" has to
+    # find "ACME Supplies Ltd". User input is escaped so a name with brackets
+    # or a dot can't blow up the regex.
+    query = {"active": {"$ne": False}, "name": {"$regex": re.escape(q.strip()), "$options": "i"}}
     query.update(campus_filter)
-    return await db.vendors.find(query, {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "category": 1}).sort("name", 1).to_list(limit)
+    rows = await db.vendors.find(
+        query, {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "category": 1},
+    ).sort("name", 1).to_list(limit * 3)
+    # Names that START with what was typed are what the typist usually means.
+    low = q.strip().lower()
+    rows.sort(key=lambda v: (not (v.get("name") or "").lower().startswith(low), (v.get("name") or "").lower()))
+    # The app creates a vendor from free text, so the same name can exist twice.
+    # Offering the typist five identical rows is useless — collapse them.
+    seen, deduped = set(), []
+    for v in rows:
+        key = (v.get("name") or "").strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(v)
+    return deduped[:limit]
 
 
 @router.get("/vendors/{vendor_id}")
