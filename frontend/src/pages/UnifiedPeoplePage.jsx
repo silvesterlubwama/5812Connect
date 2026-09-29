@@ -731,7 +731,7 @@ export default function UnifiedPeoplePage() {
             <Button size="sm" className="gap-2" onClick={() => setShowChild(true)} data-testid="add-child-btn"><Plus size={14} /> Add Child</Button>
           </div>
           {(() => {
-            const filteredChildren = childSearch.trim() ? children.filter(c => (c.name || '').toLowerCase().includes(childSearch.toLowerCase())) : children;
+            const filteredChildren = childSearch.trim() ? children.filter(c => `${c.name || ''} ${c.family_name || ''}`.toLowerCase().includes(childSearch.toLowerCase())) : children;
             return filteredChildren.length === 0 ? (
             <Card className="shadow-soft rounded-xl"><CardContent className="py-16 text-center"><Baby size={40} className="mx-auto mb-3 opacity-20" /><p className="text-muted-foreground">{childSearch ? 'No children match search' : 'No children registered'}</p></CardContent></Card>
           ) : (
@@ -765,6 +765,11 @@ export default function UnifiedPeoplePage() {
                         </div>
                         <div className="flex-1">
                           <p className="font-medium text-sm">{c.name}</p>
+                          {(c.family_name || c.family_id) && (
+                            <p className="text-xs text-primary flex items-center gap-1 mt-0.5" data-testid={`child-family-${c.id}`}>
+                              <Home size={10} /> {c.family_name || 'Household on file'}
+                            </p>
+                          )}
                           <p className="text-xs text-muted-foreground mt-0.5">
                             {c.class_group || c.grade ? `${c.grade || ''} ${c.class_group || ''}`.trim() : 'No class'} &middot; DOB: {c.date_of_birth || 'N/A'}
                           </p>
@@ -821,7 +826,7 @@ export default function UnifiedPeoplePage() {
             <Button size="sm" className="gap-2" onClick={() => setShowGuest(true)} data-testid="add-guest-btn"><Plus size={14} /> Record Guest</Button>
           </div>
           {(() => {
-            const filteredGuests = guestSearch.trim() ? guests.filter(g => (g.name || '').toLowerCase().includes(guestSearch.toLowerCase()) || (g.phone || '').includes(guestSearch)) : guests;
+            const filteredGuests = guestSearch.trim() ? guests.filter(g => `${g.name || ''} ${g.family_name || ''}`.toLowerCase().includes(guestSearch.toLowerCase()) || (g.phone || '').includes(guestSearch)) : guests;
             return filteredGuests.length === 0 ? (
             <EmptyState
               icon={UserPlus}
@@ -845,7 +850,13 @@ export default function UnifiedPeoplePage() {
                   <CardContent className="p-3 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <input type="checkbox" className="accent-primary" checked={selGuests.has(g.id)} onChange={() => setSelGuests(prev => { const n = new Set(prev); n.has(g.id) ? n.delete(g.id) : n.add(g.id); return n; })} />
-                      <div><p className="text-sm font-medium">{g.name}</p><p className="text-xs text-muted-foreground">{g.visit_date} &middot; {g.phone || g.email || ''}</p></div>
+                      <div><p className="text-sm font-medium">{g.name}</p><p className="text-xs text-muted-foreground">{g.visit_date} &middot; {g.phone || g.email || ''}</p>
+                        {(g.family_name || g.family_id) && (
+                          <p className="text-xs text-primary flex items-center gap-1 mt-0.5" data-testid={`guest-family-${g.id}`}>
+                            <Home size={10} /> {g.family_name || 'Household on file'}
+                          </p>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
                       {g.is_parent && <Badge variant="outline" className="text-[10px] border-green-300 text-green-600">Parent</Badge>}

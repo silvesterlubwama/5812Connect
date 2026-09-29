@@ -4,6 +4,7 @@ from pin_security import apply_pin_fields
 from deps import (
     db, get_current_user, _audit, require_coordinator,
     normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter,
+    campus_filter_or_unscoped,
 )
 from models import MemberCreate, MemberUpdate
 from datetime import datetime, timezone
@@ -29,7 +30,9 @@ async def list_members(
     current_user: dict = Depends(get_current_user)
 ) -> dict:
     STAFF_ROLES = {"Executive Director", "Adviser", "Director", "Manager", "Leader", "Coordinator", "Staff", "HR", "Volunteer", "admin", "system_admin"}
-    campus = await get_campus_filter(current_user)
+    # iter372 — somebody saved without a campus matched no campus at all and
+    # vanished from People; an unscoped row is shown to everyone instead.
+    campus = await campus_filter_or_unscoped(current_user)
     query = {}
     conditions = []
     if campus:

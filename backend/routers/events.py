@@ -147,9 +147,48 @@ async def delete_event_type(type_id: str, current_user: dict = Depends(require_a
 
 # ========== EVENTS ==========
 
+async def _calendar_scope(current_user: dict) -> dict:
+    """Campus filter for the calendar, widened so nothing can silently vanish.
+
+    An event is shown when it belongs to a campus the caller can see, OR it
+    belongs to an ANCESTOR of one of those campuses (org-wide events are filed
+    at the parent campus but matter to every sub-campus underneath it), OR it
+    carries no campus at all (legacy rows created before events were stamped —
+    they were invisible to everybody).
+    """
+    campus = await get_campus_filter(current_user)
+    if not campus:
+        return {}
+    ids = set()
+    for clause in campus.get("$or", [campus]):
+        for key in ("location_id", "location_ids"):
+            val = clause.get(key)
+            if isinstance(val, dict) and "$in" in val:
+                ids.update(val["$in"])
+            elif isinstance(val, str) and val:
+                ids.add(val)
+    ancestors, seen = set(), set()
+    frontier = set(ids)
+    while frontier:
+        parents = set()
+        for coll, field in (("locations", "parent_id"), ("sublocations", "location_id")):
+            async for row in db[coll].find({"id": {"$in": list(frontier)}}, {"_id": 0, field: 1}):
+                parent = row.get(field)
+                if parent and parent not in ids and parent not in seen:
+                    parents.add(parent)
+        seen |= frontier
+        ancestors |= parents
+        frontier = parents - seen
+    clauses = list(campus.get("$or", [campus]))
+    if ancestors:
+        clauses.append({"location_id": {"$in": list(ancestors)}})
+    clauses.append({"location_id": {"$in": ["", None]}})
+    return {"$or": clauses}
+
+
 @router.get("/events")
 async def list_events(search: Optional[str] = None, type: Optional[str] = None, status: Optional[str] = None, is_public: Optional[bool] = None, visibility: Optional[str] = None, current_user: dict = Depends(get_current_user)) -> list:
-    campus = await get_campus_filter(current_user)
+    campus = await _calendar_scope(current_user)
     query = {**campus} if campus else {}
     # NOTE: is_public events used to bypass campus filter — that caused public events
     # from one campus to leak into another. is_public now controls public-page visibility

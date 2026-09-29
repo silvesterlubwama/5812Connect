@@ -60,6 +60,11 @@ export default function CalendarPage() {
   const { user } = useAuth();
   const isAdminOrManager = ['admin', 'system_admin', 'manager', 'director', 'executive director'].includes((user?.role || '').toLowerCase());
   const today = new Date();
+  // Whichever campus the switcher is pinned to — a new event must land where
+  // the person can actually see it (iter372: events were silently filed to the
+  // creator's MAIN campus, so anything created while pinned to a sub-campus
+  // vanished the moment it saved).
+  const activeCampus = localStorage.getItem('5812_active_campus') || user?.active_campus_id || user?.location_id || '';
   const [cursor, setCursor] = useState(new Date());
   const [view, setView] = useState(() => localStorage.getItem('5812_cal_view') || 'month');
   // iter-tasks-on-calendar: default to 'campus' so every task with a
@@ -82,7 +87,7 @@ export default function CalendarPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [holidayItem, setHolidayItem] = useState(null);
   const [createKind, setCreateKind] = useState('event');
-  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: '', description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
+  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
   const [saving, setSaving] = useState(false);
   const [boards, setBoards] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -334,7 +339,7 @@ export default function CalendarPage() {
         toast.success('Task created');
       }
       setShowCreate(false);
-      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: '', description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
+      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
       loadAll();
     } catch (err) {
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
@@ -608,6 +613,12 @@ export default function CalendarPage() {
                 </div>
                 <div><Label>Capacity</Label><Input type="number" min="0" value={editForm.capacity ?? ''} onChange={e => setEditForm({ ...editForm, capacity: e.target.value === '' ? null : parseInt(e.target.value) })} data-testid="edit-event-capacity" /></div>
               </div>
+              <div><Label>Campus</Label>
+                <Select value={editForm.location_id || ''} onValueChange={v => setEditForm({ ...editForm, location_id: v })}>
+                  <SelectTrigger data-testid="edit-event-campus"><SelectValue placeholder="Which campus is this for?" /></SelectTrigger>
+                  <SelectContent>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
               <EventVenuePicker
                 idPrefix="edit-venue" value={editForm} venues={venues} locations={locations}
                 onChange={patch => setEditForm(f => ({ ...f, ...patch }))}
@@ -665,6 +676,13 @@ export default function CalendarPage() {
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2"><Label>Campus</Label>
+                    <Select value={createForm.location_id || ''} onValueChange={v => setCreateForm({ ...createForm, location_id: v })}>
+                      <SelectTrigger data-testid="create-event-campus"><SelectValue placeholder="Which campus is this for?" /></SelectTrigger>
+                      <SelectContent>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                    <p className="text-[11px] text-muted-foreground mt-1">This is where the event will show on the calendar.</p>
+                  </div>
                   <div className="col-span-2"><EventVenuePicker
                     idPrefix="create-venue" value={createForm} venues={venues} locations={locations}
                     onChange={patch => setCreateForm(f => ({ ...f, ...patch }))}

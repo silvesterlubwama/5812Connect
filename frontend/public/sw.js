@@ -1,7 +1,7 @@
 /* eslint-disable no-restricted-globals */
-const CACHE_NAME = '5812-crm-v4';
+const CACHE_NAME = '5812-crm-v5';
 const WALLET_CACHE = '5812-wallet-v1';
-const OFFLINE_DATA_CACHE = '5812-offline-data-v1';
+const OFFLINE_DATA_CACHE = '5812-offline-data-v2';
 const STATIC_ASSETS = ['/', '/index.html', '/manifest.json', '/logo192.png', '/logo512.png'];
 const DB_NAME = '5812-offline-queue';
 const STORE_NAME = 'messages';
@@ -105,20 +105,33 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Offline-data: stale-while-revalidate against OFFLINE_DATA_CACHE so today's
-  // roster + user's dashboard render immediately even when the network is out.
+  // Offline-data: NETWORK-FIRST with a short timeout, falling back to the
+  // cache. iter372: this used to be stale-while-revalidate, which returned the
+  // PREVIOUS list instantly — so an event (or task) created a second ago was
+  // missing from the very next refetch and looked like it had never saved.
+  // Staff at the door still get the cached roster when the network is slow or
+  // gone; online users never see stale data.
   if (isOfflineDataRequest(url)) {
     event.respondWith(
-      caches.open(OFFLINE_DATA_CACHE).then((cache) =>
-        cache.match(request).then((cached) => {
-          const fetchPromise = fetch(request).then((response) => {
-            if (response.ok) cache.put(request, response.clone());
-            return response;
-          }).catch(() => cached || new Response(JSON.stringify({ error: 'Offline', offline: true }), { status: 503, headers: { 'Content-Type': 'application/json' } }));
-          // Return cached instantly, revalidate in background
-          return cached ? (fetchPromise, cached) : fetchPromise;
-        })
-      )
+      caches.open(OFFLINE_DATA_CACHE).then(async (cache) => {
+        let timer;
+        const network = fetch(request).then((response) => {
+          if (response.ok) cache.put(request, response.clone());
+          return response;
+        });
+        const slow = new Promise((resolve) => { timer = setTimeout(() => resolve('slow'), 2500); });
+        try {
+          const first = await Promise.race([network, slow]);
+          clearTimeout(timer);
+          if (first !== 'slow') return first;
+          const cached = await cache.match(request);
+          return cached || network;
+        } catch {
+          clearTimeout(timer);
+          const cached = await cache.match(request);
+          return cached || new Response(JSON.stringify({ error: 'Offline', offline: true }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+        }
+      })
     );
     return;
   }

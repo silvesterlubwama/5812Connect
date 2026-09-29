@@ -1,0 +1,39 @@
+{
+  "summary": "iter372 frontend E2E verification: Calendar create-event Campus field, immediate visibility (no reload), edit-event Campus field, sub-campus switcher regression (org-wide events still visible), and People family-name enrichment (children + guests) all working end-to-end against preview. Search filters by family name work on both tabs. Mobile 390x844 shows no horizontal overflow on Calendar create dialog or People tabs. 3 test events created were deleted via UI after testing.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified_flows": [
+    "Login (admin@5812uganda.org) -> Dashboard OK",
+    "Calendar New -> Event dialog exposes data-testid=create-event-campus pre-filled with 'active' campus (58:12 Uganda). Full dialog testids: create-kind-toggle, create-title, create-date, create-event-campus, create-venue-select, create-event-capacity, create-event-is-free, create-is-public, create-submit",
+    "Create event #1 (2026-09-29 15:00, campus default) -> visible on grid without reload (POST /api/events 200 + GET /api/events 200 fired, event rendered immediately)",
+    "Create event #2 (2026-09-30 10:30) in SAME session -> visible without reload (SW stale-cache regression NOT observed)",
+    "Create event #3 with campus dropdown switched to 'Zimba Farm' -> saved successfully; event lives on the Zimba scope and admin dashboard upcoming list confirms it",
+    "Open existing event -> Edit shows data-testid=edit-event-campus (value 58:12 Uganda). Edit dialog testids: edit-event-form, edit-event-type, edit-event-capacity, edit-event-campus, edit-venue-select, edit-event-is-free, save-event-btn",
+    "Campus switcher -> Zimba Farm: org-wide events 'Magoggo Kids Club' and 'Deliver Beans to Shelter' remain visible (ancestor scope working)",
+    "Campus switcher back to 58:12 Uganda: event count preserved (24 timed events)",
+    "People > Children tab: 108 child-family-<id> testids present (out of 126 children); sample family names 'Nalumansi Family', 'Nanfuka family', 'Ndagano Family', 'Yiga Family', 'Nakakawa Family'",
+    "Children search by family 'Nakakawa' filters correctly",
+    "People > Guests & Parents tab: 50 guest-family-<id> testids present (61 guests); sample 'Nanfuka family', 'Nakitende Family', 'Lubwama Richard Family'",
+    "Guest search by family 'Nanfuka' filters to matching parents",
+    "Add Person dialog: search-first UI ('Find them first — a match opens the profile that already exists') confirmed visible via screenshot",
+    "Mobile 390x844: /calendar new-event dialog scrollWidth==clientWidth==390 (no horizontal overflow). /people children & guests tabs same (no overflow)",
+    "Cleanup: TEST_ITER372_A/B/C deleted via UI, dashboard confirms none remain"
+  ],
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Add Person / Add Child / Record Guest search-first regression could not be fully re-driven end-to-end in this run because the Radix DialogOverlay stayed mounted after Cancel and intercepted the next tab click (this is a test-driver issue, not a product bug). Iter247 already covered these flows end-to-end; the dialogs open with correct 'Find them first' copy so behaviour is preserved."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped", "frontend": "100%"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "None persisted. 3 test events (TEST_ITER372_A/B/C) were created during testing and deleted via UI. Verified via dashboard Upcoming Events that they are gone.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iter372 features (calendar create-event Campus, ancestor-scope, SW network-first, family-name enrichment) are green in preview. Backend already covered by tests/test_iter372_calendar_scope_and_family_names.py. No follow-ups required.",
+  "rca of the issue": "N/A - retest confirmed the iter372 fixes are working in preview. Create-event Campus dropdown pre-fills with active campus, new events appear on the grid without reload (SW network-first working), ancestor campus scope makes org-wide events visible in sub-campus views, and both People tabs show family names with search filtering by family."
+}

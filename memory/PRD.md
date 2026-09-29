@@ -1,5 +1,60 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter372 — "I added an event and it didn't save" · household names in People (2026-06)
+
+Reported on **both preview and production**: an event was added from the
+Calendar, the success toast appeared, and it was not on the calendar. It had
+saved every time — three separate things hid it.
+
+Tested: `backend/tests/test_iter372_calendar_scope_and_family_names.py` **5/5**,
+iter371/368/369/292 regression **49 passed**, and the browser flows by the
+testing agent — `/app/test_reports/iteration_248.json`, **100%, zero issues**
+(create → visible with no reload, twice in one session; sub-campus switcher;
+family names on both tabs; 390px with no overflow). **Production needs a
+redeploy.**
+
+### 1. The service worker was serving a stale event list
+`public/sw.js` treated `/api/events`, `/api/tasks`, `/api/dashboard*`,
+`/api/locations` and `/api/auth/me` as **stale-while-revalidate**
+(`return cached ? (fetchPromise, cached) : fetchPromise`), so the refetch fired
+immediately after `POST /events` came back from the CACHE — the previous list,
+without the new event. It only appeared after a full reload. Those endpoints are
+now **network-first with a 2.5s timeout** and a cache fallback, so the door
+kiosk still works with no signal but an online user never sees stale data.
+Cache names bumped (`5812-crm-v5`, `5812-offline-data-v2`).
+
+### 2. No campus on the form + strict campus matching
+The Calendar's add-event dialog had **no campus field at all**, so
+`default_creation_location` filed every event at the creator's MAIN campus,
+while `GET /events` matched only the exact campus ids in
+`get_campus_filter` — pinned to Zimba Farm the calendar showed **1 of 71
+events**, and an event created there vanished on save.
+- New **Campus** picker in the create dialog (`create-event-campus`,
+  pre-filled from the campus switcher) and in the edit form
+  (`edit-event-campus`, so an event can be moved).
+- New `_calendar_scope()` in `routers/events.py`: the caller's campuses **plus
+  their ancestors** (org-wide events are filed at the parent campus but matter
+  to every sub-campus) **plus rows with no campus at all**.
+
+### 3. Records saved without a campus were invisible to everyone
+7 events carried `location_id: None` (created before campus stamping) or
+pointed at `loc_001`, a campus that no longer exists — they matched nothing and
+no calendar could show them. `migrations/iter372_orphan_events.py` (idempotent,
+`--dry-run`) deleted the 4 obvious test rows by **exact id** ("Test Event", 3
+duplicate "Deliver Beans") and re-filed the 3 real ones ("Magoggo Kids
+Christmas Party", "Deliver Beans to Shelter", "Director's Meeting") under
+58:12 Uganda — the user's choice. Ledger of events: 66.
+The same trap existed in People, so `deps.campus_filter_or_unscoped()` is now
+used by `GET /children`, `/guests` and `/members`: a person saved without a
+campus is shown to everyone instead of disappearing.
+
+### Also requested this round
+"Add family name in the family view tab for easy tracking" → every **child and
+guest row** in People now shows the household name (`child-family-<id>` /
+`guest-family-<id>`), and both search boxes match on family name.
+`GET /children` and `GET /guests` enrich each row with `family_name` the same
+way `GET /members` already did.
+
 ## iter371 — Phase 4 of search-first · POS PIN logins repaired (2026-06)
 
 Requested (approved this round): the remaining free-text person fields get the

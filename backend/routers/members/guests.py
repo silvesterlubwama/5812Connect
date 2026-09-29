@@ -1,6 +1,6 @@
 """Guests CRUD + members-mirror helper + move-to-staff."""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, _audit, require_director, logger, get_campus_filter, hash_password
+from deps import db, get_current_user, _audit, require_director, logger, get_campus_filter, campus_filter_or_unscoped, hash_password
 from models import GuestCreate
 from datetime import datetime, timezone
 from typing import Optional
@@ -33,7 +33,9 @@ async def _mirror_guest_to_members(guest_doc: dict) -> None:
 
 @router.get("/guests")
 async def list_guests(search: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    campus = await get_campus_filter(current_user)
+    # iter372 — a guest recorded without a campus used to match nothing and
+    # disappear from People entirely.
+    campus = await campus_filter_or_unscoped(current_user)
     query = {}
     conditions = []
     if campus:
@@ -67,6 +69,16 @@ async def list_guests(search: Optional[str] = None, current_user: dict = Depends
         if sp_email and sp_email in guest_emails:
             continue
         guests.append({**sp, "is_staff": True, "source": "staff"})
+
+    # Household name on every row so a guest or parent can be traced back to
+    # their family at a glance.
+    fam_ids = list({g["family_id"] for g in guests if g.get("family_id")})
+    if fam_ids:
+        fam_names = {f["id"]: f.get("family_name") or "" async for f in
+                     db.families.find({"id": {"$in": fam_ids}}, {"_id": 0, "id": 1, "family_name": 1})}
+        for g in guests:
+            if g.get("family_id"):
+                g["family_name"] = fam_names.get(g["family_id"], "")
 
     return guests
 

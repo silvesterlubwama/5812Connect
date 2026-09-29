@@ -327,6 +327,24 @@ require_social_work_view = require_module_view("social_work")
 require_restricted_view = require_module_view("restricted")
 
 
+async def campus_filter_or_unscoped(user: dict, field: str = "location_id") -> dict:
+    """`get_campus_filter` widened to include rows that carry NO campus.
+
+    A record with an empty `location_id` matches no campus at all, so it
+    silently disappears from every list — the "I saved it and it vanished"
+    class of bug (iter372: events, children and guests created before campus
+    stamping, or saved without picking a campus). An unscoped row belongs to
+    nobody in particular, so everybody who can see the collection sees it.
+    """
+    campus = await get_campus_filter(user, field)
+    if not campus:
+        return {}
+    clauses = list(campus.get("$or", [campus]))
+    clauses.append({field: {"$in": ["", None]}})
+    clauses.append({field: {"$exists": False}})
+    return {"$or": clauses}
+
+
 async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
     """Return a MongoDB query fragment that restricts results to the user's campus.
     Only expands to actual sub-locations (rooms, buildings), NOT sibling campuses.

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import Response
 from deps import (
     db, get_current_user, _audit, require_staff, require_manager,
-    logger, is_system_admin, get_campus_filter,
+    logger, is_system_admin, get_campus_filter, campus_filter_or_unscoped,
 )
 from models import ChildCreate
 from datetime import datetime, timezone
@@ -21,7 +21,9 @@ async def list_children(
     welfare_category: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    query = {**await get_campus_filter(current_user)}
+    # iter372 — a child saved without a campus used to match nothing and
+    # disappear from People entirely.
+    query = {**await campus_filter_or_unscoped(current_user)}
     if family_id:
         query["family_id"] = family_id
     if search:
@@ -63,6 +65,15 @@ async def list_children(
         for c in children:
             if c["id"] in wmap:
                 c["welfare_case"] = wmap[c["id"]]
+        # Household name on every row so People can see who belongs where
+        # without opening each child.
+        fam_ids = list({c["family_id"] for c in children if c.get("family_id")})
+        if fam_ids:
+            fam_names = {f["id"]: f.get("family_name") or "" async for f in
+                         db.families.find({"id": {"$in": fam_ids}}, {"_id": 0, "id": 1, "family_name": 1})}
+            for c in children:
+                if c.get("family_id"):
+                    c["family_name"] = fam_names.get(c["family_id"], "")
     return children
 
 
