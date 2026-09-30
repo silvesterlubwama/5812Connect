@@ -1,5 +1,46 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter373 — Repeating events live in the normal form, and move as one series (2026-06)
+
+"The recurring code already exists on calendar" — it did
+(`POST /events/generate-recurring`, reachable only via Calendar → More →
+Recurring events), but each occurrence was a standalone row with nothing tying
+it to the others, and that dialog collected a free-text place instead of the
+campus + venue pickers. User choices: a **Repeats toggle inside the normal New
+Event form**; a **series link so the whole run can be edited and deleted**;
+**ask each time** ("this date only" / "this date and all later ones"); series
+stay **future-only**.
+
+Tested: `backend/tests/test_iter373_recurring_series.py` **6/6**, iter372/371 +
+iter292 regression **30 passed**, and driven in the browser end to end — 4
+weekly dates created from the normal form (campus stamped, one `series_id`), the
+**Repeats weekly** badge on the occurrence, the "Delete which dates?" prompt,
+and "this date and all later ones" removing exactly 3 of 4.
+**Production needs a redeploy.**
+
+- **Repeats in the New Event form** (`create-repeats`): every day / every week /
+  every 2 weeks / every month, ending after **N dates** or on **a date**. It
+  posts to the existing generator, so the campus and venue already chosen on
+  that form travel to every occurrence.
+- **`series_id`** (`ser_<hex8>`) is stamped on every generated occurrence (the
+  More-menu dialog gets it too), returned as `series_id` on the response.
+- **`scope=single|future|series`** on `PUT` and `DELETE /api/events/{id}`.
+  `future` = this date onwards within the series. A series-wide edit never
+  carries `date` / `end_date` / `registered` / `series_id`
+  (`SERIES_LOCKED_FIELDS`), so each occurrence keeps its own date. PUT returns
+  `series_updated`, DELETE returns `deleted`. A non-series event ignores the
+  scope, and an unknown scope is a 422.
+- Calendar UI: a **Repeats …** badge (`event-series-badge`) on any occurrence,
+  and saving or deleting one opens `series-scope-dialog` with
+  `series-scope-single` / `series-scope-future`.
+
+### Known
+- There is still no "all dates including earlier ones" option in the UI (the
+  backend supports `scope=series`); the prompt offers the two choices the user
+  asked for.
+- `programmes.py` / Outreach keeps its own separate generator keyed on
+  `programme_id` — untouched.
+
 ## iter372 — "I added an event and it didn't save" · household names in People (2026-06)
 
 Reported on **both preview and production**: an event was added from the

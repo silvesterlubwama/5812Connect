@@ -902,8 +902,26 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
     return event
 
 
+SERIES_LOCKED_FIELDS = {"date", "end_date", "registered", "series_id"}
+
+
+async def _series_targets(event: dict, scope: str) -> list:
+    """Ids this edit/delete applies to. `future` = this date onwards."""
+    sid = event.get("series_id")
+    if scope not in ("future", "series") or not sid:
+        return [event["id"]]
+    query = {"series_id": sid}
+    if scope == "future":
+        query["date"] = {"$gte": event.get("date") or ""}
+    rows = await db.events.find(query, {"_id": 0, "id": 1}).to_list(200)
+    ids = [r["id"] for r in rows]
+    return ids or [event["id"]]
+
+
 @router.put("/events/{event_id}")
-async def update_event(event_id: str, data: EventUpdate, force: bool = Query(False), current_user: dict = Depends(get_current_user)) -> dict:
+async def update_event(event_id: str, data: EventUpdate, force: bool = Query(False),
+                       scope: str = Query("single", pattern="^(single|future|series)$"),
+                       current_user: dict = Depends(get_current_user)) -> dict:
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
     # Venue availability re-check when venue or timing changes
@@ -929,15 +947,28 @@ async def update_event(event_id: str, data: EventUpdate, force: bool = Query(Fal
     result = await db.events.update_one({"id": event_id}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
-    return await db.events.find_one({"id": event_id}, {"_id": 0})
+    # Apply the same change to the rest of the series when asked. Each
+    # occurrence keeps its OWN date — only the shared details travel.
+    others = [i for i in await _series_targets(existing, scope) if i != event_id]
+    if others:
+        shared = {k: v for k, v in update_data.items() if k not in SERIES_LOCKED_FIELDS}
+        if shared:
+            await db.events.update_many({"id": {"$in": others}}, {"$set": shared})
+    updated = await db.events.find_one({"id": event_id}, {"_id": 0})
+    updated["series_updated"] = len(others) + 1 if others else 1
+    return updated
 
 
 @router.delete("/events/{event_id}")
-async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)) -> dict:
-    result = await db.events.delete_one({"id": event_id})
-    if result.deleted_count == 0:
+async def delete_event(event_id: str, scope: str = Query("single", pattern="^(single|future|series)$"),
+                       current_user: dict = Depends(get_current_user)) -> dict:
+    existing = await db.events.find_one({"id": event_id}, {"_id": 0})
+    if not existing:
         raise HTTPException(status_code=404, detail="Event not found")
-    return {"message": "Event deleted"}
+    ids = await _series_targets(existing, scope)
+    result = await db.events.delete_many({"id": {"$in": ids}})
+    return {"message": f"{result.deleted_count} event{'s' if result.deleted_count != 1 else ''} deleted",
+            "deleted": result.deleted_count}
 
 
 
@@ -2904,6 +2935,8 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
     from datetime import timedelta
     start = datetime.fromisoformat(start_date)
     created = []
+    # iter373 — one id for the whole run, so it can be edited/removed together.
+    series_id = f"ser_{uuid.uuid4().hex[:8]}"
 
     for i in range(occurrences):
         event_date = None
@@ -3004,6 +3037,9 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
             "capacity": capacity, "registered": 0, "status": "upcoming",
             "is_public": is_public, "is_free": True, "visibility": "external",
             "is_recurring": True, "recurrence_pattern": pattern,
+            # iter373 — every occurrence carries the same series id so the whole
+            # run can be edited or removed together instead of one date at a time.
+            "series_id": series_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "created_by": current_user["id"],
         }
@@ -3011,4 +3047,4 @@ async def generate_recurring_events(data: dict, current_user: dict = Depends(get
         doc.pop("_id", None)
         created.append(doc)
 
-    return {"created": len(created), "events": created}
+    return {"created": len(created), "events": created, "series_id": series_id}

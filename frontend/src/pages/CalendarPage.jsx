@@ -87,13 +87,15 @@ export default function CalendarPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [holidayItem, setHolidayItem] = useState(null);
   const [createKind, setCreateKind] = useState('event');
-  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
+  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '' });
   const [saving, setSaving] = useState(false);
   const [boards, setBoards] = useState([]);
   const [locations, setLocations] = useState([]);
   const [venues, setVenues] = useState([]);
   const [showShare, setShowShare] = useState(false);
   const [showRecurring, setShowRecurring] = useState(false);
+  // iter373 — "this date only" vs "this and all later dates" prompt
+  const [seriesAsk, setSeriesAsk] = useState(null);
   const [showImportCal, setShowImportCal] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -296,15 +298,19 @@ export default function CalendarPage() {
     try { await eventsApi.duplicate(selected.id); toast.success('Event duplicated'); setSelected(null); loadAll(); }
     catch { toast.error('Duplicate failed'); }
   };
-  const saveEdit = async (e) => {
-    e.preventDefault(); setSavingEdit(true);
+  const saveEdit = async (e, scope) => {
+    e?.preventDefault?.();
+    // Part of a repeating run? Ask what the change applies to first.
+    if (selected?.series_id && !scope) { setSeriesAsk({ action: 'save' }); return; }
+    setSavingEdit(true);
     try {
       const payload = { ...editForm };
       if (!payload.end_date || payload.end_date === payload.date) delete payload.end_date;
-      const res = await eventsApi.update(selected.id, payload);
-      toast.success('Event updated');
+      const res = await eventsApi.update(selected.id, payload, scope === 'future' ? { scope: 'future' } : {});
+      toast.success(scope === 'future' ? `Updated ${res.data?.series_updated || 1} dates in the series` : 'Event updated');
       setSelected({ ...selected, ...res.data });
       setEditMode(false);
+      setSeriesAsk(null);
       loadAll();
     } catch (err) {
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
@@ -312,18 +318,39 @@ export default function CalendarPage() {
     }
     finally { setSavingEdit(false); }
   };
-  const deleteEvent = async () => {
-    if (!selected || !window.confirm('Delete this event?')) return;
-    try { await eventsApi.delete(selected.id); toast.success('Event deleted'); setSelected(null); loadAll(); }
-    catch { toast.error('Failed to delete'); }
+  const deleteEvent = async (scope) => {
+    if (!selected) return;
+    if (selected.series_id && !scope) { setSeriesAsk({ action: 'delete' }); return; }
+    if (!scope && !window.confirm('Delete this event?')) return;
+    try {
+      const res = await eventsApi.delete(selected.id, scope === 'future' ? { scope: 'future' } : {});
+      toast.success(res.data?.message || 'Event deleted');
+      setSeriesAsk(null); setSelected(null); loadAll();
+    } catch { toast.error('Failed to delete'); }
   };
   const submitCreate = async (e) => {
     e.preventDefault(); setSaving(true);
     try {
       if (createKind === 'event') {
         const payload = { title: createForm.title, type: createForm.type, date: createForm.date, time: createForm.time || undefined, end_time: createForm.end_time || undefined, location: createForm.location, venue_id: createForm.venue_id || undefined, location_id: createForm.location_id || undefined, description: createForm.description, is_public: createForm.is_public, capacity: parseInt(createForm.capacity) || 100, is_free: createForm.is_free !== false, price: createForm.is_free === false ? (parseFloat(createForm.price) || 0) : null, ticket_tiers: createForm.is_free === false ? (createForm.ticket_tiers || []) : [] };
-        await eventsApi.create(payload);
-        toast.success('Event created');
+        if (createForm.repeats) {
+          // iter373 — repeating straight from this form, so the campus and
+          // venue already chosen here travel to every occurrence.
+          const res = await exportApi.generateRecurring({
+            title: payload.title, type: payload.type, time: payload.time, end_time: payload.end_time,
+            location: payload.location, location_id: payload.location_id, venue_id: payload.venue_id,
+            capacity: payload.capacity, is_public: payload.is_public,
+            pattern: createForm.repeat_pattern, start_date: payload.date,
+            occurrences: createForm.repeat_mode === 'count' ? (parseInt(createForm.repeat_count) || 8) : 104,
+            end_date: createForm.repeat_mode === 'until' ? (createForm.repeat_until || undefined) : undefined,
+          });
+          const made = res.data?.created ?? 0;
+          if (!made) toast.error('Nothing created — check the dates are in the future');
+          else toast.success(`Created ${made} ${made === 1 ? 'date' : 'dates'}`);
+        } else {
+          await eventsApi.create(payload);
+          toast.success('Event created');
+        }
       } else {
         if (!createForm.board_id) { toast.error('Please pick a board for the task'); setSaving(false); return; }
         // Board tasks require a list; grab first list of the chosen board
@@ -339,7 +366,7 @@ export default function CalendarPage() {
         toast.success('Task created');
       }
       setShowCreate(false);
-      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium' });
+      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '' });
       loadAll();
     } catch (err) {
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
@@ -579,10 +606,11 @@ export default function CalendarPage() {
                 {selected.is_public && <Badge variant="secondary">Public</Badge>}
                 <Badge variant="outline">{selected.registered ?? 0}/{selected.capacity ?? '∞'}</Badge>
                 {selected.is_free === false && <Badge variant="outline" data-testid="event-price-badge">{(selected.currency || 'UGX')} {Number(selected.price || 0).toLocaleString()}</Badge>}
+                {selected.series_id && <Badge variant="outline" className="border-primary/40 text-primary" data-testid="event-series-badge"><Repeat size={11} className="mr-1" />Repeats {selected.recurrence_pattern || ''}</Badge>}
               </div>
               <EventDetailTabs event={selected} onRefresh={refreshSelected} />
               <div className="flex gap-2 pt-3 flex-wrap">
-                <Button variant="destructive" size="sm" onClick={deleteEvent} data-testid="delete-event-btn">Delete</Button>
+                <Button variant="destructive" size="sm" onClick={() => deleteEvent()} data-testid="delete-event-btn">Delete</Button>
                 {selected.type === 'outreach' && !selected._isSession && (
                   <Button variant="outline" size="sm" onClick={() => navigate(`/lesson-planning?event=${selected.id}`)} data-testid="plan-this-event-btn">
                     <BookOpen size={14} className="mr-1" />Plan this
@@ -697,6 +725,50 @@ export default function CalendarPage() {
                   )}
                 </div>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_public} onChange={e => setCreateForm({ ...createForm, is_public: e.target.checked })} data-testid="create-is-public" /> Public event (appears on shared calendar)</label>
+                <div className="space-y-2 rounded-lg border p-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={!!createForm.repeats} onChange={e => setCreateForm({ ...createForm, repeats: e.target.checked })} data-testid="create-repeats" />
+                    <Repeat size={13} /> Repeats
+                  </label>
+                  {createForm.repeats && (
+                    <div className="space-y-2" data-testid="create-repeat-options">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div><Label className="text-xs">How often</Label>
+                          <Select value={createForm.repeat_pattern} onValueChange={v => setCreateForm({ ...createForm, repeat_pattern: v })}>
+                            <SelectTrigger data-testid="create-repeat-pattern"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="daily">Every day</SelectItem>
+                              <SelectItem value="weekly">Every week</SelectItem>
+                              <SelectItem value="biweekly">Every 2 weeks</SelectItem>
+                              <SelectItem value="monthly">Every month</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div><Label className="text-xs">Until</Label>
+                          <Select value={createForm.repeat_mode} onValueChange={v => setCreateForm({ ...createForm, repeat_mode: v })}>
+                            <SelectTrigger data-testid="create-repeat-mode"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="count">A number of times</SelectItem>
+                              <SelectItem value="until">A date</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      {createForm.repeat_mode === 'count' ? (
+                        <div><Label className="text-xs">How many dates</Label>
+                          <Input type="number" min="2" max="104" value={createForm.repeat_count}
+                            onChange={e => setCreateForm({ ...createForm, repeat_count: e.target.value })} data-testid="create-repeat-count" />
+                        </div>
+                      ) : (
+                        <div><Label className="text-xs">Last date</Label>
+                          <Input type="date" value={createForm.repeat_until}
+                            onChange={e => setCreateForm({ ...createForm, repeat_until: e.target.value })} data-testid="create-repeat-until" />
+                        </div>
+                      )}
+                      <p className="text-[11px] text-muted-foreground">Dates in the past are skipped. You can edit or remove the whole run later.</p>
+                    </div>
+                  )}
+                </div>
                 {createForm.is_free === false && (
                   <TicketTiersEditor idPrefix="create-tier" tiers={createForm.ticket_tiers || []} onChange={tiers => setCreateForm({ ...createForm, ticket_tiers: tiers })} />
                 )}
@@ -780,6 +852,30 @@ export default function CalendarPage() {
 
       {/* Recurring events (kept from previous) */}
       <RecurringEventsDialog open={showRecurring} onOpenChange={setShowRecurring} onCreated={loadAll} />
+
+      {/* iter373 — repeating event: does this touch one date or the whole run? */}
+      <Dialog open={!!seriesAsk} onOpenChange={o => { if (!o) setSeriesAsk(null); }}>
+        <DialogContent className="max-w-sm" data-testid="series-scope-dialog">
+          <DialogHeader>
+            <DialogTitle>{seriesAsk?.action === 'delete' ? 'Delete which dates?' : 'Apply the change to?'}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            “{selected?.title}” repeats{selected?.recurrence_pattern ? ` ${selected.recurrence_pattern}` : ''}.
+          </p>
+          <div className="space-y-2 pt-2">
+            <Button className="w-full" variant="outline" data-testid="series-scope-single"
+              onClick={() => (seriesAsk?.action === 'delete' ? deleteEvent('single') : saveEdit(null, 'single'))}>
+              This date only
+            </Button>
+            <Button className="w-full" variant={seriesAsk?.action === 'delete' ? 'destructive' : 'default'} data-testid="series-scope-future"
+              onClick={() => (seriesAsk?.action === 'delete' ? deleteEvent('future') : saveEdit(null, 'future'))}>
+              This date and all later ones
+            </Button>
+            <Button className="w-full" variant="ghost" onClick={() => setSeriesAsk(null)} data-testid="series-scope-cancel">Cancel</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <HolidayPolicyDialog
         holiday={holidayItem}
         canEdit={['admin', 'system_admin'].includes((user?.role || '').toLowerCase())}
