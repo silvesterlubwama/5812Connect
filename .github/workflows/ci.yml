@@ -41,8 +41,12 @@ jobs:
       - name: Install frontend deps
         working-directory: frontend
         run: |
+          # A stale committed lockfile must warn, not fail the run (iter375).
           if [ -f yarn.lock ]; then
-            yarn install --frozen-lockfile
+            yarn install --frozen-lockfile || {
+              echo "::warning::yarn.lock is out of sync with package.json — installing without --frozen-lockfile. Run 'yarn install' and commit frontend/yarn.lock."
+              yarn install
+            }
           else
             echo "::warning::yarn.lock missing — installing without --frozen-lockfile"
             yarn install

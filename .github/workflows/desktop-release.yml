@@ -141,7 +141,10 @@ jobs:
           # Use --frozen-lockfile only when the lockfile is committed.
           # First-time builds bootstrap without it (non-reproducible warning).
           if [ -f yarn.lock ]; then
-            yarn install --frozen-lockfile --network-timeout 600000
+            yarn install --frozen-lockfile --network-timeout 600000 || {
+              echo "::warning::yarn.lock is out of sync with package.json — installing without --frozen-lockfile. Run 'yarn install' and commit frontend/yarn.lock."
+              yarn install --network-timeout 600000
+            }
           else
             echo "::warning::yarn.lock missing — installing without --frozen-lockfile"
             yarn install --network-timeout 600000

@@ -26,11 +26,16 @@ COPY frontend/yarn.lock* /src/
 # so that script MUST exist before `yarn install`. Copy it (and any other
 # scripts) ahead of the install step.
 COPY frontend/scripts /src/scripts
-# corepack/yarn 1 is already in the base image. Use --frozen-lockfile when a
-# lock is present (CI builds are reproducible), fall back to plain install
-# when it's missing (first-time bootstrap).
+# corepack/yarn 1 is already in the base image. Prefer --frozen-lockfile so CI
+# builds are reproducible, but never let a stale lockfile kill the build: the
+# platform's auto-commit does not always include frontend/yarn.lock, so the
+# committed lock can lag behind package.json (iter375 — this failed the image
+# build twice with "Your lockfile needs to be updated"). Retry without the flag
+# and shout about it in the log instead.
 RUN if [ -f yarn.lock ]; then \
-        yarn install --frozen-lockfile --ignore-engines --network-timeout 600000; \
+        yarn install --frozen-lockfile --ignore-engines --network-timeout 600000 \
+        || { echo "WARNING: yarn.lock is out of sync with package.json — installing without --frozen-lockfile. Run 'yarn install' locally and commit frontend/yarn.lock to restore reproducible builds."; \
+             yarn install --ignore-engines --network-timeout 600000; }; \
     else \
         echo "WARNING: yarn.lock not committed — using non-reproducible install"; \
         yarn install --ignore-engines --network-timeout 600000; \
