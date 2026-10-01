@@ -5,14 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { reportsApi, locationsApi } from '../services/api';
 import { toast } from 'sonner';
 import { useAuth } from '../context/AuthContext';
 
 // iter 291 — the Reports page can now flip between the five finance ledger
 // reports, honour a user-supplied FX rate for export, and download either a
-// PDF (with the org logo — already baked into the backend PDF template) or
-// a CSV. Restricted users no longer see "All Locations" — they're pinned to
+// PDF (iter374: letterheaded with the organisation's OWN logo + name, the
+// period, the campus and a prepared-by / printed-on line) or a CSV. Restricted users no longer see "All Locations" — they're pinned to
 // their assigned campus/sublocation set.
 const REPORT_TYPES = [
   { value: 'summary', label: 'Summary (revenue · expenses · people)' },
@@ -20,6 +21,7 @@ const REPORT_TYPES = [
   { value: 'pnl', label: 'Profit & Loss' },
   { value: 'balance-sheet', label: 'Balance Sheet' },
   { value: 'cashflow', label: 'Cash Flow' },
+  { value: 'expenditure', label: 'Expenditure Detail (what · why · who)' },
 ];
 
 export default function ReportsPage() {
@@ -34,6 +36,9 @@ export default function ReportsPage() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+
+  // iter374 — click a P&L expense total to see the payments behind it
+  const [drill, setDrill] = useState(null);   // { code, name, loading, data }
 
   // FX conversion (optional at export time)
   const [fxTarget, setFxTarget] = useState('');
@@ -65,14 +70,33 @@ export default function ReportsPage() {
       if (locationId) params.location_id = locationId;
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
+      const api = (await import('../services/api')).default;
       const res = reportType === 'summary'
         ? await reportsApi.summary(params)
-        : await (await import('../services/api')).default.get(`/finance/reports/${reportType}`, { params });
+        : reportType === 'expenditure'
+          ? await api.get('/finance/reports/expenditure', { params })
+          : await api.get(`/finance/reports/${reportType}`, { params });
       setReport(res.data);
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Failed to generate report');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openDrill = async (row) => {
+    setDrill({ code: row.code, name: row.name, loading: true, data: null });
+    try {
+      const api = (await import('../services/api')).default;
+      const params = { account_code: row.code };
+      if (locationId) params.location_id = locationId;
+      if (dateFrom) params.date_from = dateFrom;
+      if (dateTo) params.date_to = dateTo;
+      const res = await api.get('/finance/reports/expenditure', { params });
+      setDrill(d => ({ ...d, loading: false, data: res.data }));
+    } catch {
+      toast.error('Could not load the payments behind that total');
+      setDrill(null);
     }
   };
 
@@ -90,11 +114,17 @@ export default function ReportsPage() {
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
       if (fxTarget && Number(fxRate) > 0) { params.fx_target = fxTarget; params.fx_rate = fxRate; }
-      const res = await reportsApi.pdf(params);
+      let res;
+      if (reportType === 'expenditure') {
+        const api = (await import('../services/api')).default;
+        res = await api.get('/finance/reports/expenditure.pdf', { params, responseType: 'blob' });
+      } else {
+        res = await reportsApi.pdf(params);
+      }
       const url = URL.createObjectURL(res.data);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `5812_${reportType}_${new Date().toISOString().split('T')[0]}.pdf`;
+      a.download = `${reportType}_${new Date().toISOString().split('T')[0]}.pdf`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       toast.success('PDF downloaded');
@@ -139,6 +169,16 @@ export default function ReportsPage() {
       rows.push(['', '', 'Total Liabilities', applyFx(report.total_liabilities)]);
       (report.equity || []).forEach(r => rows.push(['Equity', r.code, r.name, applyFx(r.amount)]));
       rows.push(['', '', 'Total Equity', applyFx(report.total_equity)]);
+    } else if (reportType === 'expenditure') {
+      headers = ['Date', 'Paid to', 'Purpose', 'Category', 'Campus', 'Paid by', 'Recorded by', 'Ref / receipt', `Amount${fxSuffix}`, 'Status'];
+      rows = (report.rows || []).map(r => [r.date, r.payee, r.purpose, r.category, r.location_name, r.paid_by, r.recorded_by, r.reference, applyFx(r.amount), r.status]);
+      rows.push([]);
+      rows.push(['SUBTOTALS BY CATEGORY, THEN CAMPUS']);
+      (report.by_category || []).forEach(c => {
+        rows.push([c.category, '', '', '', '', '', '', `${c.count} payments`, applyFx(c.total), '']);
+        (c.campuses || []).forEach(camp => rows.push(['', camp.location_name, '', '', '', '', '', `${camp.count} payments`, applyFx(camp.total), '']));
+      });
+      rows.push(['TOTAL', '', '', '', '', '', '', `${report.count} payments`, applyFx(report.total), '']);
     } else if (reportType === 'cashflow') {
       headers = ['Date', 'Description', `Amount${fxSuffix}`];
       rows = (report.lines || []).map(l => [l.date, l.description, applyFx(l.amount)]);
@@ -150,7 +190,7 @@ export default function ReportsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `5812_${reportType}_${new Date().toISOString().split('T')[0]}.csv`;
+    a.download = `${reportType}_${new Date().toISOString().split('T')[0]}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     toast.success('CSV downloaded');
@@ -267,10 +307,54 @@ export default function ReportsPage() {
             {dateFrom || dateTo ? <span className="text-xs text-muted-foreground">{dateFrom || '…'} → {dateTo || 'today'}</span> : null}
           </CardHeader>
           <CardContent className="overflow-x-auto">
-            <ReportTable reportType={reportType} report={report} applyFx={applyFx} />
+            <ReportTable reportType={reportType} report={report} applyFx={applyFx} onDrill={openDrill} />
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={!!drill} onOpenChange={o => { if (!o) setDrill(null); }}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto" data-testid="pnl-drill-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-base">{drill?.code} {drill?.name}</DialogTitle>
+            <DialogDescription>
+              Every payment behind this total{dateFrom || dateTo ? ` · ${dateFrom || '…'} → ${dateTo || 'today'}` : ''}
+            </DialogDescription>
+          </DialogHeader>
+          {drill?.loading && <p className="text-sm text-muted-foreground py-6 text-center">Loading…</p>}
+          {drill?.data && (
+            <>
+              <p className="text-xs text-muted-foreground">
+                {drill.data.count} payments · total <strong className="font-mono">{Number(drill.data.total || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong>
+              </p>
+              <table className="w-full text-sm border-collapse mt-2">
+                <thead><tr className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                  <th className="text-left px-2 py-2 font-medium">Date</th>
+                  <th className="text-left px-2 py-2 font-medium">Paid to</th>
+                  <th className="text-left px-2 py-2 font-medium">Purpose</th>
+                  <th className="text-left px-2 py-2 font-medium">Campus</th>
+                  <th className="text-left px-2 py-2 font-medium">Paid by</th>
+                  <th className="text-left px-2 py-2 font-medium">Ref</th>
+                  <th className="text-right px-2 py-2 font-medium">Amount</th>
+                </tr></thead>
+                <tbody>
+                  {drill.data.rows.length === 0 && <tr><td colSpan={7} className="text-center text-muted-foreground py-6 text-xs">No payments in this period</td></tr>}
+                  {drill.data.rows.map((r, i) => (
+                    <tr key={`${r.id}-${i}`} className="border-t" data-testid={`drill-row-${i}`}>
+                      <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap">{r.date}</td>
+                      <td className="px-2 py-1.5">{r.payee || '—'}</td>
+                      <td className="px-2 py-1.5">{r.purpose || '—'}</td>
+                      <td className="px-2 py-1.5 text-xs">{r.location_name}</td>
+                      <td className="px-2 py-1.5 text-xs">{r.paid_by || '—'}</td>
+                      <td className="px-2 py-1.5 font-mono text-xs">{r.reference || '—'}</td>
+                      <td className="px-2 py-1.5 text-right font-mono">{Number(r.amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {!report && !loading && (
         <Card className="shadow-soft rounded-xl">
@@ -290,7 +374,7 @@ export default function ReportsPage() {
 // without opening the CSV/PDF export. Currency conversion (`applyFx`) is
 // applied at render time so the same table doubles as the print preview
 // when a target currency + rate has been entered.
-function ReportTable({ reportType, report, applyFx }) {
+function ReportTable({ reportType, report, applyFx, onDrill }) {
   const fmt = (n) => Number(applyFx(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (!report) return null;
 
@@ -344,12 +428,89 @@ function ReportTable({ reportType, report, applyFx }) {
           <tr className="border-t bg-emerald-50 font-medium"><td colSpan={2} className="px-3 py-2">Total Revenue</td><td className="px-3 py-2 text-right font-mono">{fmt(report.total_revenue)}</td></tr>
           <tr className="bg-muted/40 text-xs uppercase font-medium"><td colSpan={3} className="px-3 py-2 pt-4">Expenses</td></tr>
           {(report.expenses || []).map((r, i) => (
-            <tr key={`exp-${i}`} className="border-t"><td className="px-3 py-1.5 font-mono text-xs w-16">{r.code}</td><td className="px-3 py-1.5">{r.name}</td><td className="px-3 py-1.5 text-right font-mono">{fmt(r.amount)}</td></tr>
+            <tr key={`exp-${i}`} className="border-t hover:bg-amber-50/60 cursor-pointer" onClick={() => onDrill?.(r)}
+              title="See every payment behind this total" data-testid={`pnl-drill-${r.code}`}>
+              <td className="px-3 py-1.5 font-mono text-xs w-16">{r.code}</td>
+              <td className="px-3 py-1.5">{r.name} <span className="text-[10px] text-muted-foreground">· see the payments</span></td>
+              <td className="px-3 py-1.5 text-right font-mono">{fmt(r.amount)}</td>
+            </tr>
           ))}
           <tr className="border-t bg-rose-50 font-medium"><td colSpan={2} className="px-3 py-2">Total Expenses</td><td className="px-3 py-2 text-right font-mono">{fmt(report.total_expenses)}</td></tr>
           <tr className={`border-t-2 font-bold text-base ${Number(report.net_income) >= 0 ? 'bg-emerald-100' : 'bg-rose-100'}`}><td colSpan={2} className="px-3 py-2">Net Income</td><td className="px-3 py-2 text-right font-mono">{fmt(report.net_income)}</td></tr>
         </tbody>
       </table>
+    );
+  }
+
+  if (reportType === 'expenditure') {
+    const rows = report.rows || [];
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-wrap gap-4 text-xs">
+          <span><span className="text-muted-foreground">Posted to the ledger: </span><strong className="font-mono">{fmt(report.total_posted)}</strong></span>
+          <span><span className="text-muted-foreground">Awaiting approval: </span><strong className="font-mono text-amber-700">{fmt(report.total_pending)}</strong></span>
+          <span><span className="text-muted-foreground">Total: </span><strong className="font-mono">{fmt(report.total)}</strong> over {report.count} payments</span>
+        </div>
+
+        <table className="w-full text-sm border-collapse" data-testid="report-table-expenditure">
+          <thead>
+            <tr className="bg-muted/40 text-xs uppercase text-muted-foreground">
+              <th className="text-left px-2 py-2 font-medium">Date</th>
+              <th className="text-left px-2 py-2 font-medium">Paid to</th>
+              <th className="text-left px-2 py-2 font-medium">Purpose</th>
+              <th className="text-left px-2 py-2 font-medium">Category</th>
+              <th className="text-left px-2 py-2 font-medium">Campus</th>
+              <th className="text-left px-2 py-2 font-medium">Paid by</th>
+              <th className="text-left px-2 py-2 font-medium">Recorded by</th>
+              <th className="text-left px-2 py-2 font-medium">Ref</th>
+              <th className="text-right px-2 py-2 font-medium">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && <tr><td colSpan={9} className="text-center text-muted-foreground py-6 text-xs">No expenditure in this period</td></tr>}
+            {rows.map((r, i) => (
+              <tr key={`${r.id}-${i}`} className="border-t hover:bg-muted/20" data-testid={`expenditure-row-${i}`}>
+                <td className="px-2 py-1.5 whitespace-nowrap font-mono text-xs">{r.date}</td>
+                <td className="px-2 py-1.5">{r.payee || <span className="text-muted-foreground">—</span>}</td>
+                <td className="px-2 py-1.5 max-w-[260px]">{r.purpose || <span className="text-muted-foreground">—</span>}</td>
+                <td className="px-2 py-1.5 text-xs">{r.category}</td>
+                <td className="px-2 py-1.5 text-xs">{r.location_name}</td>
+                <td className="px-2 py-1.5 text-xs">{r.paid_by || <span className="text-muted-foreground">—</span>}</td>
+                <td className="px-2 py-1.5 text-xs">{r.recorded_by || <span className="text-muted-foreground">—</span>}</td>
+                <td className="px-2 py-1.5 font-mono text-xs">{r.reference || '—'}</td>
+                <td className="px-2 py-1.5 text-right font-mono">
+                  {fmt(r.amount)}
+                  {r.status !== 'posted' && <span className="ml-1 text-[10px] text-amber-700">{r.status}</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div>
+          <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Subtotals — by category, then campus</p>
+          <table className="w-full text-sm border-collapse" data-testid="expenditure-subtotals">
+            <tbody>
+              {(report.by_category || []).map((c, i) => (
+                <React.Fragment key={c.category + i}>
+                  <tr className="bg-muted/40 border-t font-medium">
+                    <td className="px-3 py-1.5">{c.category}</td>
+                    <td className="px-3 py-1.5 text-right text-xs text-muted-foreground">{c.count} payments</td>
+                    <td className="px-3 py-1.5 text-right font-mono">{fmt(c.total)}</td>
+                  </tr>
+                  {(c.campuses || []).map((camp, j) => (
+                    <tr key={`${c.category}-${j}`} className="border-t">
+                      <td className="px-3 py-1 pl-8 text-xs text-muted-foreground">{camp.location_name}</td>
+                      <td className="px-3 py-1 text-right text-xs text-muted-foreground">{camp.count}</td>
+                      <td className="px-3 py-1 text-right font-mono text-xs">{fmt(camp.total)}</td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     );
   }
 

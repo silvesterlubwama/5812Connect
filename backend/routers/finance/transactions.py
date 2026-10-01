@@ -33,7 +33,12 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
     """One-line expense entry — auto-posts to the ledger.
 
     Body: {amount, expense_account_id | expense_account_code, paid_from_account_id | paid_from_code,
-           date?, description?, location_id?, department_id?, reference?}
+           date?, description?, location_id?, department_id?, reference?,
+           payee?, purpose?, receipt_number?, paid_by_id?, paid_by_name?}
+
+    iter374 — `payee` (who was paid), `purpose` (why) and `receipt_number` are
+    stored on the entry so the Expenditure Detail report can account for every
+    shilling instead of showing a category total nobody can defend.
     """
     amount = float(data.get("amount") or 0)
     if amount <= 0:
@@ -68,10 +73,20 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
         created_by_name=current_user.get("name"),
     )
     who = await _resolve_staff(data.get("paid_by_id"), data.get("paid_by_name"))
+    extra = {}
     if who["staff_id"] or who["staff_name"]:
-        await db.finance_journal_entries.update_one({"id": je["id"]}, {"$set": {
-            "paid_by_id": who["staff_id"], "paid_by_name": who["staff_name"]}})
-        je.update({"paid_by_id": who["staff_id"], "paid_by_name": who["staff_name"]})
+        extra.update({"paid_by_id": who["staff_id"], "paid_by_name": who["staff_name"]})
+    # `vendor` is what the expense dialog's VendorPicker already sends.
+    payee = (data.get("payee") or data.get("vendor") or "").strip()
+    if payee:
+        extra["payee"] = payee
+    for field in ("purpose", "receipt_number"):
+        val = (data.get(field) or "").strip()
+        if val:
+            extra[field] = val
+    if extra:
+        await db.finance_journal_entries.update_one({"id": je["id"]}, {"$set": extra})
+        je.update(extra)
     return je
 
 

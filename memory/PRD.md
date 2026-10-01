@@ -1,5 +1,67 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter374 — Report letterhead + expenditure accountability (2026-06)
+
+Asked for: the report's top page should carry the **organisation's logo**
+instead of "5812 Connect", and the financial reports should show **exactly what
+was spent and why**. User choices: logo + name + period/campus + prepared-by /
+printed-on; capture **paid to + purpose + receipt no.**; a new **Expenditure
+Detail** report with **both** a P&L drill-down and **category → campus**
+subtotals; **PDF + CSV**, portal expenses included.
+
+Tested: `backend/tests/test_iter374_report_branding_expenditure.py` **7/7**,
+iter373/372 + iter292 regression **30 passed**, the rendered PDF checked page by
+page (letterhead, columns, subtotals), and the Reports page driven in the
+browser — 77 lines, subtotals, and the P&L drill-down returning 5 payments
+behind "5002 Wages & Salaries". **Production needs a redeploy.**
+
+### Letterhead (`routers/reports.py`)
+- `report_header_html()` + `branded_filename()` + `_branding()` are now the
+  shared letterhead for every PDF: logo, org name, tagline, report title, then
+  **Period / Campus / Prepared by / Printed** on the right. The old hardcoded
+  `<h1>58:12 Connect · Summary Report</h1>`, footer and `5812_report_*.pdf`
+  filename are gone — the file is now `<org-slug>_<report>_<date>.pdf`.
+- The logo comes from Settings → Branding, falling back to the same default the
+  sidebar uses. **It is fetched by us and inlined as a base64 data URI**:
+  WeasyPrint's own fetcher sends no User-Agent and the org's WordPress CDN
+  answered it with a 404, which silently printed a logo-less report. Cached per
+  URL in `_LOGO_CACHE`.
+- The header is a `<table>`, not flexbox — WeasyPrint's flex support let the
+  right-hand audit block overflow the page edge.
+
+### Expenditure Detail (`routers/finance/expenditure.py`, new)
+- `GET /api/finance/reports/expenditure` — one row per payment: date, **paid
+  to**, **purpose**, category, campus, **paid by**, **recorded by**, ref /
+  receipt, amount, status. Subtotals by category, then by campus inside each
+  category. `total_posted` vs `total_pending` are split out so a cash request
+  awaiting approval is never read as money already gone.
+- Two sources union'd: the ledger (`finance_journal_entries`, every debit to an
+  expense account, reversals excluded) **and** the staff-portal `expenses`
+  rows, which never reach the ledger until approved and were therefore invisible
+  in every financial report. Portal rows are tagged `source: "portal"` with
+  their approval status.
+- `?account_code=` powers the P&L drill-down (ledger-only by definition);
+  `?include_portal=false` for ledger-only totals.
+- `GET /api/finance/reports/expenditure.pdf` — landscape, same letterhead.
+- `payee` falls back to `vendor` / `receipt_vendor` so existing history shows a
+  payee without a backfill.
+
+### Capture + UI
+- `POST /finance/transactions/expense` now stores **`payee`** (or the `vendor`
+  the dialog already sent), **`purpose`** and **`receipt_number`**.
+- Finance → Record expense gained a **Purpose** field (the existing
+  "Reference / receipt #" is used as the receipt number — no duplicate box).
+- Reports page: new **Expenditure Detail** report type with the line table and
+  the subtotal table, CSV export including the subtotal block, its own PDF, and
+  **every P&L expense row is clickable** → `pnl-drill-dialog` lists the payments
+  behind that total.
+
+### Data cleanup
+5 journal entries left behind by a previous agent's iter370 test run
+(`ITER370_*`, `TEST_Asset_A/B`, 1,282,000 total) were inflating the expense
+reports — e.g. the whole "5000 Salaries & Wages DNU" line. Copied to
+`finance_journal_entries_quarantine` and removed by exact id.
+
 ## iter373 — Repeating events live in the normal form, and move as one series (2026-06)
 
 "The recurring code already exists on calendar" — it did

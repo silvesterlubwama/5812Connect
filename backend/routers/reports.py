@@ -10,6 +10,104 @@ from io import BytesIO
 router = APIRouter(prefix="/api")
 
 
+DEFAULT_LOGO = "https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1"
+
+
+async def _branding() -> dict:
+    """Org name + logo for printed reports — set in Settings → Branding.
+
+    Falls back to the same default logo the app header uses, so a printed
+    report looks like the screen even before anyone edits Branding.
+    """
+    doc = await db.system_settings.find_one({}, {"_id": 0, "branding": 1}) or {}
+    b = doc.get("branding") or {}
+    return {
+        "name": (b.get("app_name") or "").strip() or "58:12 Global Connect",
+        "logo": (b.get("logo_url") or "").strip() or DEFAULT_LOGO,
+        "tagline": (b.get("tagline") or "").strip(),
+    }
+
+
+_LOGO_CACHE: dict = {}
+
+
+async def _logo_data_uri(url: str) -> str:
+    """Fetch the logo ourselves and inline it as a data URI.
+
+    WeasyPrint's own fetcher sends no User-Agent and some CDNs (including the
+    org's WordPress one) answer it with a 404, which silently printed a
+    logo-less report. Downloading it here with a normal UA and embedding the
+    bytes means the letterhead always renders. Cached per URL for the process.
+    """
+    if not url.startswith("http"):
+        return ""
+    if url in _LOGO_CACHE:
+        return _LOGO_CACHE[url]
+    uri = ""
+    try:
+        import base64
+
+        import httpx
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (report-renderer)"})
+        ctype = r.headers.get("content-type", "")
+        if r.status_code == 200 and ctype.startswith("image"):
+            uri = f"data:{ctype.split(';')[0]};base64,{base64.b64encode(r.content).decode()}"
+        else:
+            import logging
+            logging.getLogger(__name__).warning(f"Report logo not usable ({r.status_code} {ctype}): {url}")
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Report logo fetch failed: {e}")
+    _LOGO_CACHE[url] = uri
+    return uri
+
+
+async def branded_filename(kind: str, ext: str = "pdf") -> str:
+    """`58-12-global-connect_expenditure_20260930.pdf` — the org's own name."""
+    b = await _branding()
+    slug = "".join(c if c.isalnum() else "-" for c in b["name"].lower()).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"{slug or 'report'}_{kind}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.{ext}"
+
+
+async def report_header_html(title: str, loc_name: str, data: dict, current_user: dict) -> str:
+    """The shared letterhead: the organisation's own logo and name, then the
+    period, campus, who prepared it and when it was printed — an unsigned
+    report is worth nothing in an audit (iter374)."""
+    b = await _branding()
+    date_from, date_to = data.get("date_from") or "", data.get("date_to") or ""
+    if date_from and date_to:
+        period = f"{date_from} → {date_to}"
+    elif date_from:
+        period = f"from {date_from}"
+    elif date_to:
+        period = f"through {date_to}"
+    else:
+        period = "All time"
+    logo_src = await _logo_data_uri(b["logo"])
+    logo = (f'<img src="{logo_src}" alt="" style="height:46px;max-width:190px;object-fit:contain" />'
+            if logo_src else "")
+    printed = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return f"""<table style="width:100%;border-collapse:collapse;border-bottom:2px solid #0f172a;margin-bottom:14px">
+  <tr>
+    <td style="width:200px;padding:0 12px 10px 0;vertical-align:middle;border:0">{logo}</td>
+    <td style="padding:0 0 10px;vertical-align:middle;border:0">
+      <div style="font-size:14pt;font-weight:700;line-height:1.1">{b["name"]}</div>
+      {f'<div style="font-size:8pt;color:#64748b">{b["tagline"]}</div>' if b["tagline"] else ''}
+      <div style="font-size:11pt;margin-top:3px">{title}</div>
+    </td>
+    <td style="padding:0 0 10px;vertical-align:middle;border:0;text-align:right;font-size:8pt;color:#475569;line-height:1.5;white-space:nowrap">
+      <div><strong>Period:</strong> {period}</div>
+      <div><strong>Campus:</strong> {loc_name}</div>
+      <div><strong>Prepared by:</strong> {current_user.get('name') or '—'}</div>
+      <div><strong>Printed:</strong> {printed}</div>
+    </td>
+  </tr>
+</table>"""
+
+
 @router.get("/reports/summary")
 async def reports_summary(location_id: Optional[str] = None, date_from: Optional[str] = None, date_to: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """Quick summary for the dashboard / reports page.
@@ -107,8 +205,14 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
     net = fx(summary["net"])
     net_color = "#059669" if net >= 0 else "#dc2626"
 
+    # iter374 — the organisation's own letterhead, not ours.
+    brand = await _branding()
+    brand_name = brand["name"]
+    header = await report_header_html("Summary Report", loc_name,
+                                      {"date_from": date_from, "date_to": date_to}, current_user)
+
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>58:12 Connect — Summary Report</title>
+<title>{brand_name} — Summary Report</title>
 <style>
   @page {{ size: A4; margin: 20mm; }}
   body {{ font-family: 'Helvetica','Arial',sans-serif; color: #0f172a; font-size: 11pt; }}
@@ -126,11 +230,7 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
   .fx-note {{ margin-top: 8px; font-size: 9pt; color: #64748b; font-style: italic; }}
 </style></head>
 <body>
-  <h1>58:12 Connect · Summary Report</h1>
-  <div class="meta">
-    Location: <strong>{loc_name}</strong> · Period: <strong>{period}</strong> ·
-    Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}
-  </div>
+  {header}
   {f'<div class="fx-note">All amounts converted to {fx_target} at rate {fx_rate}.</div>' if fx_active else ''}
 
   <div class="stats">
@@ -156,7 +256,7 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
   <table><thead><tr><th>Category</th><th style="text-align:right">Count</th><th style="text-align:right">Total{currency_suffix}</th></tr></thead>
   <tbody>{_rows(summary["expense_breakdown"])}</tbody></table>
 
-  <div class="footer">58:12 Connect — Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d')}</div>
+  <div class="footer">{brand_name} — prepared by {current_user.get('name') or '—'} · {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</div>
 </body></html>"""
 
     try:
@@ -169,7 +269,7 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
         logging.getLogger(__name__).error(f"WeasyPrint failed for /reports/pdf: {e}")
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {e}")
 
-    filename = f"5812_report_{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf"
+    filename = await branded_filename("summary")
     return StreamingResponse(
         BytesIO(pdf_bytes), media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},

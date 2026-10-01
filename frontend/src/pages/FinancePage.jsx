@@ -755,7 +755,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   const defaultDept = (user?.department_ids || [])[0] || '';
   const [form, setForm] = useState({
     amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-    description: '', reference: '', vendor: '',
+    description: '', reference: '', vendor: '', purpose: '',
     location_id: defaultCampus, department_id: defaultDept,
     staff_name: '', staff_id: '',
   });
@@ -795,7 +795,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     // Reset form to prefilled defaults whenever the dialog opens.
     setForm({
       amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-      description: '', reference: '', vendor: '',
+      description: '', reference: '', vendor: '', purpose: '',
       location_id: defaultCampus, department_id: defaultDept,
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -890,6 +890,9 @@ function QuickPostDialog({ mode, onClose, onDone }) {
         // iter344h — pass vendor free-text so the backend auto-upserts
         // and returns a linked vendor_id on the resulting expense.
         vendor: form.vendor || undefined,
+        // iter374 — what the money was for and the receipt it came with, so
+        // the Expenditure Detail report can stand up to an audit.
+        purpose: form.purpose || undefined,
         ...(isExpense
           ? { paid_by_id: form.staff_id || undefined, paid_by_name: form.staff_name || undefined }
           : { received_by_id: form.staff_id || undefined, received_by_name: form.staff_name || undefined }),
@@ -903,7 +906,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
       onDone();
       setForm({
         amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-        description: '', reference: '', vendor: '',
+        description: '', reference: '', vendor: '', purpose: '',
         location_id: defaultCampus, department_id: defaultDept,
         staff_name: '', staff_id: '',
       });
@@ -1040,6 +1043,15 @@ function QuickPostDialog({ mode, onClose, onDone }) {
                 value={form.vendor || ''}
                 onChange={v => setForm(f => ({ ...f, vendor: v }))} />
               <p className="text-[10px] text-muted-foreground mt-1">Matches an existing vendor as you type, or creates one on the fly.</p>
+            </div>
+          )}
+          {isExpense && !split && (
+            <div>
+              <Label>Purpose <span className="text-muted-foreground text-[10px]">(why the money was spent)</span></Label>
+              <Input data-testid="quick-post-purpose" value={form.purpose}
+                onChange={e => setForm({ ...form, purpose: e.target.value })}
+                placeholder="e.g. School fees — Term 3, 4 children" />
+              <p className="text-[10px] text-muted-foreground mt-1">Shows on the Expenditure Detail report — the "Reference / receipt #" above is used as the receipt number.</p>
             </div>
           )}
           <div><Label>Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What was this for?" /></div>
