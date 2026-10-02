@@ -6,11 +6,14 @@ an audit. Now:
   • `/api/reports/pdf` and the new `/api/finance/reports/expenditure.pdf` carry
     the organisation's own logo + name from Settings → Branding, plus the
     period, campus, prepared-by and printed-on lines, and a branded filename;
-  • `/api/finance/reports/expenditure` lists each payment (paid to, purpose,
-    category, campus, paid by, recorded by, receipt) with subtotals by category
-    and then campus, including staff-portal expenses that never reached the
-    ledger;
-  • an expense records `payee` / `purpose` / `receipt_number`.
+  • `/api/finance/reports/expenditure` lists each payment (paid to,
+    description, category, campus, paid by, recorded by, receipt) with
+    subtotals by category and then campus, including staff-portal expenses that
+    never reached the ledger;
+  • an expense records `payee` / `receipt_number`.
+
+iter376 — `purpose` was dropped: it said the same thing as the ledger's own
+`description`, so there is now exactly one field for WHY money was spent.
 """
 import os
 import uuid
@@ -61,17 +64,17 @@ def test_an_expense_records_who_was_paid_and_why(head):
         "expense_account_code": acct["code"],
         "paid_from_code": "1000",
         "location_id": _campus(head)["id"],
-        "description": f"{TAG} probe",
+        "description": "Roofing sheets for the shelter dormitory",
         "payee": f"{TAG} Hardware Ltd",
-        "purpose": "Roofing sheets for the shelter dormitory",
         "receipt_number": "RCT-374",
     })
     assert r.status_code in (200, 201), r.text
     je = r.json()
     state["je"] = je["id"]
     assert je["payee"] == f"{TAG} Hardware Ltd"
-    assert je["purpose"] == "Roofing sheets for the shelter dormitory"
+    assert je["description"] == "Roofing sheets for the shelter dormitory"
     assert je["receipt_number"] == "RCT-374"
+    assert "purpose" not in je          # one field for "why", not two
 
 
 def test_the_expenditure_report_shows_that_payment_in_full(head):
@@ -81,7 +84,8 @@ def test_the_expenditure_report_shows_that_payment_in_full(head):
     mine = next((x for x in data["rows"] if x["id"] == state["je"]), None)
     assert mine, "the probe expense is missing from the detail report"
     assert mine["payee"] == f"{TAG} Hardware Ltd"
-    assert mine["purpose"] == "Roofing sheets for the shelter dormitory"
+    assert mine["description"] == "Roofing sheets for the shelter dormitory"
+    assert "purpose" not in mine
     assert mine["reference"] == "RCT-374"
     assert mine["recorded_by"] == "Admin"
     assert mine["location_name"] and mine["category"]

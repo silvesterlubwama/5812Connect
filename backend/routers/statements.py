@@ -14,14 +14,24 @@ router = APIRouter(prefix="/api", tags=["statements"])
 
 
 def _render_statement_html(customer: dict, sales: list, period_from: str, period_to: str,
-                           location_name: str = "58:12 Global") -> str:
-    """Branded customer statement HTML — used as input to WeasyPrint PDF generation."""
-    total_billed = sum(float(s.get("total") or 0) for s in sales)
+                           location_name: str = "58:12 Global", fx: dict = None) -> str:
+    """Branded customer statement HTML — used as input to WeasyPrint PDF generation.
+
+    iter375 — `fx` (from `routers.finance.fx.resolve_fx`) prints the statement in
+    another currency using the rate saved in Settings → Exchange rates.
+    """
+    fx = fx or {}
+    rate = fx["rate"] if fx.get("active") else 1.0
+    def _m(v):
+        return float(v or 0) * rate
+    total_billed = sum(_m(s.get("total")) for s in sales)
     paid_sales = [s for s in sales if s.get("payment_status", "paid") != "pending"]
     pending_sales = [s for s in sales if s.get("payment_status") == "pending"]
-    total_paid = sum(float(s.get("total") or 0) for s in paid_sales)
-    total_outstanding = sum(float(s.get("total") or 0) for s in pending_sales)
+    total_paid = sum(_m(s.get("total")) for s in paid_sales)
+    total_outstanding = sum(_m(s.get("total")) for s in pending_sales)
     currency = sales[0].get("items", [{}])[0].get("currency") if sales and sales[0].get("items") else "UGX"
+    if fx.get("active"):
+        currency = fx["code"]
     rows = "".join([
         f"""
         <tr>
@@ -30,7 +40,7 @@ def _render_statement_html(customer: dict, sales: list, period_from: str, period
             <td>{len(s.get('items') or [])} item(s)</td>
             <td>{(s.get('payment_method') or 'cash').replace('_', ' ').title()}</td>
             <td>{'<span style="color:#b45309">PENDING</span>' if s.get('payment_status') == 'pending' else '<span style="color:#047857">PAID</span>'}</td>
-            <td style="text-align:right">{currency} {(s.get('total') or 0):,.2f}</td>
+            <td style="text-align:right">{currency} {_m(s.get('total')):,.2f}</td>
         </tr>
         """ for s in sales
     ])
@@ -109,9 +119,12 @@ async def generate_customer_statement(
     period_from: Optional[str] = None,
     period_to: Optional[str] = None,
     format: str = "pdf",
+    fx_target: Optional[str] = None,
+    fx_rate: Optional[float] = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Generate a customer statement. ?format=pdf (default) or json.
+    ?fx_target=USD prints it in that currency at the saved rate.
     period_from / period_to default to the current month."""
     if not period_to:
         period_to = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -148,7 +161,9 @@ async def generate_customer_statement(
             "total_billed": total_billed,
             "total_outstanding": total_outstanding,
         }
-    html = _render_statement_html(customer_view, sales, period_from, period_to)
+    from routers.finance.fx import resolve_fx
+    html = _render_statement_html(customer_view, sales, period_from, period_to,
+                                  fx=await resolve_fx(fx_target, fx_rate))
     pdf = _html_to_pdf(html)
     return StreamingResponse(
         io.BytesIO(pdf),

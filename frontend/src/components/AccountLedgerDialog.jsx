@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Printer, RefreshCw } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
@@ -19,6 +19,8 @@ export function AccountLedgerDialog({ accountId, accountLabel, locationId, open,
   const [anchor, setAnchor] = useState(() => new Date());
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const jumped = useRef(false);
+  useEffect(() => { if (!open) jumped.current = false; }, [open]);
 
   const load = useCallback(async (d) => {
     if (!accountId) return;
@@ -28,6 +30,13 @@ export function AccountLedgerDialog({ accountId, accountLabel, locationId, open,
       if (locationId && locationId !== 'all') params.location_id = locationId;
       const r = await api.get(`/finance/chart-of-accounts/${accountId}/ledger`, { params });
       setData(r.data);
+      // iter377 — an empty current month used to print as a blank sheet. Land
+      // on the last month this account actually moved instead.
+      if (!r.data.count && r.data.last_activity_date && !jumped.current) {
+        jumped.current = true;
+        const last = new Date(r.data.last_activity_date);
+        if (!Number.isNaN(last.getTime())) setAnchor(new Date(last.getFullYear(), last.getMonth(), 1));
+      }
     } catch (e) {
       toast.error(e?.response?.data?.detail || 'Could not load the account ledger');
     } finally { setLoading(false); }
@@ -36,6 +45,36 @@ export function AccountLedgerDialog({ accountId, accountLabel, locationId, open,
   useEffect(() => { if (open) load(anchor); }, [open, anchor, load]);
 
   const money = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  // iter377 — this used to be a bare window.print(). The app's print stylesheet
+  // hides everything outside `.print-area`, and this dialog had no such
+  // wrapper, so the ledger printed as a blank page. Now it prints the branded
+  // PDF the backend renders (letterhead, period, every transaction detail).
+  const [printing, setPrinting] = useState(false);
+  const printLedger = async () => {
+    if (!accountId) return;
+    setPrinting(true);
+    try {
+      const res = await api.get(`/finance/chart-of-accounts/${accountId}/ledger.pdf`, {
+        params: { date_from: firstOfMonth(anchor), date_to: lastOfMonth(anchor), ...(locationId && locationId !== 'all' ? { location_id: locationId } : {}) },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(res.data);
+      const frame = document.createElement('iframe');
+      frame.style.position = 'fixed';
+      frame.style.right = '0';
+      frame.style.bottom = '0';
+      frame.style.width = '0';
+      frame.style.height = '0';
+      frame.style.border = '0';
+      frame.src = url;
+      frame.onload = () => { try { frame.contentWindow.print(); } catch { window.open(url, '_blank'); } };
+      document.body.appendChild(frame);
+      setTimeout(() => { URL.revokeObjectURL(url); frame.remove(); }, 60000);
+    } catch {
+      toast.error('Could not prepare the ledger for printing');
+    } finally { setPrinting(false); }
+  };
   const monthLabel = anchor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
   const thisMonth = firstOfMonth(anchor) >= firstOfMonth(new Date());
 
@@ -57,7 +96,9 @@ export function AccountLedgerDialog({ accountId, accountLabel, locationId, open,
             <Button variant="outline" size="sm" disabled={thisMonth} onClick={() => setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1))} data-testid="ledger-next-month"><ChevronRight size={14} /></Button>
             <Button variant="ghost" size="sm" onClick={() => load(anchor)} data-testid="ledger-refresh"><RefreshCw size={14} /></Button>
           </div>
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => window.print()} data-testid="ledger-print"><Printer size={14} /> Print</Button>
+          <Button variant="outline" size="sm" className="gap-1.5 no-print" onClick={printLedger} disabled={printing} data-testid="ledger-print">
+            <Printer size={14} /> {printing ? 'Preparing…' : 'Print / PDF'}
+          </Button>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
@@ -74,12 +115,17 @@ export function AccountLedgerDialog({ accountId, accountLabel, locationId, open,
         )}
 
         {!loading && (data?.rows || []).length > 0 && (
-          <table className="w-full text-sm border-collapse" data-testid="ledger-table">
+          // the extra transaction detail makes this table wide — let it scroll
+          // sideways on a phone instead of bleeding off the screen
+          <div className="overflow-x-auto -mx-1 px-1">
+          <table className="w-full min-w-[720px] text-sm border-collapse" data-testid="ledger-table">
             <thead>
               <tr className="bg-muted/40 text-xs uppercase text-muted-foreground">
                 <th className="text-left px-2 py-2 font-medium">Date</th>
                 <th className="text-left px-2 py-2 font-medium">Description</th>
+                <th className="text-left px-2 py-2 font-medium">Paid to / from</th>
                 <th className="text-left px-2 py-2 font-medium">Contra</th>
+                <th className="text-left px-2 py-2 font-medium">Handled / recorded by</th>
                 <th className="text-right px-2 py-2 font-medium">Debit</th>
                 <th className="text-right px-2 py-2 font-medium">Credit</th>
                 <th className="text-right px-2 py-2 font-medium">Balance</th>
@@ -89,8 +135,15 @@ export function AccountLedgerDialog({ accountId, accountLabel, locationId, open,
               {data.rows.map((r, i) => (
                 <tr key={`${r.je_id}-${i}`} className="border-t hover:bg-muted/20" data-testid={`ledger-row-${i}`}>
                   <td className="px-2 py-1.5 whitespace-nowrap">{r.date}</td>
-                  <td className="px-2 py-1.5">{r.description}{r.reference ? <span className="text-xs text-muted-foreground"> · {r.reference}</span> : null}</td>
-                  <td className="px-2 py-1.5 text-xs text-muted-foreground">{(r.counterparts || []).map(c => c.code).filter(Boolean).join(', ')}</td>
+                  <td className="px-2 py-1.5">{r.description}{r.reference ? <span className="text-xs text-muted-foreground"> · ref {r.reference}</span> : null}</td>
+                  <td className="px-2 py-1.5">{r.payee || <span className="text-muted-foreground">—</span>}</td>
+                  <td className="px-2 py-1.5 text-xs text-muted-foreground" title={(r.counterparts || []).map(c => `${c.code} ${c.name}`).join(' · ')}>
+                    {(r.counterparts || []).map(c => c.code).filter(Boolean).join(', ')}
+                  </td>
+                  <td className="px-2 py-1.5 text-xs text-muted-foreground">
+                    {r.paid_by ? `${r.paid_by} · ` : ''}{r.recorded_by || '—'}
+                    {r.source ? <span className="block text-[10px] opacity-70">{r.source.replace(/_/g, ' ')}</span> : null}
+                  </td>
                   <td className="px-2 py-1.5 text-right font-mono">{r.debit ? money(r.debit) : ''}</td>
                   <td className="px-2 py-1.5 text-right font-mono">{r.credit ? money(r.credit) : ''}</td>
                   <td className="px-2 py-1.5 text-right font-mono font-medium">{money(r.balance)}</td>
@@ -98,6 +151,7 @@ export function AccountLedgerDialog({ accountId, accountLabel, locationId, open,
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </DialogContent>
     </Dialog>

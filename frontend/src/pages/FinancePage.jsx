@@ -133,13 +133,44 @@ function OverviewPanel() {
     [bs],
   );
 
+  // Saved exchange rates — display-only conversion of the headline cards.
+  const [fxBase, setFxBase] = useState('');
+  const [fxRates, setFxRates] = useState({});
+  const [fxCode, setFxCode] = useState('');
+  useEffect(() => {
+    api.get('/finance/fx/rates')
+      .then(r => { setFxBase(r.data.base || ''); setFxRates(r.data.rates || {}); })
+      .catch(() => {});
+  }, []);
+  const fxMoney = (n) => {
+    const rate = fxCode ? Number(fxRates[fxCode]) : 0;
+    return rate > 0 ? money(Number(n || 0) * rate, fxCode) : money(n, fxBase || 'UGX');
+  };
+
   return (
     <div className="space-y-4">
+      {/* iter375 — read the headline figures in any currency you keep a rate
+          for, using the rates saved in App Settings → Exchange rates. */}
+      <div className="flex items-center justify-end gap-2">
+        <span className="text-xs text-muted-foreground">Show in</span>
+        <Select value={fxCode || '__base__'} onValueChange={v => setFxCode(v === '__base__' ? '' : v)}>
+          <SelectTrigger className="h-8 w-32 text-xs" data-testid="finance-fx-switcher"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__base__">{fxBase || 'UGX'}</SelectItem>
+            {Object.keys(fxRates).map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+          </SelectContent>
+        </Select>
+      </div>
+      {fxCode && (
+        <p className="text-[11px] text-muted-foreground text-right -mt-2" data-testid="finance-fx-note">
+          Amounts in {fxCode} @ {fxRates[fxCode]} per {fxBase || 'UGX'}
+        </p>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <StatCard icon={<Wallet size={18} className="text-emerald-600" />} label="Cash & bank" value={money(cashOnHand)} testid="finance-stat-cash" />
-        <StatCard icon={<TrendingUp size={18} className="text-blue-600" />} label="Revenue (all-time)" value={money(pnl?.total_revenue)} testid="finance-stat-revenue" />
-        <StatCard icon={<TrendingDown size={18} className="text-amber-600" />} label="Expenses (all-time)" value={money(pnl?.total_expenses)} testid="finance-stat-expenses" />
-        <StatCard icon={<DollarSign size={18} className="text-indigo-600" />} label="Net income" value={money(pnl?.net_income)} testid="finance-stat-net" tone={Number(pnl?.net_income || 0) < 0 ? 'red' : 'green'} />
+        <StatCard icon={<Wallet size={18} className="text-emerald-600" />} label="Cash & bank" value={fxMoney(cashOnHand)} testid="finance-stat-cash" />
+        <StatCard icon={<TrendingUp size={18} className="text-blue-600" />} label="Revenue (all-time)" value={fxMoney(pnl?.total_revenue)} testid="finance-stat-revenue" />
+        <StatCard icon={<TrendingDown size={18} className="text-amber-600" />} label="Expenses (all-time)" value={fxMoney(pnl?.total_expenses)} testid="finance-stat-expenses" />
+        <StatCard icon={<DollarSign size={18} className="text-indigo-600" />} label="Net income" value={fxMoney(pnl?.net_income)} testid="finance-stat-net" tone={Number(pnl?.net_income || 0) < 0 ? 'red' : 'green'} />
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -755,7 +786,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
   const defaultDept = (user?.department_ids || [])[0] || '';
   const [form, setForm] = useState({
     amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-    description: '', reference: '', vendor: '', purpose: '',
+    description: '', reference: '', vendor: '',
     location_id: defaultCampus, department_id: defaultDept,
     staff_name: '', staff_id: '',
   });
@@ -795,7 +826,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     // Reset form to prefilled defaults whenever the dialog opens.
     setForm({
       amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-      description: '', reference: '', vendor: '', purpose: '',
+      description: '', reference: '', vendor: '',
       location_id: defaultCampus, department_id: defaultDept,
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -890,9 +921,6 @@ function QuickPostDialog({ mode, onClose, onDone }) {
         // iter344h — pass vendor free-text so the backend auto-upserts
         // and returns a linked vendor_id on the resulting expense.
         vendor: form.vendor || undefined,
-        // iter374 — what the money was for and the receipt it came with, so
-        // the Expenditure Detail report can stand up to an audit.
-        purpose: form.purpose || undefined,
         ...(isExpense
           ? { paid_by_id: form.staff_id || undefined, paid_by_name: form.staff_name || undefined }
           : { received_by_id: form.staff_id || undefined, received_by_name: form.staff_name || undefined }),
@@ -906,7 +934,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
       onDone();
       setForm({
         amount: '', account_id: '', paid_from_id: '', date: todayIso(),
-        description: '', reference: '', vendor: '', purpose: '',
+        description: '', reference: '', vendor: '',
         location_id: defaultCampus, department_id: defaultDept,
         staff_name: '', staff_id: '',
       });
@@ -1045,15 +1073,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
               <p className="text-[10px] text-muted-foreground mt-1">Matches an existing vendor as you type, or creates one on the fly.</p>
             </div>
           )}
-          {isExpense && !split && (
-            <div>
-              <Label>Purpose <span className="text-muted-foreground text-[10px]">(why the money was spent)</span></Label>
-              <Input data-testid="quick-post-purpose" value={form.purpose}
-                onChange={e => setForm({ ...form, purpose: e.target.value })}
-                placeholder="e.g. School fees — Term 3, 4 children" />
-              <p className="text-[10px] text-muted-foreground mt-1">Shows on the Expenditure Detail report — the "Reference / receipt #" above is used as the receipt number.</p>
-            </div>
-          )}
+
           <div><Label>Description</Label><Input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="What was this for?" /></div>
         </div>
         <DialogFooter>

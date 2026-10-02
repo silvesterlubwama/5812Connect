@@ -1,5 +1,92 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter377 — A printed account ledger that isn't blank (2026-06)
+
+Reported: "printing an account ledger didn't show anything on the print page,
+also include transaction details on each account ledger instead of just the
+details".
+
+Tested: `backend/tests/test_iter377_account_ledger_print.py` **6/6**,
+iter375/374 regression green, the rendered ledger PDF inspected as an image,
+and the dialog driven in the browser at 1920px and 390px (40 rows, Print/PDF
+fetching a 200, iframe print, no table overflow on a phone).
+**Production needs a redeploy.**
+
+### Why the print was blank — two causes, both fixed
+1. The Print button was a bare `window.print()`, but `styles/print.css` hides
+   everything outside `.print-area` and this dialog had no such wrapper, so the
+   whole body was `visibility: hidden`. The button now fetches a **branded
+   ledger PDF** (`GET /api/finance/chart-of-accounts/{id}/ledger.pdf`,
+   letterhead + period + prepared-by, A4 landscape, FX-aware) and prints it
+   from a hidden iframe, falling back to opening it in a tab.
+2. The dialog opened on the **current month**, which is usually empty — so even
+   a working print would have produced an empty sheet. The ledger response now
+   carries `last_activity_date` and the dialog lands on the last month the
+   account actually moved.
+
+### Every row now explains itself
+`account_ledger` rows gained **`payee`** (payee / vendor / receipt vendor),
+**`paid_by`** (who handled the cash) and **`recorded_by`** (who keyed it in),
+and `reference` now prefers the receipt number. On screen: new **Paid to /
+from** and **Handled / recorded by** columns (with the source underneath), the
+contra codes carry a tooltip with their full account names, and the wide table
+scrolls sideways on a phone. The PDF prints date, description, paid to/from,
+contra, ref, handled by, recorded by, debit, credit and running balance,
+bracketed by the opening balance and the totals/closing row.
+
+## iter375/376 — Exchange rates everywhere · one "why" field (2026-06)
+
+Asked for: "allow exchange rate on all other reports as well", then "for
+expenses, purpose and description have the same meaning, remove one".
+User choices: rates **saved once in Settings** with a per-report override;
+**converted figures only**, with "in USD @ rate" in the header; applied to the
+Expenditure PDF, **per-type PDFs**, and the other money surfaces (finance
+dashboard, donor/customer statements, payslips, budget vs actual).
+
+Tested: `backend/tests/test_iter375_fx_rates.py` **19/19** (incl. payslip +
+statement conversion, admin-only writes, junk-rate rejection), iter374/373/371
++ iter292 regression **32 passed**, the P&L PDF inspected as an image, and the
+three UI surfaces driven in the browser (settings card saves, Finance cards
+UGX 19,999,349 → $5,400 with the rate note, Reports picker auto-filling EUR,
+Dept P&L switcher). **Production needs a redeploy.**
+
+### Rates live in one place
+- `routers/finance/fx.py` (new): `GET/PUT /api/finance/fx/rates` (read: staff,
+  write: admin) storing `{base, rates:{USD:…}, updated_at, updated_by}` in
+  `finance_fx_rates`. Codes are upper-cased, non-numeric rates are a 400, zero
+  means "not set", and a base→base rate is dropped.
+- `resolve_fx(target, rate)` → `{active, code, rate, label}`: an explicit rate
+  wins, else the saved one; **an unknown currency converts nothing** rather
+  than printing wrong money. `converter(fx)` is the money function.
+- UI: `components/finance/FxRatesCard.jsx` on App Settings, under Currency.
+
+### Every report can convert
+- **`?fx_target=USD` alone is enough now** — the rate is looked up. Applied to
+  `/api/reports/pdf`, `/api/finance/reports/expenditure.pdf`,
+  `/api/customer-statements/{id}`, `/api/hr/payslips/{id}/pdf`.
+- `routers/finance/reports_pdf.py` (new): **per-type branded PDFs** —
+  `trial-balance.pdf`, `pnl.pdf`, `balance-sheet.pdf`, `cashflow.pdf`. The
+  Reports page PDF button used to hand you the *summary* PDF whichever report
+  was on screen; those four had no PDF at all.
+- `report_header_html(..., fx=)` prints "Amounts in USD @ 0.00027 per UGX".
+- Display-only switchers (client-side, saved rates): Finance → Overview stat
+  cards (`finance-fx-switcher`) and Dept P&L / budget vs actual
+  (`dept-pnl-fx`). Reports page picks a currency and auto-fills the saved rate,
+  still editable for a one-off override.
+
+### iter376 — one field for "why"
+`purpose` was dropped from the expense form, from
+`POST /finance/transactions/expense`, and from the expenditure rows: it said
+the same thing as the ledger's own `description`. The report column is now
+**Description** (falling back to the line memo, or a legacy `purpose`/`notes`
+on old portal rows so history still reads). `payee` and `receipt_number`
+remain.
+
+### Not converted (deliberate)
+Journal/recent-activity lists, POS receipts and invoices stay in the currency
+the money actually moved in — converting a receipt would misstate what was
+paid.
+
 ## iter374 — Report letterhead + expenditure accountability (2026-06)
 
 Asked for: the report's top page should carry the **organisation's logo**

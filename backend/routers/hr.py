@@ -4044,9 +4044,13 @@ async def get_my_payslip(payslip_id: str, current_user: dict = Depends(get_curre
 
 # ========== PAYSLIP PDF EXPORT ==========
 
-async def _generate_payslip_pdf_bytes(payslip_id: str) -> bytes:
+async def _generate_payslip_pdf_bytes(payslip_id: str, fx: dict = None) -> bytes:
     """Render a payslip to PDF bytes.  Used by both the per-payslip endpoint
-    and the director+ bulk-ZIP export.  Raises HTTPException if not found."""
+    and the director+ bulk-ZIP export.  Raises HTTPException if not found.
+
+    iter375 — pass `fx` (from `routers.finance.fx.resolve_fx`) to print the slip
+    in another currency at the rate saved in Settings → Exchange rates.
+    """
     p = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
     if not p:
         raise HTTPException(status_code=404, detail="Payslip not found")
@@ -4056,14 +4060,18 @@ async def _generate_payslip_pdf_bytes(payslip_id: str) -> bytes:
         if loc:
             loc_name = loc.get("name") or ""
     cur = p.get("currency") or "UGX"
-    def fmt(x): return f"{cur} {(x or 0):,.2f}"
+    fx = fx or {}
+    fx_rate = fx["rate"] if fx.get("active") else 1.0
+    if fx.get("active"):
+        cur = fx["code"]
+    def fmt(x): return f"{cur} {(float(x or 0) * fx_rate):,.2f}"
     line_rows = ""
     for li in (p.get("line_items") or []):
         sign = "&minus;" if li.get("type") == "deduction" else "+"
         color = "#b45309" if li.get("type") == "deduction" else "#047857"
         amt = li.get("calculated_amount", li.get("amount", 0)) or 0
         details = f" <span class='meta'>({li['details']})</span>" if li.get("details") else ""
-        line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{amt:,.2f}</td></tr>"
+        line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{(float(amt) * fx_rate):,.2f}</td></tr>"
     if not line_rows:
         line_rows = "<tr><td colspan='2' style='text-align:center;color:#94a3b8'>No adjustments</td></tr>"
     # Iter 335: parse the canonical period string into a human "Covers work
@@ -4170,7 +4178,9 @@ th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
 
 
 @router.get("/payslips/{payslip_id}/pdf")
-async def payslip_pdf(payslip_id: str, current_user: dict = Depends(get_current_user)):
+async def payslip_pdf(payslip_id: str, fx_target: Optional[str] = None,
+                      fx_rate: Optional[float] = None,
+                      current_user: dict = Depends(get_current_user)):
     """Server-rendered payslip PDF. Access: HR/Director+/Admin + the owning staff member."""
     # iter351 — HR/director access is campus-scoped; the owning staff member
     # always sees their own payslip regardless of scope.
@@ -4187,7 +4197,8 @@ async def payslip_pdf(payslip_id: str, current_user: dict = Depends(get_current_
         pay_loc = p.get("payroll_location_id") or p.get("location_id")
         if allowed is not None and pay_loc and pay_loc not in allowed:
             raise HTTPException(status_code=404, detail="Payslip not found")
-    pdf = await _generate_payslip_pdf_bytes(payslip_id)
+    from routers.finance.fx import resolve_fx
+    pdf = await _generate_payslip_pdf_bytes(payslip_id, fx=await resolve_fx(fx_target, fx_rate))
     p_full = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0, "staff_name": 1, "period": 1})
     from starlette.responses import StreamingResponse
     import io

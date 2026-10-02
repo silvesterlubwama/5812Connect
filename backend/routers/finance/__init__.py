@@ -21,6 +21,8 @@ from .transfers import router as _transfers_router
 from .receipts import router as _receipts_router
 from .reports import router as _reports_router
 from .expenditure import router as _expenditure_router
+from .fx import router as _fx_router
+from .reports_pdf import router as _reports_pdf_router
 from .admin import router as _admin_router
 from .setup import router as _setup_router
 from .assets import router as _assets_router
@@ -34,5 +36,7 @@ router.include_router(_transfers_router)
 router.include_router(_receipts_router)
 router.include_router(_reports_router)
 router.include_router(_expenditure_router)
+router.include_router(_fx_router)
+router.include_router(_reports_pdf_router)
 router.include_router(_admin_router)
 router.include_router(_setup_router)

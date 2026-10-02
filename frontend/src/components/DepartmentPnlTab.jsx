@@ -8,6 +8,8 @@ import { Label } from './ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { departmentsApi } from '../services/api';
+import api from '../services/api';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 
 /**
  * Department P&L tab — powered by GET /api/reports-department/pnl.
@@ -51,11 +53,32 @@ export function DepartmentPnlTab() {
       .finally(() => setDrillBusy(false));
   };
 
-  const fmt = (n) => (Number(n) || 0).toLocaleString();
+  // iter375 — read budget vs actual in any currency with a saved rate
+  // (App Settings → Exchange rates). Display-only; the books stay in base.
+  const [fxBase, setFxBase] = useState('');
+  const [fxRates, setFxRates] = useState({});
+  const [fxCode, setFxCode] = useState('');
+  useEffect(() => {
+    api.get('/finance/fx/rates')
+      .then(r => { setFxBase(r.data.base || ''); setFxRates(r.data.rates || {}); })
+      .catch(() => {});
+  }, []);
+  const rate = fxCode ? Number(fxRates[fxCode]) || 0 : 0;
+  const fmt = (n) => ((Number(n) || 0) * (rate > 0 ? rate : 1)).toLocaleString(undefined, rate > 0 ? { maximumFractionDigits: 2 } : {});
 
   return (
     <div className="space-y-4" data-testid="dept-pnl-tab">
       <div className="flex items-center gap-3 flex-wrap">
+        <div className="space-y-1">
+          <Label className="text-xs">Show in</Label>
+          <Select value={fxCode || '__base__'} onValueChange={v => setFxCode(v === '__base__' ? '' : v)}>
+            <SelectTrigger className="h-8 w-28 text-xs" data-testid="dept-pnl-fx"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__base__">{fxBase || 'UGX'}</SelectItem>
+              {Object.keys(fxRates).map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
         <div className="space-y-1">
           <Label className="text-xs">From</Label>
           <Input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="h-8 text-xs" data-testid="dept-pnl-from" />

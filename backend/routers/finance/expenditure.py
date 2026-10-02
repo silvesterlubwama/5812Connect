@@ -2,7 +2,7 @@
 
 Every other finance report stops at the account total, so "Programme costs
 12,400,000" could never be defended in an audit. This one lists each payment:
-date, paid to, purpose, category, amount, campus, who paid it out, who keyed
+date, paid to, description, category, amount, campus, who paid it out, who keyed
 it in and the receipt/reference number — with subtotals by category and then
 by campus.
 
@@ -75,8 +75,8 @@ async def _ledger_rows(date_from, date_to, location_id, account_code) -> list:
                 "category": f"{acct['code']} {acct['name']}".strip(),
                 "category_code": acct["code"],
                 "payee": _clean(je.get("payee")) or _clean(je.get("vendor")) or _clean(je.get("receipt_vendor")),
-                "purpose": _clean(je.get("purpose")) or _clean(line.get("memo")) or _clean(je.get("description")),
-                "description": _clean(je.get("description")),
+                # iter376 — one field for "why": the ledger's own description.
+                "description": _clean(je.get("description")) or _clean(line.get("memo")) or _clean(je.get("purpose")),
                 "reference": _clean(je.get("receipt_number")) or _clean(je.get("reference")),
                 "paid_by": _clean(je.get("paid_by_name")),
                 "recorded_by": _clean(je.get("created_by_name")),
@@ -108,8 +108,7 @@ async def _portal_rows(date_from, date_to, location_id) -> list:
             "category": cat,
             "category_code": "",
             "payee": _clean(e.get("vendor")),
-            "purpose": _clean(e.get("purpose")) or _clean(e.get("notes")) or _clean(e.get("title")),
-            "description": _clean(e.get("title")),
+            "description": _clean(e.get("title")) or _clean(e.get("purpose")) or _clean(e.get("notes")),
             "reference": _clean(e.get("receipt_number")),
             "paid_by": _clean(e.get("paid_by_name")),
             "recorded_by": _clean(e.get("entered_by")),
@@ -182,21 +181,29 @@ async def expenditure_pdf(
     location_id: Optional[str] = None,
     account_code: Optional[str] = None,
     include_portal: bool = True,
+    fx_target: Optional[str] = None,
+    fx_rate: Optional[float] = Query(None),
     current_user: dict = Depends(require_staff),
 ):
     from routers.reports import report_header_html, branded_filename
 
+    from .fx import converter, resolve_fx
+
     data = await _build(date_from, date_to, location_id, account_code, include_portal)
+    # iter375 — print in whatever currency was asked for, using the rate saved
+    # in Settings → Exchange rates unless one was passed in.
+    fx = await resolve_fx(fx_target, fx_rate)
+    convert = converter(fx)
     loc_name = "All campuses"
     if location_id:
         names = await _location_names()
         loc_name = names.get(location_id, location_id)
 
     def money(v):
-        return f"{float(v or 0):,.2f}"
+        return f"{convert(v):,.2f}"
 
     lines = "".join(
-        f'<tr><td>{r["date"]}</td><td>{r["payee"] or "—"}</td><td>{r["purpose"] or "—"}</td>'
+        f'<tr><td>{r["date"]}</td><td>{r["payee"] or "—"}</td><td>{r["description"] or "—"}</td>'
         f'<td>{r["category"]}</td><td>{r["location_name"]}</td><td>{r["paid_by"] or "—"}</td>'
         f'<td>{r["recorded_by"] or "—"}</td><td>{r["reference"] or "—"}</td>'
         f'<td class="r">{money(r["amount"])}</td>'
@@ -212,7 +219,7 @@ async def expenditure_pdf(
         for c in data["by_category"]
     ) or '<tr><td colspan="4" class="empty">Nothing to subtotal.</td></tr>'
 
-    header = await report_header_html("Expenditure Detail", loc_name, data, current_user)
+    header = await report_header_html("Expenditure Detail", loc_name, data, current_user, fx=fx)
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Expenditure Detail</title>
 <style>
   @page {{ size: A4 landscape; margin: 14mm; }}
@@ -228,7 +235,7 @@ async def expenditure_pdf(
 </style></head><body>
 {header}
 <h2>Every payment</h2>
-<table><thead><tr><th>Date</th><th>Paid to</th><th>Purpose</th><th>Category</th><th>Campus</th>
+<table><thead><tr><th>Date</th><th>Paid to</th><th>Description</th><th>Category</th><th>Campus</th>
 <th>Paid by</th><th>Recorded by</th><th>Ref / receipt</th><th class="r">Amount</th><th>Status</th></tr></thead>
 <tbody>{lines}</tbody></table>
 <div class="totals">

@@ -37,6 +37,18 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
+  // iter375 — rates saved in Settings → Exchange rates, so nobody retypes one
+  const [savedFx, setSavedFx] = useState({ base: '', rates: {} });
+  useEffect(() => {
+    (async () => {
+      try {
+        const api = (await import('../services/api')).default;
+        const r = await api.get('/finance/fx/rates');
+        setSavedFx({ base: r.data.base || '', rates: r.data.rates || {} });
+      } catch { /* staff without finance access simply type a rate */ }
+    })();
+  }, []);
+
   // iter374 — click a P&L expense total to see the payments behind it
   const [drill, setDrill] = useState(null);   // { code, name, loading, data }
 
@@ -114,10 +126,19 @@ export default function ReportsPage() {
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
       if (fxTarget && Number(fxRate) > 0) { params.fx_target = fxTarget; params.fx_rate = fxRate; }
+      // Each report type has its own PDF now — the button used to hand you the
+      // summary PDF no matter what was on screen (iter375).
+      const FINANCE_PDFS = {
+        expenditure: 'expenditure',
+        'trial-balance': 'trial-balance',
+        pnl: 'pnl',
+        'balance-sheet': 'balance-sheet',
+        cashflow: 'cashflow',
+      };
       let res;
-      if (reportType === 'expenditure') {
+      if (FINANCE_PDFS[reportType]) {
         const api = (await import('../services/api')).default;
-        res = await api.get('/finance/reports/expenditure.pdf', { params, responseType: 'blob' });
+        res = await api.get(`/finance/reports/${FINANCE_PDFS[reportType]}.pdf`, { params, responseType: 'blob' });
       } else {
         res = await reportsApi.pdf(params);
       }
@@ -170,8 +191,8 @@ export default function ReportsPage() {
       (report.equity || []).forEach(r => rows.push(['Equity', r.code, r.name, applyFx(r.amount)]));
       rows.push(['', '', 'Total Equity', applyFx(report.total_equity)]);
     } else if (reportType === 'expenditure') {
-      headers = ['Date', 'Paid to', 'Purpose', 'Category', 'Campus', 'Paid by', 'Recorded by', 'Ref / receipt', `Amount${fxSuffix}`, 'Status'];
-      rows = (report.rows || []).map(r => [r.date, r.payee, r.purpose, r.category, r.location_name, r.paid_by, r.recorded_by, r.reference, applyFx(r.amount), r.status]);
+      headers = ['Date', 'Paid to', 'Description', 'Category', 'Campus', 'Paid by', 'Recorded by', 'Ref / receipt', `Amount${fxSuffix}`, 'Status'];
+      rows = (report.rows || []).map(r => [r.date, r.payee, r.description, r.category, r.location_name, r.paid_by, r.recorded_by, r.reference, applyFx(r.amount), r.status]);
       rows.push([]);
       rows.push(['SUBTOTALS BY CATEGORY, THEN CAMPUS']);
       (report.by_category || []).forEach(c => {
@@ -269,17 +290,31 @@ export default function ReportsPage() {
               {loading ? 'Loading...' : 'Generate Report'}
             </Button>
           </div>
-          {/* FX conversion — optional. Empty target → no conversion. */}
-          <div className="flex items-end gap-3 mt-3 pt-3 border-t">
-            <div className="space-y-1.5 w-32">
-              <Label className="text-xs">Export in currency</Label>
-              <Input placeholder="e.g. USD" className="h-9" value={fxTarget} onChange={e => setFxTarget(e.target.value.trim().toUpperCase())} data-testid="fx-target" />
+          {/* FX conversion — picks up the rates saved in Settings. */}
+          <div className="flex flex-wrap items-end gap-3 mt-3 pt-3 border-t">
+            <div className="space-y-1.5 w-44">
+              <Label className="text-xs">Show in currency</Label>
+              <Select value={fxTarget || '__base__'} onValueChange={v => {
+                if (v === '__base__') { setFxTarget(''); setFxRate(''); return; }
+                setFxTarget(v);
+                setFxRate(String(savedFx.rates[v] ?? ''));
+              }}>
+                <SelectTrigger className="h-9" data-testid="fx-target"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__base__">{savedFx.base || 'Base'} (no conversion)</SelectItem>
+                  {Object.keys(savedFx.rates).map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5 w-40">
-              <Label className="text-xs">FX rate (1 base = ?)</Label>
-              <Input type="number" step="0.0001" placeholder="e.g. 0.00027" className="h-9" value={fxRate} onChange={e => setFxRate(e.target.value)} data-testid="fx-rate" />
+              <Label className="text-xs">Rate (1 {savedFx.base || 'base'} = ?)</Label>
+              <Input type="number" step="0.000001" placeholder="e.g. 0.00027" className="h-9" value={fxRate} onChange={e => setFxRate(e.target.value)} data-testid="fx-rate" />
             </div>
-            <p className="text-xs text-muted-foreground pb-2">Leave blank to export in base currency</p>
+            <p className="text-xs text-muted-foreground pb-2">
+              {Object.keys(savedFx.rates).length === 0
+                ? 'No saved rates yet — add them in App Settings → Exchange rates'
+                : 'Picked up from App Settings. Change the rate here to override it for this export only.'}
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -330,7 +365,7 @@ export default function ReportsPage() {
                 <thead><tr className="bg-muted/40 text-xs uppercase text-muted-foreground">
                   <th className="text-left px-2 py-2 font-medium">Date</th>
                   <th className="text-left px-2 py-2 font-medium">Paid to</th>
-                  <th className="text-left px-2 py-2 font-medium">Purpose</th>
+                  <th className="text-left px-2 py-2 font-medium">Description</th>
                   <th className="text-left px-2 py-2 font-medium">Campus</th>
                   <th className="text-left px-2 py-2 font-medium">Paid by</th>
                   <th className="text-left px-2 py-2 font-medium">Ref</th>
@@ -342,7 +377,7 @@ export default function ReportsPage() {
                     <tr key={`${r.id}-${i}`} className="border-t" data-testid={`drill-row-${i}`}>
                       <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap">{r.date}</td>
                       <td className="px-2 py-1.5">{r.payee || '—'}</td>
-                      <td className="px-2 py-1.5">{r.purpose || '—'}</td>
+                      <td className="px-2 py-1.5">{r.description || '—'}</td>
                       <td className="px-2 py-1.5 text-xs">{r.location_name}</td>
                       <td className="px-2 py-1.5 text-xs">{r.paid_by || '—'}</td>
                       <td className="px-2 py-1.5 font-mono text-xs">{r.reference || '—'}</td>
@@ -457,7 +492,7 @@ function ReportTable({ reportType, report, applyFx, onDrill }) {
             <tr className="bg-muted/40 text-xs uppercase text-muted-foreground">
               <th className="text-left px-2 py-2 font-medium">Date</th>
               <th className="text-left px-2 py-2 font-medium">Paid to</th>
-              <th className="text-left px-2 py-2 font-medium">Purpose</th>
+              <th className="text-left px-2 py-2 font-medium">Description</th>
               <th className="text-left px-2 py-2 font-medium">Category</th>
               <th className="text-left px-2 py-2 font-medium">Campus</th>
               <th className="text-left px-2 py-2 font-medium">Paid by</th>
@@ -472,7 +507,7 @@ function ReportTable({ reportType, report, applyFx, onDrill }) {
               <tr key={`${r.id}-${i}`} className="border-t hover:bg-muted/20" data-testid={`expenditure-row-${i}`}>
                 <td className="px-2 py-1.5 whitespace-nowrap font-mono text-xs">{r.date}</td>
                 <td className="px-2 py-1.5">{r.payee || <span className="text-muted-foreground">—</span>}</td>
-                <td className="px-2 py-1.5 max-w-[260px]">{r.purpose || <span className="text-muted-foreground">—</span>}</td>
+                <td className="px-2 py-1.5 max-w-[260px]">{r.description || <span className="text-muted-foreground">—</span>}</td>
                 <td className="px-2 py-1.5 text-xs">{r.category}</td>
                 <td className="px-2 py-1.5 text-xs">{r.location_name}</td>
                 <td className="px-2 py-1.5 text-xs">{r.paid_by || <span className="text-muted-foreground">—</span>}</td>

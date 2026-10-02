@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { adminApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
+import { FxRatesCard } from '../components/finance/FxRatesCard';
 
 export default function AppSettingsPage() {
   const { user } = useAuth();
@@ -97,6 +98,8 @@ export default function AppSettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <FxRatesCard canEdit={isAdmin} />
 
       <Card>
         <CardHeader><CardTitle className="text-base flex items-center gap-2"><Phone size={16} /> Contact Information</CardTitle></CardHeader>

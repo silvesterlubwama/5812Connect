@@ -71,8 +71,14 @@ async def account_ledger(
                 rows.append({
                     "je_id": je["id"], "date": je.get("date", ""),
                     "description": ln.get("memo") or je.get("description") or "",
-                    "reference": je.get("reference") or "",
+                    "reference": je.get("receipt_number") or je.get("reference") or "",
                     "source": je.get("source") or "",
+                    # iter377 — who the money went to / came from, who handled
+                    # it and who keyed it in, so a printed ledger explains
+                    # itself without cross-referencing the journal.
+                    "payee": (je.get("payee") or je.get("vendor") or je.get("receipt_vendor") or ""),
+                    "paid_by": je.get("paid_by_name") or "",
+                    "recorded_by": je.get("created_by_name") or "",
                     "debit": debit, "credit": credit,
                     "change": round(debit - credit, 2) if debit_side else round(credit - debit, 2),
                     "counterparts": [
@@ -95,6 +101,13 @@ async def account_ledger(
         if date_to:
             window["date"]["$lte"] = date_to[:10]
     rows = await _movement(window)
+
+    # iter377 — the most recent date this account moved at all, so the ledger
+    # dialog can open on a month that has something in it instead of an empty
+    # current month (which printed as a blank sheet).
+    latest = await db.finance_journal_entries.find_one(
+        base, {"_id": 0, "date": 1}, sort=[("date", -1)])
+
     running = opening
     for r in rows:
         running = round(running + r["change"], 2)
@@ -108,7 +121,108 @@ async def account_ledger(
         "total_credit": round(sum(r["credit"] for r in rows), 2),
         "rows": rows,
         "count": len(rows),
+        "last_activity_date": (latest or {}).get("date", ""),
     }
+
+
+@router.get("/{account_id}/ledger.pdf")
+async def account_ledger_pdf(
+    account_id: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    location_id: Optional[str] = None,
+    fx_target: Optional[str] = None,
+    fx_rate: Optional[float] = None,
+    current_user: dict = Depends(require_staff),
+):
+    """The same ledger on the organisation's letterhead (iter377).
+
+    The dialog's Print button used to call `window.print()` on a page whose
+    global print stylesheet hides everything outside `.print-area`, so the
+    ledger printed as a blank sheet. This endpoint gives it something real to
+    print — and honours the saved exchange rates like every other report.
+    """
+    from io import BytesIO
+
+    from fastapi.responses import StreamingResponse
+
+    from routers.reports import branded_filename, report_header_html
+
+    from .fx import converter, resolve_fx
+
+    data = await account_ledger(account_id, date_from, date_to, location_id, current_user)
+    fx = await resolve_fx(fx_target, fx_rate)
+    money = converter(fx)
+    acct = data["account"]
+
+    loc_name = "All campuses"
+    if location_id and location_id != "all":
+        for coll in ("locations", "sublocations"):
+            row = await db[coll].find_one({"id": location_id}, {"_id": 0, "name": 1})
+            if row:
+                loc_name = row.get("name") or location_id
+                break
+
+    def m(v):
+        return f"{money(v):,.2f}"
+
+    body = "".join(
+        f'<tr><td>{r["date"]}</td>'
+        f'<td>{r["description"] or "—"}</td>'
+        f'<td>{r["payee"] or "—"}</td>'
+        f'<td>{", ".join(c["code"] or "" for c in r["counterparts"]) or "—"}</td>'
+        f'<td>{r["reference"] or "—"}</td>'
+        f'<td>{r["paid_by"] or "—"}</td>'
+        f'<td>{r["recorded_by"] or "—"}</td>'
+        f'<td class="r">{m(r["debit"]) if r["debit"] else ""}</td>'
+        f'<td class="r">{m(r["credit"]) if r["credit"] else ""}</td>'
+        f'<td class="r">{m(r["balance"])}</td></tr>'
+        for r in data["rows"]
+    ) or '<tr><td colspan="10" class="empty">No movement on this account in this period.</td></tr>'
+
+    header = await report_header_html(
+        f'Account Ledger — {acct.get("code", "")} {acct.get("name", "")}',
+        loc_name, {"date_from": date_from, "date_to": date_to}, current_user, fx=fx)
+
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Account Ledger</title>
+<style>
+  @page {{ size: A4 landscape; margin: 14mm; }}
+  body {{ font-family: 'Helvetica','Arial',sans-serif; color:#0f172a; font-size: 8.5pt; }}
+  table {{ width:100%; border-collapse: collapse; }}
+  th {{ text-align:left; font-size:7.5pt; text-transform:uppercase; color:#64748b;
+        border-bottom:1px solid #cbd5e1; padding:4px; }}
+  td {{ padding:3px 4px; border-bottom:1px solid #f1f5f9; vertical-align:top; }}
+  .r {{ text-align:right; font-variant-numeric: tabular-nums; }}
+  .empty {{ text-align:center; color:#94a3b8; padding:14px; }}
+  tr.sum td {{ background:#f8fafc; font-weight:700; }}
+</style></head><body>
+{header}
+<table>
+  <thead><tr><th>Date</th><th>Description</th><th>Paid to / from</th><th>Contra</th>
+  <th>Ref</th><th>Handled by</th><th>Recorded by</th>
+  <th class="r">Debit</th><th class="r">Credit</th><th class="r">Balance</th></tr></thead>
+  <tbody>
+    <tr class="sum"><td colspan="9">Opening balance</td><td class="r">{m(data["opening_balance"])}</td></tr>
+    {body}
+    <tr class="sum"><td colspan="7">Totals &amp; closing balance</td>
+      <td class="r">{m(data["total_debit"])}</td><td class="r">{m(data["total_credit"])}</td>
+      <td class="r">{m(data["closing_balance"])}</td></tr>
+  </tbody>
+</table>
+<p style="font-size:8pt;color:#475569;margin-top:10px">{data["count"]} movements</p>
+</body></html>"""
+
+    try:
+        from weasyprint import HTML
+        pdf = HTML(string=html).write_pdf()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"WeasyPrint failed for account ledger: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {e}")
+
+    filename = await branded_filename(f'ledger-{acct.get("code", account_id)}')
+    return StreamingResponse(BytesIO(pdf), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.post("")

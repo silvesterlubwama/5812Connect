@@ -72,7 +72,7 @@ async def branded_filename(kind: str, ext: str = "pdf") -> str:
     return f"{slug or 'report'}_{kind}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.{ext}"
 
 
-async def report_header_html(title: str, loc_name: str, data: dict, current_user: dict) -> str:
+async def report_header_html(title: str, loc_name: str, data: dict, current_user: dict, fx: dict = None) -> str:
     """The shared letterhead: the organisation's own logo and name, then the
     period, campus, who prepared it and when it was printed — an unsigned
     report is worth nothing in an audit (iter374)."""
@@ -103,6 +103,7 @@ async def report_header_html(title: str, loc_name: str, data: dict, current_user
       <div><strong>Campus:</strong> {loc_name}</div>
       <div><strong>Prepared by:</strong> {current_user.get('name') or '—'}</div>
       <div><strong>Printed:</strong> {printed}</div>
+      {f'<div style="color:#0f172a"><strong>{fx["label"]}</strong></div>' if (fx or {}).get("active") else ''}
     </td>
   </tr>
 </table>"""
@@ -172,11 +173,13 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
     summary = await reports_summary(location_id=location_id, date_from=date_from,
                                     date_to=date_to, current_user=current_user)
 
-    # FX conversion — apply to every displayed money figure
-    fx_active = bool(fx_target) and fx_rate is not None and float(fx_rate) > 0
-    def fx(v):
-        return round(float(v or 0) * float(fx_rate), 2) if fx_active else float(v or 0)
-    currency_suffix = f" ({fx_target} @ {fx_rate})" if fx_active else ""
+    # FX conversion — iter375: `fx_target` alone is enough, the rate saved in
+    # Settings → Exchange rates is looked up. An explicit `fx_rate` still wins.
+    from routers.finance.fx import converter, resolve_fx
+    fx_info = await resolve_fx(fx_target, fx_rate)
+    fx_active = fx_info["active"]
+    fx = converter(fx_info)
+    currency_suffix = f" ({fx_info['code']} @ {fx_info['rate']})" if fx_active else ""
 
     loc_name = "All locations"
     if location_id:
@@ -209,7 +212,8 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
     brand = await _branding()
     brand_name = brand["name"]
     header = await report_header_html("Summary Report", loc_name,
-                                      {"date_from": date_from, "date_to": date_to}, current_user)
+                                      {"date_from": date_from, "date_to": date_to}, current_user,
+                                      fx=fx_info)
 
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>{brand_name} — Summary Report</title>
