@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from datetime import datetime, timezone
-from deps import get_current_user, db, require_manager, get_campus_filter
+from deps import get_current_user, db, require_manager, get_campus_filter, is_system_admin, logger
 from typing import Optional
 import uuid, openpyxl
 from io import BytesIO
@@ -89,18 +89,24 @@ async def report_header_html(title: str, loc_name: str, data: dict, current_user
     logo_src = await _logo_data_uri(b["logo"])
     logo = (f'<img src="{logo_src}" alt="" style="height:46px;max-width:190px;object-fit:contain" />'
             if logo_src else "")
+    # iter378 — a report belongs to a CAMPUS, so that is the name at the top.
+    # The organisation's name drops to a small line under it; when the report
+    # covers everything, the organisation is the heading again.
+    campus_scoped = bool(loc_name) and loc_name not in ("All campuses", "All locations", "—")
+    heading = loc_name if campus_scoped else b["name"]
+    sub = b["name"] if campus_scoped else (b["tagline"] or "")
     printed = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return f"""<table style="width:100%;border-collapse:collapse;border-bottom:2px solid #0f172a;margin-bottom:14px">
   <tr>
     <td style="width:200px;padding:0 12px 10px 0;vertical-align:middle;border:0">{logo}</td>
     <td style="padding:0 0 10px;vertical-align:middle;border:0">
-      <div style="font-size:14pt;font-weight:700;line-height:1.1">{b["name"]}</div>
-      {f'<div style="font-size:8pt;color:#64748b">{b["tagline"]}</div>' if b["tagline"] else ''}
+      <div style="font-size:14pt;font-weight:700;line-height:1.1">{heading}</div>
+      {f'<div style="font-size:8pt;color:#64748b">{sub}</div>' if sub else ''}
       <div style="font-size:11pt;margin-top:3px">{title}</div>
     </td>
     <td style="padding:0 0 10px;vertical-align:middle;border:0;text-align:right;font-size:8pt;color:#475569;line-height:1.5;white-space:nowrap">
       <div><strong>Period:</strong> {period}</div>
-      <div><strong>Campus:</strong> {loc_name}</div>
+      {'' if campus_scoped else f'<div><strong>Campus:</strong> {loc_name}</div>'}
       <div><strong>Prepared by:</strong> {current_user.get('name') or '—'}</div>
       <div><strong>Printed:</strong> {printed}</div>
       {f'<div style="color:#0f172a"><strong>{fx["label"]}</strong></div>' if (fx or {}).get("active") else ''}
@@ -216,7 +222,7 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
                                       fx=fx_info)
 
     html = f"""<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>{brand_name} — Summary Report</title>
+<title>{loc_name} — Summary Report</title>
 <style>
   @page {{ size: A4; margin: 20mm; }}
   body {{ font-family: 'Helvetica','Arial',sans-serif; color: #0f172a; font-size: 11pt; }}
@@ -282,7 +288,27 @@ async def reports_pdf(location_id: Optional[str] = None, date_from: Optional[str
 
 @router.get("/reports")
 async def list_reports(current_user: dict = Depends(get_current_user)):
-    reports = await db.reports.find({"$or": [{"created_by": current_user["id"]}, {"is_shared": True}]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    """Saved reports.
+
+    iter378 — this only ever returned reports you created yourself or that were
+    explicitly shared, so an admin opening the Report Builder saw an empty page
+    and concluded it "doesn't fetch anything". Admins, directors and managers
+    now see every saved report; everyone else still sees their own plus shared.
+    """
+    privileged = {"admin", "system_admin", "Executive Director", "Director",
+                  "Adviser", "Manager", "HR"}
+    if current_user.get("role") in privileged or is_system_admin(current_user):
+        query: dict = {}
+    else:
+        query = {"$or": [{"created_by": current_user["id"]}, {"is_shared": True}]}
+    reports = await db.reports.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    # whose report is this? the UI labels other people's reports
+    owners = {r.get("created_by") for r in reports if r.get("created_by")}
+    names = {u["id"]: u.get("name") or "" async for u in
+             db.users.find({"id": {"$in": list(owners)}}, {"_id": 0, "id": 1, "name": 1})}
+    for r in reports:
+        r["created_by_name"] = names.get(r.get("created_by"), "")
+        r["is_mine"] = r.get("created_by") == current_user["id"]
     return reports
 
 
@@ -328,10 +354,24 @@ async def generate_report_data(report_id: str, current_user: dict = Depends(get_
     report = await db.reports.find_one({"id": report_id}, {"_id": 0})
     if not report:
         raise HTTPException(status_code=404, detail="Report not found")
-    filters = report.get("filters", {})
+    filters = dict(report.get("filters", {}) or {})
     rtype = report.get("type", "custom")
     data = {}
+    warnings = []
     campus = await get_campus_filter(current_user)
+
+    # iter378 — a saved report whose campus has since been deleted silently
+    # returned nothing at all. Drop the dead filter and say so, rather than
+    # handing back an empty report with no explanation.
+    if filters.get("location_id"):
+        live = await db.locations.find_one({"id": filters["location_id"]}, {"_id": 0, "id": 1})
+        if not live:
+            live = await db.sublocations.find_one({"id": filters["location_id"]}, {"_id": 0, "id": 1})
+        if not live:
+            warnings.append(
+                f"This report filtered on a campus that no longer exists ({filters['location_id']}). "
+                "It was ignored — edit the report to pick a current campus.")
+            filters.pop("location_id", None)
     if rtype in ("members", "custom"):
         query = {}
         if filters.get("location_id"): query["location_id"] = filters["location_id"]
@@ -349,6 +389,22 @@ async def generate_report_data(report_id: str, current_user: dict = Depends(get_
         data["donations"] = donations; data["expenses"] = expenses
         data["total_donations"] = sum(d.get("amount", 0) for d in donations)
         data["total_expenses"] = sum(e.get("amount", 0) for e in expenses)
+        # iter378 — the money actually lives in the double-entry ledger now, so
+        # a financial report that only read `donations`/`expenses` came back
+        # almost empty. Pull the real revenue/expenditure too.
+        from routers.finance.reports import profit_and_loss
+        try:
+            pnl = await profit_and_loss(date_from=filters.get("date_from") or None,
+                                        date_to=filters.get("date_to") or None,
+                                        location_id=filters.get("location_id") or None,
+                                        current_user=current_user)
+            data["ledger_revenue_lines"] = pnl.get("revenue", [])
+            data["ledger_expense_lines"] = pnl.get("expenses", [])
+            data["ledger_total_revenue"] = pnl.get("total_revenue", 0)
+            data["ledger_total_expenses"] = pnl.get("total_expenses", 0)
+            data["ledger_net_income"] = pnl.get("net_income", 0)
+        except Exception as e:
+            logger.warning(f"report {report_id}: ledger figures unavailable: {e}")
     if rtype in ("events", "custom"):
         eq = {}
         if filters.get("date_from"): eq["date"] = {"$gte": filters["date_from"]}
@@ -360,9 +416,17 @@ async def generate_report_data(report_id: str, current_user: dict = Depends(get_
         att_query = {"$and": [campus, aq]} if campus else aq
         checkins = await db.checkins.find(att_query, {"_id": 0}).to_list(5000)
         data["checkins"] = checkins; data["checkins_count"] = len(checkins)
+    if filters.get("date_from") or filters.get("date_to"):
+        if not any(v for v in data.values() if isinstance(v, list) and v):
+            warnings.append(
+                f"Nothing fell inside {filters.get('date_from') or 'the start'} → "
+                f"{filters.get('date_to') or 'today'}. Widen the dates on the report.")
+
     now = datetime.now(timezone.utc).isoformat()
     await db.reports.update_one({"id": report_id}, {"$set": {"data_snapshot": data, "last_generated": now}})
-    return {"report_id": report_id, "data": data, "generated_at": now}
+    counts = {k: len(v) for k, v in data.items() if isinstance(v, list)}
+    return {"report_id": report_id, "data": data, "generated_at": now,
+            "warnings": warnings, "counts": counts}
 
 
 @router.get("/reports/{report_id}/export/xlsx")

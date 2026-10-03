@@ -115,3 +115,50 @@ def test_a_lone_event_is_unaffected_by_the_scope_param(head):
 def test_a_bad_scope_is_rejected(head):
     r = requests.delete(f"{BASE}/events/{state['ids'][0]}?scope=everything", headers=head, timeout=30)
     assert r.status_code == 422
+
+
+# iter378 — the Repeats form now exposes the richer patterns the generator
+# always supported: yearly, every 2/3 months, the Nth weekday of a month, a set
+# day each month, and certain days each week.
+@pytest.mark.parametrize("pattern,extra,expect", [
+    ("yearly", {}, ["2027-10-05", "2028-10-05"]),
+    ("nth_month", {"day_of_month": 15}, ["2026-10-15", "2026-11-15"]),
+    ("quarterly", {}, ["2027-01-05", "2027-04-05"]),
+])
+def test_the_richer_patterns_land_on_the_right_dates(head, pattern, extra, expect):
+    r = requests.post(f"{BASE}/events/generate-recurring", headers=head, timeout=60, json={
+        "title": f"{TAG} {pattern}", "type": "meeting", "pattern": pattern,
+        "start_date": "2026-10-05", "occurrences": 4, **extra})
+    assert r.status_code in (200, 201), r.text
+    dates = [e["date"] for e in r.json()["events"]]
+    state.setdefault("ids", []).extend(e["id"] for e in r.json()["events"])
+    for d in expect:
+        assert d in dates, f"{pattern} produced {dates}"
+
+
+def test_nth_weekday_of_the_month(head):
+    """Second Wednesday, month after month."""
+    r = requests.post(f"{BASE}/events/generate-recurring", headers=head, timeout=60, json={
+        "title": f"{TAG} nth_week", "type": "meeting", "pattern": "nth_week",
+        "start_date": "2026-10-05", "occurrences": 3, "day_of_week": 2, "nth_week": 2})
+    assert r.status_code in (200, 201), r.text
+    rows = r.json()["events"]
+    state.setdefault("ids", []).extend(e["id"] for e in rows)
+    from datetime import date as _date
+    for e in rows:
+        d = _date.fromisoformat(e["date"])
+        assert d.weekday() == 2, f"{e['date']} is not a Wednesday"
+        assert 8 <= d.day <= 14, f"{e['date']} is not the SECOND Wednesday"
+
+
+def test_certain_days_each_week(head):
+    r = requests.post(f"{BASE}/events/generate-recurring", headers=head, timeout=60, json={
+        "title": f"{TAG} custom_weekly", "type": "meeting", "pattern": "custom_weekly",
+        "start_date": "2026-10-05", "occurrences": 4, "days_of_week": [0, 3]})
+    assert r.status_code in (200, 201), r.text
+    rows = r.json()["events"]
+    state.setdefault("ids", []).extend(e["id"] for e in rows)
+    from datetime import date as _date
+    assert {_date.fromisoformat(e["date"]).weekday() for e in rows} == {0, 3}
+    # one series, so the whole run can still be removed in one go
+    assert len({e["series_id"] for e in rows}) == 1

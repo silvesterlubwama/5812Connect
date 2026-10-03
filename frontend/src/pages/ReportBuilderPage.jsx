@@ -107,8 +107,11 @@ export default function ReportBuilderPage() {
     setGenerating(report.id);
     try {
       const res = await reportBuilderApi.generate(report.id);
-      setShowPreview({ ...report, data: res.data.data, generated_at: res.data.generated_at });
-      toast.success('Report generated');
+      setShowPreview({ ...report, data: res.data.data, generated_at: res.data.generated_at,
+                       warnings: res.data.warnings || [], counts: res.data.counts || {} });
+      const total = Object.values(res.data.counts || {}).reduce((a, b) => a + b, 0);
+      if (total === 0) toast.warning('Report generated, but nothing matched its filters');
+      else toast.success(`Report generated — ${total} rows`);
       fetchReports();
     } catch {
       toast.error('Failed to generate report');
@@ -117,9 +120,19 @@ export default function ReportBuilderPage() {
     }
   };
 
-  const handleExportXlsx = (report) => {
-    const url = reportBuilderApi.exportXlsx(report.id);
-    window.open(url, '_blank');
+  const handleExportXlsx = async (report) => {
+    // iter378 — this used to window.open the URL with no Authorization header,
+    // so the download just failed.
+    try {
+      const api = (await import('../services/api')).default;
+      const res = await api.get(`/reports/${report.id}/export/xlsx`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(report.title || 'report').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error('Could not export this report'); }
   };
 
   const resetForm = () => {
@@ -354,11 +367,17 @@ export default function ReportBuilderPage() {
           {showPreview?.data && (
             <div className="space-y-4 mt-2">
               <p className="text-sm text-muted-foreground">Generated: {new Date(showPreview.generated_at).toLocaleString()}</p>
+              {(showPreview.warnings || []).map((w, i) => (
+                <p key={i} className="text-xs rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-300 px-2 py-1.5"
+                  data-testid={`report-warning-${i}`}>{w}</p>
+              ))}
               
               <Tabs defaultValue={Object.keys(showPreview.data).find(k => Array.isArray(showPreview.data[k]))}>
                 <TabsList>
                   {Object.keys(showPreview.data).filter(k => Array.isArray(showPreview.data[k])).map(key => (
-                    <TabsTrigger key={key} value={key} className="capitalize">{key}</TabsTrigger>
+                    <TabsTrigger key={key} value={key} className="capitalize">
+                      {key.replace(/_/g, ' ')} ({showPreview.data[key].length})
+                    </TabsTrigger>
                   ))}
                 </TabsList>
                 {Object.keys(showPreview.data).filter(k => Array.isArray(showPreview.data[k])).map(key => (
@@ -382,6 +401,11 @@ export default function ReportBuilderPage() {
                           ))}
                         </tbody>
                       </table>
+                      {showPreview.data[key].length === 0 && (
+                        <p className="text-xs text-muted-foreground text-center py-6" data-testid={`report-empty-${key}`}>
+                          Nothing here for this report's filters.
+                        </p>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-2">Showing {Math.min(20, showPreview.data[key].length)} of {showPreview.data[key].length} rows</p>
                   </TabsContent>

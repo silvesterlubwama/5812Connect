@@ -24,6 +24,8 @@ import { toast } from 'sonner';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+// the recurrence API counts Monday as 0 (python weekday())
+const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 // iter 281 — new palette per user request:
 //   outreach = green, tasks = blue-light, US holidays = blue-deep, UG = red
 // Every "user event" (i.e. an event YOU created) is coloured brown instead
@@ -87,7 +89,7 @@ export default function CalendarPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [holidayItem, setHolidayItem] = useState(null);
   const [createKind, setCreateKind] = useState('event');
-  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '' });
+  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
   const [saving, setSaving] = useState(false);
   const [boards, setBoards] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -343,6 +345,11 @@ export default function CalendarPage() {
             pattern: createForm.repeat_pattern, start_date: payload.date,
             occurrences: createForm.repeat_mode === 'count' ? (parseInt(createForm.repeat_count) || 8) : 104,
             end_date: createForm.repeat_mode === 'until' ? (createForm.repeat_until || undefined) : undefined,
+            // pattern-specific extras
+            day_of_week: Number(createForm.repeat_day_of_week) || 0,
+            nth_week: Number(createForm.repeat_nth_week) || 1,
+            day_of_month: Number(createForm.repeat_day_of_month) || 1,
+            days_of_week: createForm.repeat_days_of_week,
           });
           const made = res.data?.created ?? 0;
           if (!made) toast.error('Nothing created — check the dates are in the future');
@@ -366,7 +373,7 @@ export default function CalendarPage() {
         toast.success('Task created');
       }
       setShowCreate(false);
-      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '' });
+      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
       loadAll();
     } catch (err) {
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
@@ -740,7 +747,13 @@ export default function CalendarPage() {
                               <SelectItem value="daily">Every day</SelectItem>
                               <SelectItem value="weekly">Every week</SelectItem>
                               <SelectItem value="biweekly">Every 2 weeks</SelectItem>
+                              <SelectItem value="custom_weekly">Certain days each week</SelectItem>
                               <SelectItem value="monthly">Every month</SelectItem>
+                              <SelectItem value="bimonthly">Every 2 months</SelectItem>
+                              <SelectItem value="quarterly">Every 3 months</SelectItem>
+                              <SelectItem value="nth_week">Nth weekday of the month</SelectItem>
+                              <SelectItem value="nth_month">A set day each month</SelectItem>
+                              <SelectItem value="yearly">Every year</SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -763,6 +776,58 @@ export default function CalendarPage() {
                         <div><Label className="text-xs">Last date</Label>
                           <Input type="date" value={createForm.repeat_until}
                             onChange={e => setCreateForm({ ...createForm, repeat_until: e.target.value })} data-testid="create-repeat-until" />
+                        </div>
+                      )}
+                      {createForm.repeat_pattern === 'nth_week' && (
+                        <div className="grid grid-cols-2 gap-2" data-testid="create-repeat-nth">
+                          <div><Label className="text-xs">Which one</Label>
+                            <Select value={String(createForm.repeat_nth_week)} onValueChange={v => setCreateForm({ ...createForm, repeat_nth_week: v })}>
+                              <SelectTrigger data-testid="create-repeat-nth-week"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="1">First</SelectItem>
+                                <SelectItem value="2">Second</SelectItem>
+                                <SelectItem value="3">Third</SelectItem>
+                                <SelectItem value="4">Fourth</SelectItem>
+                                <SelectItem value="-1">Last</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div><Label className="text-xs">Day</Label>
+                            <Select value={String(createForm.repeat_day_of_week)} onValueChange={v => setCreateForm({ ...createForm, repeat_day_of_week: v })}>
+                              <SelectTrigger data-testid="create-repeat-weekday"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {WEEKDAYS.map((d, i) => <SelectItem key={d} value={String(i)}>{d}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      )}
+                      {createForm.repeat_pattern === 'nth_month' && (
+                        <div><Label className="text-xs">Day of the month</Label>
+                          <Input type="number" min="1" max="31" value={createForm.repeat_day_of_month}
+                            onChange={e => setCreateForm({ ...createForm, repeat_day_of_month: e.target.value })}
+                            data-testid="create-repeat-day-of-month" />
+                          <p className="text-[11px] text-muted-foreground mt-1">Short months fall back to their last day.</p>
+                        </div>
+                      )}
+                      {createForm.repeat_pattern === 'custom_weekly' && (
+                        <div data-testid="create-repeat-days">
+                          <Label className="text-xs">Which days</Label>
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            {WEEKDAYS.map((d, i) => {
+                              const on = (createForm.repeat_days_of_week || []).includes(i);
+                              return (
+                                <button key={d} type="button" data-testid={`create-repeat-day-${i}`}
+                                  className={`px-2 py-1 rounded-md border text-xs ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-input'}`}
+                                  onClick={() => setCreateForm({
+                                    ...createForm,
+                                    repeat_days_of_week: on
+                                      ? createForm.repeat_days_of_week.filter(x => x !== i)
+                                      : [...(createForm.repeat_days_of_week || []), i].sort(),
+                                  })}>{d.slice(0, 3)}</button>
+                              );
+                            })}
+                          </div>
                         </div>
                       )}
                       <p className="text-[11px] text-muted-foreground">Dates in the past are skipped. You can edit or remove the whole run later.</p>

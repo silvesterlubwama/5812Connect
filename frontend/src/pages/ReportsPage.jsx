@@ -312,8 +312,9 @@ export default function ReportsPage() {
             </div>
             <p className="text-xs text-muted-foreground pb-2">
               {Object.keys(savedFx.rates).length === 0
-                ? 'No saved rates yet — add them in App Settings → Exchange rates'
-                : 'Picked up from App Settings. Change the rate here to override it for this export only.'}
+                ? 'No saved rates yet — '
+                : 'Picked up from settings. Change the rate here to override it for this export only. '}
+              <a href="/app-settings" className="underline" data-testid="fx-manage-link">Manage exchange rates</a>
             </p>
           </div>
         </CardContent>

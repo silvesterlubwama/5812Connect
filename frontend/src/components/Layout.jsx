@@ -120,6 +120,7 @@ const NAV_SECTIONS = [
       { to: '/financial-apis', icon: CreditCard, label: 'Financial APIs', roles: ADMIN_ROLES },
       { to: '/email-templates', icon: Mail, label: 'Email Templates' },
       { to: '/settings', icon: Settings, label: 'Settings' },
+      { to: '/app-settings', icon: Sliders, label: 'Branding & Currency' },
       { to: '/audit', icon: Shield, label: 'Audit Trail' },
       { to: '/gdpr', icon: Lock, label: 'Privacy & GDPR' },
     ]

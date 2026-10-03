@@ -1,5 +1,48 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter378 — Campus letterhead · reachable FX card · Report Builder revived (2026-06)
+
+Four things in one message: reports should carry the **campus** name, not the
+app name; there was **no front end** to edit exchange rates; "the report builder
+is no longer useful as it does not fetch anything"; recurring events need
+**yearly / Nth week** options.
+
+Tested: `tests/test_iter378_campus_letterhead_report_builder.py` **8/8** (PDF
+text asserted with `pdftotext`), `test_iter373` extended to **11/11** for the
+new patterns, 44 passed across iter373/375/377/378, and all four driven in the
+browser. **Production needs a redeploy.**
+
+1. **The campus owns the letterhead.** `report_header_html` now prints the
+   campus as the heading with the organisation's name as a small line beneath,
+   and drops the redundant "Campus:" row. When the report covers everything,
+   the organisation is the heading and "All campuses" stays in the meta block.
+   Applies to every PDF (summary, trial balance, P&L, balance sheet, cash flow,
+   expenditure, account ledger) because they all share the one header.
+2. **The exchange-rate card was unreachable** — `/app-settings` had a route and
+   a role guard but **no sidebar link at all** (only `/settings` and `/admin`
+   were linked). Added **Admin → Branding & Currency**, plus a "Manage exchange
+   rates" link from the Reports page FX row, and the card can now **add any
+   currency** (`fx-new-code` / `fx-add-currency`), not just the built-in six.
+3. **Report Builder.** `GET /reports` only ever returned reports you created
+   yourself or that were explicitly shared — the one saved report belongs to
+   another user, so an admin saw an empty page. Admins / directors / managers
+   now see every saved report (rows carry `is_mine` + `created_by_name`).
+   `generate` additionally: drops a filter pointing at a **campus that no
+   longer exists** and returns a `warnings` list saying so (the saved report
+   filtered on `loc_003`, hence "fetches nothing"), returns `counts`, and pulls
+   **real ledger figures** (`ledger_total_revenue/expenses/net_income` via
+   `profit_and_loss`) because `financial` reports were reading only the legacy
+   `donations`/`expenses` collections. The Excel export used `window.open` with
+   no Authorization header, so it always failed — it now downloads an
+   authenticated blob. The preview shows the warnings, per-tab row counts and
+   an explicit empty state.
+4. **Recurrence options.** The in-form Repeats picker now exposes everything the
+   generator supports: every day / week / 2 weeks / **certain days each week**
+   (multi-weekday toggles) / month / **2 months** / **3 months** / **Nth
+   weekday of the month** (First…Last × weekday) / **a set day each month** /
+   **every year**, all sharing one `series_id` so the run still edits and
+   deletes together. Verified: 2nd Wednesday → 14 Oct, 11 Nov, 9 Dec.
+
 ## iter377 — A printed account ledger that isn't blank (2026-06)
 
 Reported: "printing an account ledger didn't show anything on the print page,

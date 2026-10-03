@@ -38,7 +38,17 @@ export const FxRatesCard = ({ canEdit }) => {
     finally { setSaving(false); }
   };
 
-  const codes = Array.from(new Set([...COMMON, ...Object.keys(rates)])).filter(c => c !== base);
+  const [newCode, setNewCode] = useState('');
+  const [extra, setExtra] = useState([]);
+  const codes = Array.from(new Set([...COMMON, ...Object.keys(rates), ...extra])).filter(c => c !== base);
+
+  const addCurrency = () => {
+    const code = newCode.trim().toUpperCase();
+    if (!/^[A-Z]{3,4}$/.test(code)) { toast.error('Use a 3-letter currency code, e.g. CAD'); return; }
+    if (code === base) { toast.error(`${code} is already the base currency`); return; }
+    setExtra(e => [...e, code]);
+    setNewCode('');
+  };
 
   return (
     <Card data-testid="fx-rates-card">
@@ -76,6 +86,17 @@ export const FxRatesCard = ({ canEdit }) => {
           <p className="text-xs text-muted-foreground mt-2">
             Leave a currency blank to hide it from reports. Example: 1 UGX = 0.00027 USD.
           </p>
+        </div>
+
+        <div className="flex items-end gap-2">
+          <div className="space-y-1">
+            <Label className="text-xs">Add another currency</Label>
+            <Input className="w-32" placeholder="e.g. CAD" value={newCode} disabled={!canEdit}
+              data-testid="fx-new-code"
+              onChange={e => setNewCode(e.target.value.toUpperCase().slice(0, 4))}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCurrency(); } }} />
+          </div>
+          <Button variant="outline" onClick={addCurrency} disabled={!canEdit} data-testid="fx-add-currency">Add</Button>
         </div>
 
         {meta.updated_at && (
