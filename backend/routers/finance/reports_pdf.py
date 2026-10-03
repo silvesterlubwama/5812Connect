@@ -111,11 +111,38 @@ async def pnl_pdf(location_id: Optional[str] = None, date_from: Optional[str] = 
     data = await profit_and_loss(location_id=location_id, date_from=date_from, date_to=date_to,
                                  current_user=current_user)
     fx = await resolve_fx(fx_target, fx_rate)
+    money = converter(fx)
+
+    # iter379 — each expense account prints WHERE the money went underneath it.
+    def spend(rows) -> str:
+        out = []
+        for r in rows:
+            b = r.get("breakdown") or {}
+            cells = []
+            for title, key in (("Paid to", "payees"), ("By campus", "campuses"),
+                               ("By department", "departments")):
+                items = b.get(key) or []
+                lines = "".join(
+                    f'<div style="display:flex;justify-content:space-between;gap:8px">'
+                    f'<span>{x["label"]}</span><span>{money(x["amount"]):,.2f}</span></div>'
+                    for x in items) or '<div style="color:#94a3b8">—</div>'
+                cells.append(
+                    f'<td style="vertical-align:top;width:33%;padding:4px 8px 8px 0;border:0">'
+                    f'<div style="font-size:7pt;text-transform:uppercase;color:#64748b">{title}</div>'
+                    f'{lines}</td>')
+            out.append(
+                f'<h2>{r["code"]} {r["name"]} — {money(r["amount"]):,.2f}'
+                f'{f" ({b.get(chr(101)+chr(110)+chr(116)+chr(114)+chr(105)+chr(101)+chr(115))} payments)" if b.get("entries") else ""}</h2>'
+                f'<table class="data" style="font-size:8pt"><tr>{"".join(cells)}</tr></table>')
+        return "".join(out)
+
     html = (f'<h2>Revenue</h2>{_rows_table(data.get("revenue", []), fx)}'
             f'{_total_row("Total revenue", data.get("total_revenue"), fx)}'
             f'<h2>Expenses</h2>{_rows_table(data.get("expenses", []), fx)}'
             f'{_total_row("Total expenses", data.get("total_expenses"), fx)}'
-            f'<h2>Result</h2>{_total_row("Net income", data.get("net_income"), fx)}')
+            f'<h2>Result</h2>{_total_row("Net income", data.get("net_income"), fx)}'
+            f'<h2 style="margin-top:18px">Where the money went</h2>'
+            f'{spend(data.get("expenses", []))}')
     return await _render("Profit & Loss", html, await _loc_name(location_id),
                          {"date_from": date_from, "date_to": date_to}, fx, current_user, "profit-and-loss")
 

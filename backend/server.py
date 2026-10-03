@@ -501,6 +501,7 @@ try:
     from routers.seed import router as seed_router
     from routers.dashboard import router as dashboard_router
     from routers.i18n import router as i18n_router
+    from routers.translate import router as translate_router
     from routers.products import router as products_router
     from routers.sales import router as sales_router
     from routers.sheet_import import router as sheet_import_router
@@ -545,6 +546,7 @@ try:
     app.include_router(seed_router)
     app.include_router(dashboard_router)
     app.include_router(i18n_router)
+    app.include_router(translate_router)
     app.include_router(products_router)
     app.include_router(sales_router)
     app.include_router(sheet_import_router)

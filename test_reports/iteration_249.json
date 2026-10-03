@@ -1,0 +1,22 @@
+{
+  "summary": "Iter 379 validation. BUG 1 (P&L breakdown) and BUG 2 (language switcher + AI auto-translate of staff content) both verified end-to-end. 7/7 backend pytest cases pass; UI flows for P&L expand/collapse/drill, sidebar translation (Luganda + Francais + back to English), persistence across reload, and Luganda calendar titles in Sept 2026 all behave as specified.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter379_pnl_breakdown_and_translate.py",
+    "/app/test_reports/pytest/iter379.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "translate.py pins model name 'claude-sonnet-5-5' — confirm this alias is intentional (unusual spelling); if the model id changes the whole switcher silently falls back to English because exceptions are swallowed by design.",
+    "Fallback path in translate_batch returns English without a user-facing hint of failure. Acceptable per product decision, but logs are warning-only — consider surfacing a last_error timestamp on cache-stats for observability.",
+    "P&L breakdown sums reconciled within tolerance for sampled accounts (test asserts <=2% drift)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter379_pnl_breakdown_and_translate.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (all flows)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Report dropdown + Location dropdown on /reports are custom combobox components (not native <select>); click the trigger text and then click the option by text. Globe switcher button text toggles between 'Eng'/'Lug'/'Fra' etc. localStorage key for persistence is '5812_lang'. Luganda first-switch LLM call completes in ~12-15s for ~45 nav strings; subsequent switches are near-instant (Mongo cache). P&L row testids use account code: pnl-row-<code>, pnl-breakdown-<code>, pnl-drill-<code>, drill modal is pnl-drill-dialog. Calendar event test testids are cal-item-<id>. Proper nouns (e.g. 'Magoggo Kids Club') correctly remain untranslated per LLM instructions."
+}

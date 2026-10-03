@@ -103,14 +103,78 @@ async def trial_balance(
     }
 
 
+async def _spend_breakdown(date_from, date_to, location_id, account_ids: set) -> dict:
+    """Per expense account: who was paid, which campus, which department.
+
+    One pass over the journal entries in the period — the P&L itself is only an
+    account-level aggregate, which is exactly the "no breakdown" complaint.
+    """
+    query: dict = {"voided": {"$ne": True}}
+    if date_from or date_to:
+        query["date"] = {}
+        if date_from:
+            query["date"]["$gte"] = date_from
+        if date_to:
+            query["date"]["$lte"] = date_to
+    if location_id:
+        query["location_id"] = location_id
+
+    loc_names, dept_names = {}, {}
+    for coll in ("locations", "sublocations"):
+        async for row in db[coll].find({}, {"_id": 0, "id": 1, "name": 1}):
+            loc_names[row["id"]] = row.get("name") or ""
+    async for row in db.departments.find({}, {"_id": 0, "id": 1, "name": 1}):
+        dept_names[row["id"]] = row.get("name") or ""
+
+    acc: dict = {aid: {"payees": {}, "campuses": {}, "departments": {}, "count": 0}
+                 for aid in account_ids}
+    async for je in db.finance_journal_entries.find(query, {"_id": 0}):
+        payee = (je.get("payee") or je.get("vendor") or je.get("receipt_vendor")
+                 or je.get("description") or "Not recorded")
+        campus = loc_names.get(je.get("location_id") or "") or "No campus"
+        dept = dept_names.get(je.get("department_id") or "") or "No department"
+        for line in je.get("lines") or []:
+            aid = line.get("account_id")
+            if aid not in acc:
+                continue
+            amount = round(float(line.get("debit") or 0) - float(line.get("credit") or 0), 2)
+            if amount == 0:
+                continue
+            bucket = acc[aid]
+            bucket["count"] += 1
+            for key, label in (("payees", payee), ("campuses", campus), ("departments", dept)):
+                slot = bucket[key].setdefault(label, {"label": label, "amount": 0.0, "count": 0})
+                slot["amount"] = round(slot["amount"] + amount, 2)
+                slot["count"] += 1
+
+    def top(d: dict, limit=6) -> list:
+        rows = sorted(d.values(), key=lambda r: -abs(r["amount"]))
+        head, tail = rows[:limit], rows[limit:]
+        if tail:
+            head.append({"label": f"{len(tail)} other{'s' if len(tail) > 1 else ''}",
+                         "amount": round(sum(r["amount"] for r in tail), 2),
+                         "count": sum(r["count"] for r in tail)})
+        return head
+
+    return {aid: {"payees": top(v["payees"]), "campuses": top(v["campuses"]),
+                  "departments": top(v["departments"]), "entries": v["count"]}
+            for aid, v in acc.items()}
+
+
 @router.get("/pnl")
 async def profit_and_loss(
     date_from: Optional[str] = Query(None),
     date_to: Optional[str] = Query(None),
     location_id: Optional[str] = None,
+    breakdown: bool = True,
     current_user: dict = Depends(require_staff),
 ):
-    """Revenue - Expenses for the period."""
+    """Revenue - Expenses for the period.
+
+    iter379 — each expense account also carries a `breakdown` showing WHERE the
+    money went: top payees, campuses and departments, so "Programme costs
+    12.4m" can be explained without leaving the report.
+    """
     bal = await _balances_by_account(date_from, date_to, location_id)
     revenue_rows, expense_rows = [], []
     for v in bal.values():
@@ -122,6 +186,12 @@ async def profit_and_loss(
             expense_rows.append(row)
     revenue_rows.sort(key=lambda r: r["code"])
     expense_rows.sort(key=lambda r: r["code"])
+    if breakdown and expense_rows:
+        groups = await _spend_breakdown(date_from, date_to, location_id,
+                                       {r["account_id"] for r in expense_rows})
+        for r in expense_rows:
+            r["breakdown"] = groups.get(r["account_id"], {})
+
     total_revenue = round(sum(r["amount"] for r in revenue_rows), 2)
     total_expenses = round(sum(r["amount"] for r in expense_rows), 2)
     return {

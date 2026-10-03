@@ -23,6 +23,7 @@ import { notificationsApi, searchApi, locationsApi } from '../services/api';
 import api from '../services/api';
 import { useWebSocket } from '../context/WebSocketContext';
 import { useI18n } from '../context/I18nContext';
+import { useAutoTranslate } from '../hooks/useAutoTranslate';
 import { LANGUAGES } from '../i18n';
 import { toast } from 'sonner';
 import Dialer from './Dialer';
@@ -256,6 +257,14 @@ export default function Layout() {
     return () => { cancelled = true; clearInterval(t); };
   }, [user]);
   const { t, lang, changeLang, languages } = useI18n();
+  // iter379 — the switcher used to change a label and nothing else, because
+  // almost nothing in the app called t(). Every nav label now goes through the
+  // runtime translator (static key first, AI + Mongo cache behind it).
+  const navStrings = React.useMemo(
+    () => NAV_SECTIONS.flatMap(sec => [sec.label, ...sec.items.map(i => i.label)]).filter(Boolean),
+    [],
+  );
+  const tx = useAutoTranslate(navStrings);
 
   // Fetch campuses for switcher and check feature flags
   useEffect(() => {
@@ -586,7 +595,7 @@ export default function Layout() {
                   {visibleItems.map(({ to, icon: Icon, label }) => (
                     <NavLink key={to} to={to} onClick={() => setSidebarOpen(false)} data-testid={`nav-${to.replace('/', '')}`}
                       className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors ${isActive ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground'}`}>
-                      <Icon size={15} className="shrink-0" />{label}
+                      <Icon size={15} className="shrink-0" />{tx(label)}
                     </NavLink>
                   ))}
                 </div>
@@ -599,11 +608,11 @@ export default function Layout() {
                   <button onClick={() => toggleSection(si)}
                     className={`flex items-center justify-between w-full text-xs font-semibold uppercase tracking-wider px-3 py-1.5 rounded-md transition-colors ${hasActiveChild ? 'text-primary' : 'text-muted-foreground/60 hover:text-muted-foreground'}`}
                     data-testid={`nav-section-${section.label.toLowerCase().replace(/\s/g, '-')}`}>
-                    <span>{section.label}</span>
+                    <span>{tx(section.label)}</span>
                     <ChevronRight size={12} className={`transition-transform duration-200 ${shouldShow ? 'rotate-90' : ''}`} />
                   </button>
                 ) : (
-                  <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">{section.label}</p>
+                  <p className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">{tx(section.label)}</p>
                 )}
                 {(shouldShow || !section.collapsible) && (
                   <div className="space-y-0.5 mt-0.5">
@@ -620,7 +629,7 @@ export default function Layout() {
                             </span>
                           )}
                         </span>
-                        {label}
+                        {tx(label)}
                       </NavLink>
                       );
                     })}

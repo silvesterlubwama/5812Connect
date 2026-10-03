@@ -49,6 +49,9 @@ export default function ReportsPage() {
     })();
   }, []);
 
+  // iter379 — expand an expense line in place to see where the money went
+  const [expanded, setExpanded] = useState({});
+
   // iter374 — click a P&L expense total to see the payments behind it
   const [drill, setDrill] = useState(null);   // { code, name, loading, data }
 
@@ -343,7 +346,8 @@ export default function ReportsPage() {
             {dateFrom || dateTo ? <span className="text-xs text-muted-foreground">{dateFrom || '…'} → {dateTo || 'today'}</span> : null}
           </CardHeader>
           <CardContent className="overflow-x-auto">
-            <ReportTable reportType={reportType} report={report} applyFx={applyFx} onDrill={openDrill} />
+            <ReportTable reportType={reportType} report={report} applyFx={applyFx} onDrill={openDrill}
+              expanded={expanded} onToggle={id => setExpanded(e => ({ ...e, [id]: !e[id] }))} />
           </CardContent>
         </Card>
       )}
@@ -410,7 +414,7 @@ export default function ReportsPage() {
 // without opening the CSV/PDF export. Currency conversion (`applyFx`) is
 // applied at render time so the same table doubles as the print preview
 // when a target currency + rate has been entered.
-function ReportTable({ reportType, report, applyFx, onDrill }) {
+function ReportTable({ reportType, report, applyFx, onDrill, expanded = {}, onToggle }) {
   const fmt = (n) => Number(applyFx(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (!report) return null;
 
@@ -463,14 +467,48 @@ function ReportTable({ reportType, report, applyFx, onDrill }) {
           ))}
           <tr className="border-t bg-emerald-50 font-medium"><td colSpan={2} className="px-3 py-2">Total Revenue</td><td className="px-3 py-2 text-right font-mono">{fmt(report.total_revenue)}</td></tr>
           <tr className="bg-muted/40 text-xs uppercase font-medium"><td colSpan={3} className="px-3 py-2 pt-4">Expenses</td></tr>
-          {(report.expenses || []).map((r, i) => (
-            <tr key={`exp-${i}`} className="border-t hover:bg-amber-50/60 cursor-pointer" onClick={() => onDrill?.(r)}
-              title="See every payment behind this total" data-testid={`pnl-drill-${r.code}`}>
-              <td className="px-3 py-1.5 font-mono text-xs w-16">{r.code}</td>
-              <td className="px-3 py-1.5">{r.name} <span className="text-[10px] text-muted-foreground">· see the payments</span></td>
-              <td className="px-3 py-1.5 text-right font-mono">{fmt(r.amount)}</td>
-            </tr>
-          ))}
+          {(report.expenses || []).map((r, i) => {
+            const b = r.breakdown || {};
+            const open = !!expanded[r.account_id];
+            return (
+              <React.Fragment key={`exp-${i}`}>
+                <tr className="border-t hover:bg-amber-50/60 cursor-pointer" data-testid={`pnl-row-${r.code}`}
+                  onClick={() => onToggle?.(r.account_id)} title="Show where this money went">
+                  <td className="px-3 py-1.5 font-mono text-xs w-16">{r.code}</td>
+                  <td className="px-3 py-1.5">
+                    {open ? '▾ ' : '▸ '}{r.name}
+                    {b.entries ? <span className="text-[10px] text-muted-foreground"> · {b.entries} payment{b.entries === 1 ? '' : 's'}</span> : null}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono">{fmt(r.amount)}</td>
+                </tr>
+                {open && (
+                  <tr className="bg-muted/20" data-testid={`pnl-breakdown-${r.code}`}>
+                    <td></td>
+                    <td colSpan={2} className="px-3 py-3">
+                      <div className="grid gap-5 sm:grid-cols-3">
+                        {[['Paid to', b.payees], ['By campus', b.campuses], ['By department', b.departments]].map(([title, rows]) => (
+                          <div key={title}>
+                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1">{title}</p>
+                            {(rows || []).length === 0 && <p className="text-xs text-muted-foreground">—</p>}
+                            {(rows || []).map((x, j) => (
+                              <div key={j} className="flex justify-between gap-3 text-xs py-0.5 border-b border-border/40 last:border-0">
+                                <span className="truncate" title={x.label}>{x.label}</span>
+                                <span className="font-mono shrink-0">{fmt(x.amount)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                      <button type="button" className="text-xs underline mt-3" data-testid={`pnl-drill-${r.code}`}
+                        onClick={e => { e.stopPropagation(); onDrill?.(r); }}>
+                        See every individual payment
+                      </button>
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            );
+          })}
           <tr className="border-t bg-rose-50 font-medium"><td colSpan={2} className="px-3 py-2">Total Expenses</td><td className="px-3 py-2 text-right font-mono">{fmt(report.total_expenses)}</td></tr>
           <tr className={`border-t-2 font-bold text-base ${Number(report.net_income) >= 0 ? 'bg-emerald-100' : 'bg-rose-100'}`}><td colSpan={2} className="px-3 py-2">Net Income</td><td className="px-3 py-2 text-right font-mono">{fmt(report.net_income)}</td></tr>
         </tbody>

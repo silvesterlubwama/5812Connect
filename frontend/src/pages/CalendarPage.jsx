@@ -20,6 +20,7 @@ import { HolidayPolicyDialog } from '../components/HolidayPolicyDialog';
 import { EventVenuePicker } from '../components/EventVenuePicker';
 import { secureStorage } from '../services/secureStorage';
 import { useAuth } from '../context/AuthContext';
+import { useAutoTranslate } from '../hooks/useAutoTranslate';
 import { toast } from 'sonner';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -421,11 +422,15 @@ export default function CalendarPage() {
   };
 
   // ── Rendering ────────────────────────────────────────────────────────
+  // iter379 — event titles are typed by staff, so they can't live in a
+  // translation file; they go through the AI translator, which caches.
+  const txTitle = useAutoTranslate(items.map(i => i.title));
+
   const CellItem = ({ it }) => (
     <div onClick={(e) => { e.stopPropagation(); openItem(it); }}
          className={`text-[10px] px-1 py-0.5 rounded truncate cursor-pointer hover:opacity-80 ${it._kind === 'task' ? `${TYPE_COLORS.task} text-white` : it._kind === 'holiday' ? `text-white ${TYPE_COLORS[it.type] || 'bg-slate-500'}` : `text-white ${it._authoredByMe ? TYPE_COLORS.user_event : (TYPE_COLORS[it.type] || 'bg-slate-500')}`}`}
          title={it.title} data-testid={`cal-item-${it.id}`}>
-      {it.time && <span className="opacity-80">{it.time} </span>}{it.title}
+      {it.time && <span className="opacity-80">{it.time} </span>}{txTitle(it.title)}
     </div>
   );
 
@@ -511,7 +516,7 @@ export default function CalendarPage() {
                     <div key={it.id} onClick={(e) => { e.stopPropagation(); openItem(it); }}
                          className={`absolute left-1 right-1 rounded px-1.5 py-0.5 text-[10px] text-white cursor-pointer hover:opacity-90 ${color} overflow-hidden`}
                          style={{ top, height }} data-testid={`cal-item-${it.id}`}>
-                      <div className="font-semibold truncate">{it.title}</div>
+                      <div className="font-semibold truncate">{txTitle(it.title)}</div>
                       {it.time && <div className="opacity-80">{it.time}{it.end_time ? `–${it.end_time}` : ''}</div>}
                     </div>
                   );

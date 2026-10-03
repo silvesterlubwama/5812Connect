@@ -1,5 +1,55 @@
 # PRD — 58:12 Global Connect CRM
 
+## iter379 — P&L explains where funds went · the language switcher actually works (2026-06)
+
+Two bugs in one message. Verified by the testing agent —
+`/app/test_reports/iteration_249.json`: **backend 7/7, frontend 100%, zero
+issues**, plus `tests/test_iter379_pnl_breakdown_and_translate.py`.
+**Production needs a redeploy.**
+
+### 1. "Financial reporting should give more breakdown of how funds were spent"
+The P&L aggregated at chart-of-account level only, so "Wages & Salaries
+1,265,000" had no explanation.
+- `_spend_breakdown()` in `routers/finance/reports.py` makes one pass over the
+  period's journal entries and groups every expense line by **payee**
+  (payee / vendor / receipt vendor / description), **campus** (`location_id`)
+  and **department** (`department_id`) — top 6 each plus an "N others" bucket,
+  with an `entries` count. Attached to each expense row by
+  `profit_and_loss(..., breakdown=True)`; `?breakdown=false` opts out.
+- On screen each expense row **expands in place** (`pnl-row-<code>` →
+  `pnl-breakdown-<code>`) into Paid to / By campus / By department columns, with
+  "See every individual payment" still opening the per-payment dialog.
+- The P&L PDF gained a **"Where the money went"** section per expense account.
+
+### 2. "Language switcher doesn't actually work" — it had nothing to translate
+`changeLang` worked and persisted to `localStorage.5812_lang`, but **only
+Layout.jsx ever called `t()`** out of the entire app, so switching language
+changed the switcher's own label and nothing else. The 7 JSON files cover ~25
+nav keys against 45 nav labels, and none of the screens.
+
+User's choice was "everything, as a large multi-session job", so rather than
+hand-key thousands of strings first:
+- **`routers/translate.py` (new)** — `POST /api/translate` takes a batch of
+  English strings + a language, serves whatever is in the Mongo
+  `translation_cache` (unique index on `key`), and sends only the unseen ones to
+  **Claude Sonnet** via `EMERGENT_LLM_KEY`, caching the result. A phrase is
+  translated once for the whole organisation. Any failure returns the **English
+  unchanged** (a screen must never blank), with the reason recorded and surfaced
+  on `GET /api/translate/cache-stats`. Numbered-list prefixes are stripped from
+  the model's reply (the first implementation stored "1. Kiraabu…").
+- **`hooks/useAutoTranslate.js` (new)** — batches the strings a component
+  renders, shares a module-level memo, returns English until the answer lands.
+- Wired into the **whole left navigation** (every section header + item label)
+  and into **staff-written calendar event titles** — the thing a JSON file can
+  never cover. Verified in Luganda ("Dashibodi"/"Ripoti" in Kiswahili,
+  "Kiraabu y'Abaana e Magoggo" in Luganda) and Français, with the choice
+  surviving a reload. First switch ≈12-15s for 45 strings; after that the cache
+  makes it instant. Proper nouns are deliberately left alone.
+
+**Remaining language sessions:** page bodies module by module (Finance, People,
+Check-ins, the member portal). Untranslated screens stay English by the user's
+choice, so nothing looks broken while that proceeds.
+
 ## iter378 — Campus letterhead · reachable FX card · Report Builder revived (2026-06)
 
 Four things in one message: reports should carry the **campus** name, not the
