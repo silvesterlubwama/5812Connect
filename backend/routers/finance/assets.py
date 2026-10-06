@@ -194,6 +194,7 @@ async def create_asset(data: dict, current_user: dict = Depends(require_manager)
             "expense_account_code": data.get("expense_account_code") or "5000",
             "paid_from_account_id": data.get("paid_from_account_id"),
             "reference": (data.get("reference") or "").strip() or doc["id"],
+            "payee": vendor,
             "location_id": doc["sublocation_id"] or doc["location_id"],
             "department_id": doc["department_id"],
         }, current_user)
@@ -276,6 +277,7 @@ async def log_asset_spend(asset_id: str, data: dict, current_user: dict = Depend
             "expense_account_code": data.get("expense_account_code") or "5000",
             "paid_from_account_id": data.get("paid_from_account_id"),
             "reference": row["reference"] or row["id"],
+            "payee": row["vendor"],
             "location_id": (data.get("location_id") or asset.get("sublocation_id")
                             or asset.get("location_id") or ""),
             "department_id": data.get("department_id") or asset.get("department_id") or "",

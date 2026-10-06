@@ -82,6 +82,16 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
     payee = (data.get("payee") or data.get("vendor") or "").strip()
     if payee:
         extra["payee"] = payee
+        # Remember who was paid so the next entry can pick them from the
+        # type-ahead instead of re-typing (and misspelling) the name.
+        from routers.donors_vendors import upsert_vendor_from_expense
+        vendor_id = await upsert_vendor_from_expense(
+            {"vendor": payee, "location_id": location_id,
+             "campus_id": current_user.get("active_campus_id") or location_id},
+            current_user,
+        )
+        if vendor_id:
+            extra["vendor_id"] = vendor_id
     for field in ("receipt_number",):
         val = (data.get(field) or "").strip()
         if val:

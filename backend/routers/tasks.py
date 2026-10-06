@@ -28,7 +28,21 @@ async def resolve_allowed_board_ids(user: dict, restrict_to_locations: set = Non
         if user.get("location_id"):
             user_locs.add(user["location_id"])
     if user_locs:
-        descendants = await expand_descendants(list(user_locs), include_restricted_from=user_locs, allow_all_restricted=False)
+        # Someone tagged on a sub-location (e.g. the Shelter) belongs to its
+        # parent campus too — without this walk their calendar hid every
+        # campus-level board they are obviously part of.
+        parents = await db.locations.find(
+            {"id": {"$in": list(user_locs)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
+            {"_id": 0, "parent_id": 1},
+        ).to_list(50)
+        user_locs |= {p["parent_id"] for p in parents if p.get("parent_id")}
+        # `allow_all_restricted` mirrors get_campus_filter: an admin viewing a
+        # campus must see its restricted sub-locations' boards, otherwise the
+        # Shelter / Farm tasks are invisible on the campus calendar.
+        descendants = await expand_descendants(
+            list(user_locs), include_restricted_from=user_locs,
+            allow_all_restricted=is_system_admin(user),
+        )
         user_locs |= descendants
     if restrict_to_locations:
         user_locs &= set(restrict_to_locations)

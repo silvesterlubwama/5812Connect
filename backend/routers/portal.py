@@ -348,6 +348,7 @@ async def create_portal_expense(data: dict, current_user: dict = Depends(get_cur
         "category": data.get("category", "general"),
         "date": data.get("date", datetime.now(timezone.utc).isoformat()[:10]),
         "notes": data.get("notes", ""),
+        "vendor": (data.get("vendor") or "").strip(),
         "status": "pending",
         "submitted_by_name": current_user.get("name", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),

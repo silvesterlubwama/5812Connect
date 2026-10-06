@@ -10,6 +10,7 @@ import { Textarea } from '../ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { useAuth } from '../../context/AuthContext';
+import { VendorPicker } from '../VendorPicker';
 import api from '../../services/api';
 import { toast } from 'sonner';
 
@@ -399,7 +400,8 @@ export const AssetsRegister = () => {
               </div>
             </div>
             <div className="space-y-1.5"><Label>Bought from</Label>
-              <Input value={assetForm.vendor} onChange={e => setAssetForm({ ...assetForm, vendor: e.target.value })} data-testid="asset-vendor-input" />
+              <VendorPicker testId="asset-vendor-input" value={assetForm.vendor}
+                onChange={v => setAssetForm({ ...assetForm, vendor: v })} />
             </div>
             <div className="space-y-1.5"><Label>Notes</Label>
               <Textarea rows={2} value={assetForm.notes} onChange={e => setAssetForm({ ...assetForm, notes: e.target.value })} />
@@ -524,7 +526,8 @@ export const AssetsRegister = () => {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5"><Label>Paid to</Label>
-                <Input value={spendForm.vendor} onChange={e => setSpendForm({ ...spendForm, vendor: e.target.value })} data-testid="asset-spend-vendor" />
+                <VendorPicker testId="asset-spend-vendor" value={spendForm.vendor}
+                  onChange={v => setSpendForm({ ...spendForm, vendor: v })} />
               </div>
               {spendForm.kind === 'improvement' ? (
                 <div className="space-y-1.5"><Label>Extra years of life</Label>

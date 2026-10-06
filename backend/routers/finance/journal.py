@@ -60,7 +60,7 @@ async def create_entry(data: dict, current_user: dict = Depends(require_director
     location_id = (data.get("location_id") or "").strip()
     if not location_id:
         raise HTTPException(status_code=400, detail="location_id is required — every entry must belong to a campus or sub-location")
-    return await post_journal_entry(
+    je = await post_journal_entry(
         date=data.get("date") or "",
         description=data.get("description") or "",
         lines=data.get("lines") or [],
@@ -70,6 +70,23 @@ async def create_entry(data: dict, current_user: dict = Depends(require_director
         created_by=current_user["id"],
         created_by_name=current_user.get("name"),
     )
+    # A split expense posted from the Finance dialog carries the "paid to"
+    # name — keep it on the entry (reports read `payee`) and remember the
+    # vendor so it shows up in the type-ahead next time.
+    payee = (data.get("payee") or data.get("vendor") or "").strip()
+    if payee:
+        from routers.donors_vendors import upsert_vendor_from_expense
+        extra = {"payee": payee}
+        vendor_id = await upsert_vendor_from_expense(
+            {"vendor": payee, "location_id": location_id,
+             "campus_id": current_user.get("active_campus_id") or location_id},
+            current_user,
+        )
+        if vendor_id:
+            extra["vendor_id"] = vendor_id
+        await db.finance_journal_entries.update_one({"id": je["id"]}, {"$set": extra})
+        je.update(extra)
+    return je
 
 
 @router.put("/{je_id}")

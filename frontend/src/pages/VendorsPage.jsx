@@ -9,7 +9,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '.
 import { Textarea } from '../components/ui/textarea';
 import { toast } from 'sonner';
 import api from '../services/api';
-import { Truck, Search, Mail, Phone, ExternalLink, RefreshCw, FileText } from 'lucide-react';
+import { Truck, Search, Mail, Phone, ExternalLink, RefreshCw, FileText, Plus } from 'lucide-react';
 
 const VENDOR_CATEGORIES = [
   { v: 'individual', label: 'Individual' },
@@ -33,6 +33,9 @@ export default function VendorsPage() {
   const [selected, setSelected] = useState(null);
   const [txns, setTxns] = useState({ expenses: [], bills: [] });
   const [editForm, setEditForm] = useState({});
+  const [showAdd, setShowAdd] = useState(false);
+  const [addForm, setAddForm] = useState({ name: '', category: 'supplier', email: '', phone: '', notes: '' });
+  const [adding, setAdding] = useState(false);
 
   const fetchVendors = useCallback(async () => {
     setLoading(true);
@@ -65,6 +68,29 @@ export default function VendorsPage() {
       await fetchVendors();
     } catch (err) { toast.error(err.response?.data?.detail || 'Cleanup failed'); }
     setCleaning(false);
+  };
+
+  const addVendor = async () => {
+    if (!addForm.name.trim()) { toast.error('Enter the vendor name'); return; }
+    setAdding(true);
+    try {
+      const r = await api.post('/vendors', { ...addForm, name: addForm.name.trim() });
+      toast.success(r.data?.message || 'Vendor added');
+      setShowAdd(false);
+      setAddForm({ name: '', category: 'supplier', email: '', phone: '', notes: '' });
+      await fetchVendors();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Could not add vendor'); }
+    setAdding(false);
+  };
+
+  const archiveVendor = async () => {
+    if (!window.confirm(`Archive "${selected.name}"? It stops appearing in the picker but its history stays.`)) return;
+    try {
+      await api.put(`/vendors/${selected.id}`, { active: false });
+      toast.success('Vendor archived');
+      setSelected(null);
+      await fetchVendors();
+    } catch (err) { toast.error(err.response?.data?.detail || 'Archive failed'); }
   };
 
   const saveVendor = async () => {
@@ -103,8 +129,35 @@ export default function VendorsPage() {
             </>
           )}
         </div>
-        <div className="relative"><Search size={14} className="absolute left-2 top-2.5 text-muted-foreground" /><Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name..." className="pl-8 h-9 w-56" data-testid="vendor-search-input" /></div>
+        <div className="flex items-center gap-2">
+          <div className="relative"><Search size={14} className="absolute left-2 top-2.5 text-muted-foreground" /><Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name..." className="pl-8 h-9 w-56" data-testid="vendor-search-input" /></div>
+          <Button size="sm" onClick={() => setShowAdd(true)} data-testid="vendor-add-btn"><Plus size={14} className="mr-1" />Add vendor</Button>
+        </div>
       </div>
+
+      <Dialog open={showAdd} onOpenChange={setShowAdd}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>Add vendor</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div><Label>Name *</Label><Input value={addForm.name} onChange={e => setAddForm({ ...addForm, name: e.target.value })} placeholder="e.g. ACME Supplies Ltd" data-testid="vendor-add-name" /></div>
+            <div><Label>Category</Label>
+              <Select value={addForm.category} onValueChange={v => setAddForm({ ...addForm, category: v })}>
+                <SelectTrigger data-testid="vendor-add-category"><SelectValue /></SelectTrigger>
+                <SelectContent>{VENDOR_CATEGORIES.map(c => <SelectItem key={c.v} value={c.v}>{c.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Email</Label><Input type="email" value={addForm.email} onChange={e => setAddForm({ ...addForm, email: e.target.value })} data-testid="vendor-add-email" /></div>
+              <div><Label>Phone</Label><Input value={addForm.phone} onChange={e => setAddForm({ ...addForm, phone: e.target.value })} data-testid="vendor-add-phone" /></div>
+            </div>
+            <div><Label>Notes</Label><Textarea rows={2} value={addForm.notes} onChange={e => setAddForm({ ...addForm, notes: e.target.value })} /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setShowAdd(false)}>Cancel</Button>
+            <Button onClick={addVendor} disabled={adding} data-testid="vendor-add-save-btn">{adding ? 'Saving…' : 'Add vendor'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card className="rounded-xl shadow-soft">
         <CardContent className="p-0">
@@ -200,6 +253,7 @@ export default function VendorsPage() {
           )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setSelected(null)}>Close</Button>
+            <Button variant="outline" onClick={archiveVendor} data-testid="vendor-archive-btn">Archive</Button>
             <Button onClick={saveVendor} data-testid="vendor-save-btn">Save</Button>
           </DialogFooter>
         </DialogContent>

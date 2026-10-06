@@ -146,6 +146,48 @@ async def _donor_stats(donor_id: str, donor_name: str, campus_id: str) -> dict:
     }
 
 
+def _vendor_scope(campus_filter: dict) -> dict:
+    """Campus scope for vendor reads, widened so real vendors stop vanishing.
+
+    Vendors are written by three different places: the auto-upsert tags
+    `campus_id`, the Banking module tags `location_id`, and older/imported
+    rows carry neither. Filtering on `location_id` alone made the type-ahead
+    look empty even though the vendor existed.
+    """
+    base = {"active": {"$ne": False}}
+    if not campus_filter:
+        return base
+    ors = list(campus_filter.get("$or") or [campus_filter])
+    ors += [{"campus_id": c["location_id"]} for c in ors if "location_id" in c]
+    ors.append({"location_id": {"$in": [None, ""]}, "campus_id": {"$in": [None, ""]}})
+    return {**base, "$or": ors}
+
+
+async def _ledger_payee_total(vendor_name: str) -> tuple:
+    """Expense money booked against this payee in the double-entry ledger.
+
+    The legacy `expenses` collection is no longer where staff entries land —
+    without this a busy vendor looked like it had zero activity and got
+    archived by the stale-vendor cleanup.
+    """
+    if not vendor_name:
+        return 0.0, 0, None
+    total, count, last = 0.0, 0, None
+    query = {"reversed": {"$ne": True},
+             "$or": [{"payee": {"$regex": f"^{re.escape(vendor_name)}$", "$options": "i"}},
+                     {"vendor": {"$regex": f"^{re.escape(vendor_name)}$", "$options": "i"}}]}
+    async for je in db.finance_journal_entries.find(query, {"_id": 0, "lines": 1, "date": 1}):
+        debit = sum(float(l.get("debit") or 0) for l in (je.get("lines") or []))
+        if debit <= 0:
+            continue
+        total += debit
+        count += 1
+        d = (je.get("date") or "")[:10]
+        if d and (last is None or d > last):
+            last = d
+    return total, count, last
+
+
 async def _vendor_stats(vendor_id: str, vendor_name: str) -> dict:
     """Aggregate expense totals + count for a vendor."""
     q = {"$or": [{"vendor_id": vendor_id}, {"vendor": vendor_name}], "status": {"$in": ["approved", None]}}
@@ -156,6 +198,11 @@ async def _vendor_stats(vendor_id: str, vendor_name: str) -> dict:
     total = float(r[0].get("total") or 0) if r else 0
     count = int(r[0].get("count") or 0) if r else 0
     last_date = r[0].get("last_date") if r else None
+    led_total, led_count, led_last = await _ledger_payee_total(vendor_name)
+    total += led_total
+    count += led_count
+    if led_last and (not last_date or led_last > str(last_date)):
+        last_date = led_last
     # Also include bill totals if the vendor has been used in bank/AP module
     bills = await db.bills.aggregate([
         {"$match": {"vendor_id": vendor_id}},
@@ -284,10 +331,9 @@ async def list_vendors(
     current_user: dict = Depends(get_current_user),
 ):
     campus_filter = await get_campus_filter(current_user)
-    q: dict = {"active": {"$ne": False}}
-    q.update(campus_filter)
+    q: dict = _vendor_scope(campus_filter)
     if search:
-        q["name"] = {"$regex": search, "$options": "i"}
+        q["name"] = {"$regex": re.escape(search), "$options": "i"}
     docs = await db.vendors.find(q, {"_id": 0}).sort("name", 1).to_list(limit)
     if include_stats:
         for v in docs:
@@ -367,8 +413,8 @@ async def suggest_vendors(
     # Match anywhere in the name, not just the start — typing "supplies" has to
     # find "ACME Supplies Ltd". User input is escaped so a name with brackets
     # or a dot can't blow up the regex.
-    query = {"active": {"$ne": False}, "name": {"$regex": re.escape(q.strip()), "$options": "i"}}
-    query.update(campus_filter)
+    query = {**_vendor_scope(campus_filter),
+             "name": {"$regex": re.escape(q.strip()), "$options": "i"}}
     rows = await db.vendors.find(
         query, {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1, "category": 1},
     ).sort("name", 1).to_list(limit * 3)
@@ -384,7 +430,71 @@ async def suggest_vendors(
             continue
         seen.add(key)
         deduped.append(v)
+    # Names already used as a "Paid to" on a ledger entry are offered too, even
+    # if no vendor profile was ever created for them — that gap is what made
+    # the box feel like it never remembered anybody.
+    if len(deduped) < limit:
+        je_query = {"payee": {"$regex": re.escape(q.strip()), "$options": "i"}}
+        if campus_filter:
+            je_query = {"$and": [je_query, campus_filter]}
+        for name in await db.finance_journal_entries.distinct("payee", je_query):
+            key = (name or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append({"id": f"payee_{key[:40]}", "name": name.strip(),
+                            "category": "used before", "from_ledger": True})
+            if len(deduped) >= limit:
+                break
     return deduped[:limit]
+
+
+@router.post("/vendors")
+async def create_vendor(data: dict, current_user: dict = Depends(require_manager)):
+    """Add a vendor by hand (Vendors page) — same shape as the auto-created ones."""
+    name = (data.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Vendor name is required")
+    campus = (data.get("campus_id") or current_user.get("active_campus_id")
+              or current_user.get("location_id") or "").strip()
+    existing = await db.vendors.find_one(
+        {"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}, "campus_id": campus},
+        {"_id": 0, "id": 1, "active": 1},
+    )
+    if existing:
+        # Re-activate instead of creating a second row with the same name.
+        await db.vendors.update_one({"id": existing["id"]}, {"$set": {
+            "active": True, "updated_at": datetime.now(timezone.utc).isoformat()}})
+        return {"id": existing["id"], "message": "Vendor already existed — reactivated"}
+    category = data.get("category") or "supplier"
+    if category not in VALID_VENDOR_CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Invalid category. Must be one of {sorted(VALID_VENDOR_CATEGORIES)}")
+    doc = {
+        "id": f"vnd_{uuid.uuid4().hex[:10]}",
+        "name": name,
+        "category": category,
+        "email": (data.get("email") or "").strip(),
+        "phone": (data.get("phone") or "").strip(),
+        "preferred_contact": data.get("preferred_contact") or "email",
+        "address": (data.get("address") or "").strip(),
+        "contact_name": (data.get("contact_name") or "").strip(),
+        "country": data.get("country") or "UG",
+        "campus_id": campus,
+        "location_id": (data.get("location_id") or campus or "").strip(),
+        "notes": (data.get("notes") or "").strip(),
+        "payment_terms_days": int(data.get("payment_terms_days") or 30),
+        "vat_registered": bool(data.get("vat_registered")),
+        "tin": (data.get("tin") or "").strip(),
+        "currency": data.get("currency") or "UGX",
+        "active": True,
+        "auto_created": False,
+        "created_by": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.vendors.insert_one(dict(doc))
+    await _audit(current_user["id"], "create", "vendor", doc["id"], {"name": name})
+    return {**{k: v for k, v in doc.items()}, "message": "Vendor added"}
 
 
 @router.get("/vendors/{vendor_id}")

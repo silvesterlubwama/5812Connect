@@ -2189,3 +2189,15 @@ See `/app/memory/test_credentials.md`.
 - Deep links standardised: `/people?open=<id>&kind=`, `/social-work?case=`/`?subject_id=`.
 - Outreach planning only ever shows **upcoming, non-cancelled** events.
 - Pending (P1): roll PersonPicker search-first into HR, Social Work, Check-ins, Tasks/Events, POS.
+
+## iter380 additions (June 2026)
+- **Vendors are remembered everywhere**: every finance entry that names a payee
+  (ledger expense, split journal entry, asset purchase/spend, portal claim) upserts a
+  vendor profile, and the type-ahead also suggests payees that only exist on past
+  ledger entries. Vendor campus scope widened so existing rows stop hiding.
+- **Managed vendor list**: Vendors page can add a vendor by hand and archive one;
+  ledger spend now counts as vendor activity (so real vendors are never auto-archived).
+- **Campus tasks on calendars**: sub-location staff inherit their parent campus boards,
+  and admins see restricted sub-location boards (Shelter, Zimba Farm) on the calendar.
+- Next (P2): dashboard financial overview auto-refresh after an entry (user deferred),
+  Wave H5 SDK upgrade, Apple Wallet .pkpass, Resend domain verification.

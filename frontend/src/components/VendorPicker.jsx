@@ -71,7 +71,7 @@ export const VendorPicker = ({
               <span className="font-medium">{v.name}</span>
               {(v.email || v.phone || v.category) && (
                 <span className="block text-[10px] text-muted-foreground">
-                  {[v.category, v.phone, v.email].filter(Boolean).join(' · ')}
+                  {' '}{[v.category, v.phone, v.email].filter(Boolean).join(' · ')}
                 </span>
               )}
             </button>

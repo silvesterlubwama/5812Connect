@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from '../components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { portalApi } from '../services/api';
+import { VendorPicker } from '../components/VendorPicker';
 import { toast } from 'sonner';
 
 const statusColors = {
@@ -24,7 +25,7 @@ export default function PortalExpenses() {
   const [showExpense, setShowExpense] = useState(false);
   const [showCashReq, setShowCashReq] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ title: '', amount: '', category: 'general', notes: '', currency: 'UGX' });
+  const [form, setForm] = useState({ title: '', amount: '', category: 'general', notes: '', currency: 'UGX', vendor: '' });
   const [cashForm, setCashForm] = useState({ amount: '', reason: '', currency: 'UGX' });
   const [searchParams, setSearchParams] = useSearchParams();
   const [highlightId, setHighlightId] = useState(null);
@@ -64,7 +65,7 @@ export default function PortalExpenses() {
       await portalApi.createExpense({ ...form, amount: parseFloat(form.amount) });
       toast.success('Expense submitted');
       setShowExpense(false);
-      setForm({ title: '', amount: '', category: 'general', notes: '', currency: 'UGX' });
+      setForm({ title: '', amount: '', category: 'general', notes: '', currency: 'UGX', vendor: '' });
       fetchExpenses();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
@@ -208,6 +209,11 @@ export default function PortalExpenses() {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Paid to (optional)</Label>
+              <VendorPicker testId="expense-vendor-input" value={form.vendor}
+                onChange={v => setForm({ ...form, vendor: v })} />
             </div>
             <div className="space-y-2">
               <Label>Category</Label>

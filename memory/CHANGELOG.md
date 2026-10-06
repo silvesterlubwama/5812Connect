@@ -1875,3 +1875,34 @@ multiple scenarios or delete repeated items to avoid customs confusion."
 ### Tests
 - `tests/test_iter367_departments_and_assets.py` (7) — sub-location department resolution both ways,
   capitalise/repair behaviour, validation, rollback, valuation. All green (14 with iter366).
+
+## iter380 — Vendor auto-populate on financial entries + campus tasks on calendars (2026-06, June)
+Reported: "Existing Vendors are not auto populating when making financial entries" and
+"staff should see all tasks of their campus/location even on their calendars".
+
+Root causes (three, all in the vendor path):
+1. `/api/finance/transactions/expense` stored `payee` on the journal entry but never
+   created/linked a vendor profile — so a name typed once was never remembered.
+2. `/api/vendors` + `/api/vendors/suggest` filtered on `location_id` only, dropping
+   vendors tagged with `campus_id` (auto-created) or with neither tag (imports).
+3. `_vendor_stats` counted only the legacy `expenses` collection, so ledger-era
+   vendors looked "no activity" and were swept up by the stale-vendor cleanup.
+
+Changes:
+- `routers/donors_vendors.py`: new `_vendor_scope()` (widened campus scope),
+  `_ledger_payee_total()` folded into `_vendor_stats`, `suggest_vendors` also offers
+  previously-used ledger payees ("used before"), new `POST /api/vendors` (manual add,
+  idempotent — re-activates an existing name).
+- `routers/finance/transactions.py`: expense upserts the vendor and stores `vendor_id`.
+- `routers/finance/journal.py`: split/manual JE now persists `payee` + upserts vendor.
+- `routers/finance/assets.py`: asset purchase / asset spend pass `payee` through.
+- `routers/portal.py`: portal expense claim stores `vendor`.
+- `routers/tasks.py` `resolve_allowed_board_ids`: parent-campus walk (sub-location staff
+  now get campus-level boards) and `allow_all_restricted=is_system_admin` so restricted
+  sub-location boards (Shelter, Zimba Farm) appear on the campus calendar.
+- Frontend: VendorPicker added to AssetsRegister (Bought from / Paid to) and Portal
+  expense claim ("Paid to"); VendorsPage gained Add-vendor dialog + Archive button.
+
+Tests: `backend/tests/test_iter380_vendor_autocomplete.py` (5 passed);
+frontend flows via testing agent `/app/test_reports/iteration_250.json` (6/7 PASS,
+1 partial due to test-side combobox flake — covered by the backend test).
