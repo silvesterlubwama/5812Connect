@@ -41,10 +41,17 @@ class LedgerSetupError(Exception):
 
 
 async def post_payroll_payslip(payslip: dict, current_user: dict) -> Optional[dict]:
-    """Called by HR when a payslip's status flips to 'paid'. Posts:
+    """Called by HR when a payslip's status flips to 'paid'.
 
-        Debit  5000 Salaries & Wages
-        Credit 1010 Bank — Operating (or configured location cash account)
+    iter381 — a payslip is no longer a single Dr Wages / Cr Bank line. What the
+    staff member earns, what was withheld on their behalf and what the employer
+    contributes on top are three different movements and the books have to show
+    all three:
+
+        Debit  5002 Wages & Salaries         gross earnings (net + withheld)
+        Debit  <employer line account>       each employer contribution
+        Credit 2200 Taxes Payable            withheld + employer statutory
+        Credit 1010 Bank / configured cash   net actually paid out
 
     Idempotent by payslip.id — running twice yields the same JE, not two.
     Raises LedgerSetupError when the chart of accounts can't support it (this
@@ -54,11 +61,11 @@ async def post_payroll_payslip(payslip: dict, current_user: dict) -> Optional[di
     net = _q(payslip.get("net_salary"))
     if net <= 0:
         return None
-    expense_acct = await get_account_by_code("5000")
+    expense_acct = (await get_account_by_code("5002")) or (await get_account_by_code("5000"))
     if not expense_acct:
         raise LedgerSetupError(
-            "Chart of accounts has no 5000 Salaries & Wages account — add it in "
-            "Finance → Chart of Accounts (or seed the defaults) and post again"
+            "Chart of accounts has no 5002 Wages & Salaries (or 5000 Salaries & Wages) account — "
+            "add it in Finance → Chart of Accounts (or seed the defaults) and post again"
         )
     cash_acct = await _cash_account_id(payslip.get("payroll_location_id") or payslip.get("location_id"))
     if not cash_acct:
@@ -67,15 +74,64 @@ async def post_payroll_payslip(payslip: dict, current_user: dict) -> Optional[di
             "campus, or add 1010 Bank — Operating in Finance → Chart of Accounts"
         )
 
+    items = payslip.get("line_items") or []
+
+    def _amt(li):
+        return _q(li.get("calculated_amount") if li.get("calculated_amount") is not None else li.get("amount"))
+
+    # Withheld on the employee's behalf (PAYE, NSSF employee …) — pay reduces,
+    # but the money is owed to an authority, not kept.
+    withheld = {}
+    for li in items:
+        if (li.get("type") or "") != "deduction" or li.get("source") != "statutory":
+            continue
+        amt = _amt(li)
+        if amt > 0:
+            withheld[li.get("liability_account_code") or "2200"] = \
+                withheld.get(li.get("liability_account_code") or "2200", 0) + amt
+    # Employer contributions that are NOT paid to the employee.
+    employer = []
+    for li in items:
+        if (li.get("type") or "") != "employer_contribution":
+            continue
+        if (li.get("mode") or "employer_cost") == "add_to_pay":
+            continue       # already inside net pay
+        amt = _amt(li)
+        if amt > 0:
+            employer.append((li.get("account_code") or "5002",
+                             li.get("liability_account_code") or "2200", amt, li.get("name") or ""))
+
+    withheld_total = round(sum(withheld.values()), 2)
+    lines = [
+        {"account_id": expense_acct["id"], "account_code": expense_acct["code"],
+         "account_name": expense_acct["name"], "debit": float(round(net + withheld_total, 2)), "credit": 0,
+         "memo": "Gross earnings"},
+    ]
+    liability_credits: dict = dict(withheld)
+    for exp_code, liab_code, amt, name in employer:
+        acct = await get_account_by_code(exp_code) or expense_acct
+        lines.append({"account_id": acct["id"], "account_code": acct["code"],
+                      "account_name": acct["name"], "debit": float(amt), "credit": 0,
+                      "memo": f"Employer contribution — {name}"})
+        liability_credits[liab_code] = liability_credits.get(liab_code, 0) + amt
+    for liab_code, amt in liability_credits.items():
+        liab = await get_account_by_code(liab_code) or await get_account_by_code("2200")
+        if not liab:
+            raise LedgerSetupError(
+                f"Chart of accounts has no {liab_code} account for payroll deductions — "
+                "add it in Finance → Chart of Accounts (2200 Taxes Payable) and post again"
+            )
+        lines.append({"account_id": liab["id"], "account_code": liab["code"],
+                      "account_name": liab["name"], "debit": 0, "credit": float(round(amt, 2)),
+                      "memo": "Payroll deductions / contributions payable"})
+    lines.append({"account_id": cash_acct["id"], "account_code": cash_acct["code"],
+                  "account_name": cash_acct["name"], "debit": 0, "credit": float(net),
+                  "memo": "Net pay"})
+
     return await post_journal_entry(
         date=(payslip.get("paid_at") or payslip.get("date") or "")[:10],
         description=f"Payroll — {payslip.get('staff_name') or 'staff'} — {payslip.get('period') or ''}",
-        lines=[
-            {"account_id": expense_acct["id"], "account_code": expense_acct["code"],
-             "account_name": expense_acct["name"], "debit": float(net), "credit": 0},
-            {"account_id": cash_acct["id"], "account_code": cash_acct["code"],
-             "account_name": cash_acct["name"], "debit": 0, "credit": float(net)},
-        ],
+        lines=lines,
         source="payroll",
         reference=payslip.get("id"),
         location_id=payslip.get("payroll_location_id") or payslip.get("location_id"),

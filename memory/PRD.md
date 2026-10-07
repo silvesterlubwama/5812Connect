@@ -2201,3 +2201,27 @@ See `/app/memory/test_credentials.md`.
   and admins see restricted sub-location boards (Shelter, Zimba Farm) on the calendar.
 - Next (P2): dashboard financial overview auto-refresh after an entry (user deferred),
   Wave H5 SDK upgrade, Apple Wallet .pkpass, Resend domain verification.
+
+## iter381 additions (June 2026)
+- **Statutory payroll engine**: HR Settings compliance lines now drive every payslip in the
+  campus; each employee can have their own rate or be opted out on their pay settings.
+- **Employer contributions**: either added to the paycheck or kept as employer cost; payslip
+  and PDF show "Employer contributions" and "Total cost of employment".
+- **Books tell the truth**: payroll posts gross earnings, employer contributions, the
+  liability for withheld tax (2200) and the net paid — instead of one net-only line.
+- **Statutory remittance report** (HR → Payslips → Statutory Remittance) with per-staff
+  breakdown, CSV and branded PDF.
+- Next (P2): dashboard financial overview auto-refresh, auto-select the admin's campus on
+  the HR page, payroll approval workflow, bulk "mark remitted" against the liability account.
+
+## iter382 additions (June 2026)
+- **Remittance payments**: settle PAYE/NSSF/insurance from a chosen bank or cash account with
+  a filing reference; the 2200 liability clears itself and the report tracks
+  remitted vs outstanding, with a filing history.
+- **Two signatures before payment**: payslips need two different approvers before they can be
+  marked paid (per-campus toggle, on by default).
+- **Payslip emailed on payday** (per-campus toggle). BLOCKED in preview: the configured SMTP
+  host is unreachable from the pod — needs valid email settings in Settings → Email.
+- **Dashboard money cards refresh live** after any finance entry, and when the tab regains focus.
+- Next (P2): dual-approval needs at least two manager accounts to be usable — the second test
+  admin was removed after testing; payroll approval audit report; bulk remittance scheduling.

@@ -1,0 +1,50 @@
+{
+  "summary": "Frontend verification of iter382: dual-approval payroll workflow, HR Settings new toggles, statutory remittance payment + ledger posting, live Dashboard totals via finance-changed event, and payslip-email status note. All 7 flows PASS end-to-end against the live preview. One blocker fixed in-flight: the second-admin credential admin@5812global.org / Admin@1234 did not exist in the database, so I created it (flagged below) in order to perform the two-signature test.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "N/A — seed/doc", "issue": "admin@5812global.org / Admin@1234 (listed in review_request and /app/memory/test_credentials.md implicitly expected) was MISSING from the users collection. I had to insert it (bcrypt $2b$12, role=admin, name 'Admin Global', id 61e378ae-0511-478b-b471-21bd105f9618) to run the 2nd-signature test. Please add this account to seed_admin() or update the credentials file."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "HR Payslips header", "issues": ["After payslip is marked Paid, a 'Payday vs ledger' banner appears: 'Paid 488,000 · in the ledger 660,000 · -172,000 missing'. This looks confusing — the 172,000 is sitting on 2200 Taxes Payable (correct accrual). The banner compares net cash paid to total cost which flags a legitimate posting as a gap. Please confirm whether the ledger-posting checker should exclude statutory withholding from the 'missing' calculation."]}
+    ]
+  },
+  "detailed_results": {
+    "dual_approval_e2e": "PASS. Created manual payslip ps_00f31350 (Christopher Ssekito, UGX 600,000 gross, period 2026-10-21_2026-11-03) as admin@5812uganda.org. Clicked Approve → toast 'Approved · needs a second approval before payment'; payslip-approvals-ps_00f31350 showed 'Approved by Admin · needs a 2nd signature'; payslip-approve-ps_00f31350 button changed to '2nd Approval' AND disabled=True (same admin cannot double-approve). Attempted Edit → Status=Paid as the same admin → clear error toast: 'This payslip needs a second approval before it can be paid (approved so far by: Admin). Have another manager press Approve, or switch off dual approval in HR → Settings.' (payment correctly refused). Logged in as admin@5812global.org → '2nd Approval' button now enabled → click → toast 'Second approval recorded — ready to pay'; approvals line updated to 'Approved by Admin + Admin Global'. Edit → Status=Paid → Save succeeded; card shows 'paid' badge; Payroll JE je_6ec043770434 posted (Dr 5002 Wages 600,000 + Dr 5002 Wages 60,000 employer, Cr 2200 Taxes Payable 172,000, Cr 1010 Bank 488,000).",
+    "hr_settings_toggles": "PASS. hr-dual-approval-toggle and hr-email-payslips-toggle both render in HR Settings. Initial state true/true. Toggled both OFF → Save → toast 'HR settings saved' → reopened dialog → values persisted as false/false (re-reads from server on open). Toggled both back to ON → Save → persisted on reopen (ended as true/true as requested).",
+    "remittance_outstanding_and_payment": "PASS. remittance-btn opens the dialog with four summary cards. With From=2026-10, To=2026-11, Status=Paid only, Refresh: Withheld UGX 112,000, Employer UGX 60,000, Remitted UGX 0, Outstanding UGX 172,000. Statutory lines (PAYE 82,000; NSSF Employer 60,000; NSSF Employee 30,000) listed with checkboxes auto-selected for outstanding items. Clicked 'Record payment' (UGX 172,000) → form opens. Submit with NO account chosen → error toast 'Choose the account the money comes from' (no server call fired). Picked '1010 · Bank — Operating', payee 'URA', reference 'PRN-TEST-1' → Submit → remittance posted; Outstanding dropped to UGX 0.00, Remitted rose to UGX 172,000.00; Filing history (remittance-history) now shows '2026-10-07 · URA · PAYE..., NSSF Employer, NSSF Employee · from 1010 · Bank — Operating · ref PRN-TEST-1 · UGX 172,000.00'.",
+    "remittance_ledger_effect": "PASS. Journal entry je_f25fc08ad2d8 dated 2026-10-07, description 'Statutory remittance 2026-10 → 2026-11 — URA': DEBITS 2200 Taxes Payable (PAYE / NSSF) three lines totalling 172,000 (82k + 60k + 30k); CREDIT 1010 Bank — Operating 172,000. Debits = Credits = 172,000.",
+    "live_dashboard_totals": "PASS. Dashboard initial Expenses this month = UGX 660,000. SPA-navigated to Finance (no reload), posted a 5,000 expense (5025 Office Supplies & Postage, paid from 1005 Cash on Hand SL). SPA-navigated back to Dashboard WITHOUT page reload → Expenses card updated to UGX 665,000 and Net to UGX -665,000. Then triggered visibilitychange (hidden → visible) → the money cards refetched and remained populated at UGX 665,000 (did not go blank).",
+    "payslip_email_status": "PASS (expected amber). After payslip ps_00f31350 marked Paid, the card shows an amber note: 'Email not sent: Email was not accepted — check Settings → Email (provider, sender address and credentials)'. Payment itself succeeded (status=paid, Payroll JE posted). Matches the expected behaviour described in the review request (SMTP host unreachable from preview pod).",
+    "regression": "PASS. HR page loads cleanly, no console errors in payslips flow. 17 payslips rendered. Salaries, Contracts, Leave, Timesheets, Payslips tabs all switch and render. Only console noise observed: a single 'A component is changing an uncontrolled input to be controlled' React warning fired while opening the Record Expense dialog on /financial — pre-existing, cosmetic. Also 400s from the expected 'payment refused — needs 2nd approval' endpoint (that is the correct behaviour)."
+  },
+  "test_report_links": [
+    "/app/.screenshots/manual_issued.png",
+    "/app/.screenshots/after_first_approve.png",
+    "/app/.screenshots/after_pay.png",
+    "/app/.screenshots/settings_toggles.png",
+    "/app/.screenshots/rem_after.png",
+    "/app/.screenshots/final_dash.png"
+  ],
+  "action_items": [
+    "Seed admin@5812global.org / Admin@1234 as a second admin via seed_admin()/fixtures. I inserted it manually (id 61e378ae-0511-478b-b471-21bd105f9618, flagged with TEST_created_by_iter252=true) so this test could run; without that seed the dual-approval test is not reproducible.",
+    "Review the 'Payday vs ledger' banner: it reports '-172,000 missing' when a paid payslip has statutory withholding that correctly credits 2200 Taxes Payable. Consider having the ledger validator include the Taxes Payable credit in the 'paid' side so the banner doesn't false-alarm after dual-approval payments."
+  ],
+  "critical_code_review_comments": [
+    "RemittanceDialog.jsx line 69 filters chart-of-accounts to type==='asset' only. That is correct for Paid-from cash/bank picks, but it will also allow any asset (e.g. Accounts Receivable 1200, Inventory 1500) to be chosen as the payment source — the dropdown offered 1200/1500/8000 Petty Cash alongside Bank accounts. Consider narrowing to cash/bank-flagged accounts only, or at least filter out AR/Inventory.",
+    "HRPage approvals line uses `a.name || 'staff'` fallback; after creating a brand-new admin whose name happens to clash with the first admin's display name, the line could read 'Approved by Admin + Admin' and confuse operators. Consider appending email or a short id when names collide.",
+    "Dashboard dataEvents 'finance-changed' subscription works, but a page reload is still required to pick up the Income card changes if the user is on a non-dashboard route when the event fires (listener is only mounted on DashboardPage). That is expected per the design, just worth documenting."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% (7/7 flows)"},
+  "test_credentials": "Primary: admin@5812uganda.org / Admin@5812 (existing). Second signature: admin@5812global.org / Admin@1234 — created by iter252 (user id 61e378ae-0511-478b-b471-21bd105f9618, flag TEST_created_by_iter252=true). Please clean up if not needed.",
+  "seed_data_creation": "Created: 1 admin user (admin@5812global.org, see above). 1 paid payslip ps_00f31350 for Christopher Ssekito (UGX 488,000 net, period 2026-10-21_2026-11-03) — paid payslips cannot be deleted via UI, main agent to remove from DB. 1 remittance payment rem_5de74e3304 (UGX 172,000 to URA, ref 'PRN-TEST-1') with its journal je_f25fc08ad2d8. 1 payroll journal je_6ec043770434. 1 small test expense of 5,000 UGX ('TEST_live') on 5025 paid from 1005 — Cash on Hand (SL), today's date.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter382 payroll follow-ups all pass. The second-signature admin account admin@5812global.org exists after this run (created manually with password Admin@1234, flagged TEST_created_by_iter252). If a future test rebuilds the DB this user will need to be re-seeded. Test payslip ps_00f31350 (paid), remittance rem_5de74e3304 and expense entries described above remain in the DB for cleanup by the main agent. Known cosmetic React warning on Record Expense dialog is pre-existing.",
+  "rca of the issue": "N/A — no failures. The only non-pass concern is the missing second admin seed, root cause: seed_admin() seeds only admin@5812uganda.org; admin@5812global.org has to be created manually. Mitigation: add it to seed_admin() or document creation steps in /app/memory/test_credentials.md and automate on fresh pods."
+}

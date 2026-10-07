@@ -5,6 +5,11 @@ from datetime import datetime, timezone, date as dt_date, timedelta as td
 from typing import Optional, List, Tuple
 import uuid
 
+from routers.payroll_engine import (
+    apply_statutory_lines, compliance_lines_for, employer_totals,
+    DEFAULT_LIABILITY_CODE, EMPLOYER_TYPE,
+)
+
 router = APIRouter(prefix="/api/hr", tags=["hr"])
 
 
@@ -518,7 +523,10 @@ async def update_hr_settings(location_id: str, data: dict, current_user: dict = 
     allowed = {"hr_enabled", "pay_frequency", "currency", "country", "tax_rules", "benefits",
                "deduction_types", "pay_day", "payday_weekday", "next_pay_date",
                "period_anchor_date", "compliance_lines",
-               "aggregated_payroll_expense", "payslip_message"}
+               "aggregated_payroll_expense", "payslip_message",
+               # iter382 — payroll controls: second signature before payment,
+               # and emailing the payslip PDF to staff on payday.
+               "dual_approval", "email_payslips"}
     update = {k: v for k, v in data.items() if k in allowed}
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.hr_settings.update_one({"location_id": location_id}, {"$set": update}, upsert=True)
@@ -531,48 +539,101 @@ async def update_hr_settings(location_id: str, data: dict, current_user: dict = 
 COMPLIANCE_OPTIONS = {
     "Uganda": [
         {"name": "PAYE (Pay-As-You-Earn)", "type": "deduction", "is_percentage": True, "amount": 0,
-         "notes": "Progressive: 0% up to UGX 235k, 10-40% above. Set band per employee or use simplified rate."},
+         "liability_account_code": "2200",
+         # URA monthly resident bands — marginal, so each slice is taxed at its
+         # own rate. Editable; a flat per-employee rate overrides them.
+         "bands": [{"up_to": 235000, "rate": 0}, {"up_to": 335000, "rate": 10},
+                   {"up_to": 410000, "rate": 20}, {"up_to": 10000000, "rate": 30},
+                   {"up_to": None, "rate": 40}],
+         "notes": "Progressive URA bands (monthly). Withheld from staff and remitted to URA."},
         {"name": "NSSF Employee", "type": "deduction", "is_percentage": True, "amount": 5,
+         "liability_account_code": "2200",
          "notes": "5% employee contribution to National Social Security Fund."},
-        {"name": "NSSF Employer", "type": "deduction", "is_percentage": True, "amount": 10,
-         "notes": "10% employer contribution (paid by org, not deducted from staff)."},
+        {"name": "NSSF Employer", "type": "employer_contribution", "mode": "employer_cost",
+         "is_percentage": True, "amount": 10,
+         "account_code": "5002", "liability_account_code": "2200",
+         "notes": "10% paid by the organisation on top of salary — employer cost, not deducted from staff."},
         {"name": "LST (Local Service Tax)", "type": "deduction", "is_percentage": False, "amount": 5000,
+         "liability_account_code": "2200",
          "notes": "Local Service Tax — annual, varies by income band UGX 5k-100k."},
+        {"name": "Medical / health cover (employer)", "type": "employer_contribution",
+         "mode": "employer_cost", "is_percentage": False, "amount": 0,
+         "account_code": "5003", "liability_account_code": "2200",
+         "notes": "Employer-paid health cover — booked to Health Insurance, shown as employer cost."},
     ],
     "Kenya": [
         {"name": "PAYE", "type": "deduction", "is_percentage": True, "amount": 0,
-         "notes": "Graduated 10-35% per KRA bands."},
+         "liability_account_code": "2200",
+         "bands": [{"up_to": 24000, "rate": 10}, {"up_to": 32333, "rate": 25},
+                   {"up_to": 500000, "rate": 30}, {"up_to": 800000, "rate": 32.5},
+                   {"up_to": None, "rate": 35}],
+         "notes": "Graduated KRA bands (monthly)."},
         {"name": "NHIF", "type": "deduction", "is_percentage": False, "amount": 1700,
+         "liability_account_code": "2200",
          "notes": "Graduated; ~KES 1,700 for KES 100k earner."},
-        {"name": "NSSF", "type": "deduction", "is_percentage": True, "amount": 6,
+        {"name": "NSSF Employee", "type": "deduction", "is_percentage": True, "amount": 6,
+         "liability_account_code": "2200",
          "notes": "6% of pensionable pay (capped)."},
+        {"name": "NSSF Employer", "type": "employer_contribution", "mode": "employer_cost",
+         "is_percentage": True, "amount": 6, "account_code": "5002", "liability_account_code": "2200",
+         "notes": "Matching 6% employer contribution."},
         {"name": "Affordable Housing Levy", "type": "deduction", "is_percentage": True, "amount": 1.5,
+         "liability_account_code": "2200",
          "notes": "1.5% of gross pay (since 2024)."},
     ],
     "USA": [
         {"name": "Federal Income Tax Withholding", "type": "deduction", "is_percentage": True, "amount": 0,
+         "liability_account_code": "2200",
          "notes": "Per W-4 + tax tables. Set per employee."},
-        {"name": "Social Security (FICA)", "type": "deduction", "is_percentage": True, "amount": 6.2,
+        {"name": "Social Security (FICA) — employee", "type": "deduction", "is_percentage": True, "amount": 6.2,
+         "liability_account_code": "2200",
          "notes": "6.2% up to wage base limit."},
-        {"name": "Medicare (FICA)", "type": "deduction", "is_percentage": True, "amount": 1.45,
+        {"name": "Social Security (FICA) — employer", "type": "employer_contribution",
+         "mode": "employer_cost", "is_percentage": True, "amount": 6.2,
+         "account_code": "5002", "liability_account_code": "2200",
+         "notes": "Matching employer 6.2%."},
+        {"name": "Medicare (FICA) — employee", "type": "deduction", "is_percentage": True, "amount": 1.45,
+         "liability_account_code": "2200",
          "notes": "1.45% with no cap; +0.9% over $200k."},
+        {"name": "Medicare (FICA) — employer", "type": "employer_contribution",
+         "mode": "employer_cost", "is_percentage": True, "amount": 1.45,
+         "account_code": "5002", "liability_account_code": "2200",
+         "notes": "Matching employer 1.45%."},
+        {"name": "Health insurance (employer share)", "type": "employer_contribution",
+         "mode": "employer_cost", "is_percentage": False, "amount": 0,
+         "account_code": "5003", "liability_account_code": "2200",
+         "notes": "Employer-paid premium — employer cost, booked to Health Insurance."},
         {"name": "State Income Tax", "type": "deduction", "is_percentage": True, "amount": 0,
+         "liability_account_code": "2200",
          "notes": "Varies by state (0% in TX, FL, etc.)."},
     ],
     "Haiti": [
         {"name": "Income Tax (Impot sur le Revenu)", "type": "deduction", "is_percentage": True, "amount": 0,
+         "liability_account_code": "2200",
          "notes": "Progressive bands."},
-        {"name": "ONA (Office National d'Assurance Vieillesse)", "type": "deduction", "is_percentage": True, "amount": 3,
+        {"name": "ONA (Office National d'Assurance Vieillesse) — employee", "type": "deduction",
+         "is_percentage": True, "amount": 3, "liability_account_code": "2200",
          "notes": "3% employee contribution to pension."},
+        {"name": "ONA — employer", "type": "employer_contribution", "mode": "employer_cost",
+         "is_percentage": True, "amount": 3, "account_code": "5002", "liability_account_code": "2200",
+         "notes": "Matching 3% employer pension contribution."},
         {"name": "OFATMA (Health insurance)", "type": "deduction", "is_percentage": True, "amount": 1,
+         "liability_account_code": "2200",
          "notes": "1% workers' health & maternity insurance."},
     ],
     "Thailand": [
         {"name": "Personal Income Tax (PIT)", "type": "deduction", "is_percentage": True, "amount": 0,
+         "liability_account_code": "2200",
          "notes": "Progressive 0-35%."},
-        {"name": "Social Security Fund", "type": "deduction", "is_percentage": True, "amount": 5,
+        {"name": "Social Security Fund — employee", "type": "deduction", "is_percentage": True, "amount": 5,
+         "liability_account_code": "2200",
          "notes": "5% of wage, capped at THB 750/month."},
+        {"name": "Social Security Fund — employer", "type": "employer_contribution",
+         "mode": "employer_cost", "is_percentage": True, "amount": 5,
+         "account_code": "5002", "liability_account_code": "2200",
+         "notes": "Matching 5% employer contribution."},
         {"name": "Provident Fund", "type": "deduction", "is_percentage": True, "amount": 0,
+         "liability_account_code": "2200",
          "notes": "Optional 2-15% employee contribution."},
     ],
 }
@@ -649,6 +710,9 @@ async def create_salary(data: dict, current_user: dict = Depends(require_directo
         "pay_frequency": data.get("pay_frequency", "monthly"),
         "effective_date": data.get("effective_date", datetime.now(timezone.utc).isoformat()[:10]),
         "line_items": data.get("line_items", []),  # [{name, type (allowance/deduction), amount, is_percentage}]
+        # iter381 — {line_key: {enabled, amount, is_percentage}} overrides for
+        # the campus statutory lines (PAYE rate per person, NSSF opt-out, …).
+        "statutory_overrides": data.get("statutory_overrides") or {},
         "status": "active",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
@@ -671,6 +735,8 @@ async def update_salary(salary_id: str, data: dict, current_user: dict = Depends
     if not existing:
         raise HTTPException(status_code=404, detail="Salary not found")
     allowed = {"base_salary", "currency", "pay_frequency", "effective_date", "line_items", "status",
+               # iter381: per-employee statutory overrides (rate change / opt-out).
+               "statutory_overrides",
                # iter-departments: allow retagging & re-splitting on edit.
                "department_ids", "department_splits",
                # iter 336: allow wage_type + type-specific rate edits.
@@ -918,6 +984,7 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
 
     rows = []
     existing_count = 0
+    compliance_cache: dict = {}
     for sal in salaries:
         existing = await db.hr_payslips.find_one(
             {"salary_id": sal["id"], "period": period}, {"_id": 0, "id": 1}
@@ -971,6 +1038,12 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
                 deductions += amt
             else:
                 allowances += amt
+        sal_loc = sal.get("location_id") or location_id or ""
+        if sal_loc not in compliance_cache:
+            compliance_cache[sal_loc] = await compliance_lines_for(sal_loc)
+        stat = apply_statutory_lines(compliance_cache[sal_loc], sal, gross_for_pct)
+        deductions += stat["employee_deductions"]
+        allowances += stat["pay_additions"]
         net = base_gross + allowances - deductions
 
         rows.append({
@@ -986,6 +1059,9 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
             "allowances": round(allowances, 2),
             "deductions": round(deductions, 2),
             "net": round(net, 2),
+            "statutory_items": stat["items"],
+            "employer_contributions": stat["employer_cost"],
+            "total_cost": round(base_gross + allowances + stat["employer_cost"], 2),
             "unpaid_leave_days": unpaid_days,
             "working_days": working_days,
             "days_worked": override_days if override_days is not None else max(0, working_days - unpaid_days),
@@ -1103,6 +1179,17 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
         total_deductions += amt
 
     net = gross + total_allowances - total_deductions
+    # iter381 — a one-off slip is still payroll: campus statutory lines apply
+    # unless HR explicitly opts out (e.g. a reimbursement that isn't earnings).
+    stat = {"items": [], "employee_deductions": 0.0, "pay_additions": 0.0,
+            "employer_cost": 0.0, "withheld_liability": 0.0}
+    if not data.get("skip_statutory"):
+        stat = apply_statutory_lines(await compliance_lines_for(loc_id),
+                                     {"statutory_overrides": data.get("statutory_overrides") or {}}, gross)
+        line_items.extend(stat["items"])
+        total_deductions += stat["employee_deductions"]
+        total_allowances += stat["pay_additions"]
+        net = gross + total_allowances - total_deductions
     payslip = {
         "id": f"ps_{uuid.uuid4().hex[:8]}",
         "salary_id": None,             # null = manual one-off, not tied to a salary record
@@ -1126,6 +1213,9 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
         "allowances": total_allowances,
         "deductions": total_deductions,
         "net_salary": net,
+        "employer_contributions": stat["employer_cost"],
+        "statutory_withheld": stat["withheld_liability"],
+        "total_cost": round(gross + total_allowances + stat["employer_cost"], 2),
         "currency": (data.get("currency") or "UGX")[:8],
         "line_items": line_items,
         "notes": (data.get("notes") or "")[:500],
@@ -1330,6 +1420,7 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
     ts_by_staff = {}
     async for _ts in db.hr_timesheets.find({"period": period, "status": "approved"}, {"_id": 0}):
         ts_by_staff[_ts["staff_id"]] = _ts
+    compliance_cache: dict = {}
     generated = []
     for sal in salaries:
         existing = await db.hr_payslips.find_one({"salary_id": sal["id"], "period": period})
@@ -1419,10 +1510,19 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
                 amt = gross * amt / 100
             if li.get("type") == "deduction":
                 deductions += amt
-                items.append({**li, "calculated_amount": amt})
+                items.append({**li, "calculated_amount": amt, "source": "salary", "scope": "employee"})
             else:
                 allowances += amt
-                items.append({**li, "calculated_amount": amt})
+                items.append({**li, "calculated_amount": amt, "source": "salary", "scope": "employee"})
+        # iter381 — campus statutory lines (PAYE, NSSF, employer contributions)
+        # apply to everyone, with the employee's own override honoured.
+        sal_loc = sal.get("location_id") or location_id or ""
+        if sal_loc not in compliance_cache:
+            compliance_cache[sal_loc] = await compliance_lines_for(sal_loc)
+        stat = apply_statutory_lines(compliance_cache[sal_loc], sal, gross)
+        deductions += stat["employee_deductions"]
+        allowances += stat["pay_additions"]
+        items.extend(stat["items"])
         # Net is computed against original base for transparency: base + allowances - deductions
         # (deductions already includes the unpaid-leave proration + days-worked adjustment)
         net = base_gross + allowances - deductions
@@ -1446,6 +1546,12 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
             "pto_days": pto_days if pto_days is not None else 0,
             "unpaid_leave_proration": proration_amount,
             "currency": sal.get("currency", "UGX"),
+            # iter381 — employer side of payroll: what the org pays on top of
+            # the salary (NSSF employer, insurance) and the real cost of
+            # employing this person.
+            "employer_contributions": stat["employer_cost"],
+            "statutory_withheld": stat["withheld_liability"],
+            "total_cost": round(base_gross + allowances + stat["employer_cost"], 2),
             # iter 336 — persist wage_type + human breakdown so the PDF /
             # portal payslip view can display the same explainer as the
             # generation-time preview table.
@@ -1535,9 +1641,16 @@ async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_di
     paid_count = 0
     aggregated_total = 0
     finance_warnings = []
+    blocked = []
     for pid in ids:
         payslip = await db.hr_payslips.find_one({"id": pid, "status": {"$ne": "paid"}}, {"_id": 0})
         if not payslip:
+            continue
+        # iter382 — a batch must not become a way around the second signature.
+        try:
+            await _require_dual_approval(payslip)
+        except HTTPException as ex:
+            blocked.append({"payslip_id": pid, "staff_name": payslip.get("staff_name"), "reason": ex.detail})
             continue
         reason = await _aggregate_payroll_expense(payslip, current_user)
         if reason:
@@ -1584,12 +1697,17 @@ async def pay_batch_payslips(data: dict, current_user: dict = Depends(require_di
         }})
         paid_count += 1
         aggregated_total += float(payslip.get("net_salary") or 0)
+        await _email_payslip({**payslip, "status": "paid"})
     await _audit(current_user["id"], "pay-batch", "hr_payslips", f"{paid_count} payslips", {"total": aggregated_total})
+    msg = (f"{paid_count} paid · {len(finance_warnings)} could not post to finance"
+           if finance_warnings else f"{paid_count} paid and posted to finance")
+    if blocked:
+        msg += f" · {len(blocked)} skipped — second approval missing"
     return {"paid_count": paid_count, "total_paid": aggregated_total,
             "posted_to_finance": paid_count - len(finance_warnings),
             "finance_warnings": finance_warnings,
-            "message": (f"{paid_count} paid · {len(finance_warnings)} could not post to finance"
-                        if finance_warnings else f"{paid_count} paid and posted to finance")}
+            "blocked": blocked,
+            "message": msg}
 
 
 @router.get("/payslips/{payslip_id}/allocations")
@@ -1660,12 +1778,19 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
             t = (li.get("type") or "").lower()
             if t == "deduction":
                 total_ded += amt
+            elif t == EMPLOYER_TYPE:
+                # Employer money only touches take-home when it is paid out
+                # with the salary; otherwise it is employer cost, not pay.
+                if (li.get("mode") or "employer_cost") == "add_to_pay":
+                    total_allw += amt
             elif t in ("allowance", "addition", "bonus", "reimbursement"):
                 total_allw += amt
         update["allowances"] = round(total_allw, 2)
         update["deductions"] = round(total_ded, 2)
         gross = float(update.get("gross_salary", existing.get("gross_salary", 0)) or 0)
         update["net_salary"] = round(gross + total_allw - total_ded, 2)
+        update.update(employer_totals(update["line_items"]))
+        update["total_cost"] = round(gross + total_allw + update["employer_contributions"], 2)
     elif any(k in update for k in ("gross_salary", "allowances", "deductions")):
         gross = float(update.get("gross_salary", existing.get("gross_salary", 0)) or 0)
         allw = float(update.get("allowances", existing.get("allowances", 0)) or 0)
@@ -1677,7 +1802,24 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
     if data.get("status") == "approved" and existing.get("status") != "approved":
         update["approved_by"] = current_user["id"]
         update["approved_at"] = datetime.now(timezone.utc).isoformat()
+    # iter382 — second signature. Each approval is one person; the same person
+    # clicking twice is not two approvals.
+    if data.get("status") == "approved":
+        approvals = list(existing.get("approvals") or [])
+        if not any(a.get("user_id") == current_user["id"] for a in approvals):
+            approvals.append({
+                "user_id": current_user["id"],
+                "name": current_user.get("name", ""),
+                "role": current_user.get("role", ""),
+                "at": datetime.now(timezone.utc).isoformat(),
+            })
+        update["approvals"] = approvals
+        if len(approvals) >= 2:
+            update["second_approved_by"] = approvals[1]["user_id"]
+            update["second_approved_by_name"] = approvals[1].get("name", "")
+            update["second_approved_at"] = approvals[1]["at"]
     if data.get("status") == "paid" and existing.get("status") != "paid":
+        await _require_dual_approval(existing)
         update["paid_by"] = current_user["id"]
         update["paid_by_name"] = current_user.get("name", "")
         update["paid_at"] = datetime.now(timezone.utc).isoformat()
@@ -1701,7 +1843,78 @@ async def update_payslip(payslip_id: str, data: dict, current_user: dict = Depen
         {"$set": update, "$push": {"edit_history": audit_entry}},
     )
     await _audit(current_user["id"], "update", "payslip", payslip_id, {"changes": list(diff.keys())})
-    return await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+    fresh = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+    if data.get("status") == "paid" and existing.get("status") != "paid":
+        await _email_payslip(fresh)
+        fresh = await db.hr_payslips.find_one({"id": payslip_id}, {"_id": 0})
+    return fresh
+
+
+async def _require_dual_approval(payslip: dict) -> None:
+    """Two different people must sign off before money moves (iter382).
+
+    Switchable per campus (`hr_settings.dual_approval`), on by default — a
+    single person being able to raise and pay a payslip is the classic payroll
+    fraud hole.
+    """
+    loc = payslip.get("payroll_location_id") or payslip.get("location_id") or ""
+    settings = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0, "dual_approval": 1}) or {}
+    if settings.get("dual_approval") is False:
+        return
+    approvals = payslip.get("approvals") or []
+    if payslip.get("approved_by") and not approvals:
+        # Payslips approved before iter382 carry one signature in the old field.
+        approvals = [{"user_id": payslip["approved_by"]}]
+    if len({a.get("user_id") for a in approvals if a.get("user_id")}) >= 2:
+        return
+    who = ", ".join(a.get("name") or "someone" for a in approvals) or "nobody yet"
+    raise HTTPException(
+        status_code=400,
+        detail=(f"This payslip needs a second approval before it can be paid "
+                f"(approved so far by: {who}). Have another manager press Approve, "
+                "or switch off dual approval in HR → Settings."),
+    )
+
+
+async def _email_payslip(payslip: dict) -> None:
+    """Email the staff member their payslip PDF once it is paid (iter382).
+
+    Controlled per campus by `hr_settings.email_payslips` (on by default).
+    Never raises — a mail failure must not undo a payment.
+    """
+    pid = payslip.get("id")
+    loc = payslip.get("payroll_location_id") or payslip.get("location_id") or ""
+    settings = await db.hr_settings.find_one({"location_id": loc}, {"_id": 0, "email_payslips": 1}) or {}
+    if settings.get("email_payslips") is False:
+        return
+    staff = await db.users.find_one({"id": payslip.get("staff_id")}, {"_id": 0, "email": 1, "name": 1}) or {}
+    email = (staff.get("email") or "").strip()
+    if not email:
+        await db.hr_payslips.update_one({"id": pid}, {"$set": {"payslip_email_error": "Staff member has no email address"}})
+        return
+    try:
+        from email_helpers import send_notification_email
+        pdf = await _generate_payslip_pdf_bytes(pid)
+        period = payslip.get("period") or ""
+        body = (
+            f"<p>Hi {staff.get('name') or ''},</p>"
+            f"<p>Your payslip for <strong>{period}</strong> has been paid. "
+            f"Net pay: <strong>{payslip.get('currency') or 'UGX'} "
+            f"{float(payslip.get('net_salary') or 0):,.2f}</strong>.</p>"
+            "<p>The full payslip is attached as a PDF.</p>"
+        )
+        ok = await send_notification_email(
+            email, f"Payslip — {period}", body,
+            attachments=[{"filename": f"payslip-{period}.pdf", "content": pdf,
+                          "content_type": "application/pdf"}],
+        )
+        await db.hr_payslips.update_one({"id": pid}, {"$set": {
+            "payslip_emailed_at": datetime.now(timezone.utc).isoformat() if ok else None,
+            "payslip_email_error": "" if ok else "Email was not accepted — check Settings → Email (provider, sender address and credentials)",
+        }})
+    except Exception as ex:
+        logger.error(f"payslip email failed for {pid}: {ex}")
+        await db.hr_payslips.update_one({"id": pid}, {"$set": {"payslip_email_error": str(ex)[:200]}})
 
 
 async def _aggregate_payroll_expense(payslip: dict, current_user: dict) -> Optional[str]:
@@ -1788,9 +2001,15 @@ async def payroll_posting_report(
         if p.get("paid_at") and (not b["last_paid_at"] or p["paid_at"] > b["last_paid_at"]):
             b["last_paid_at"] = p["paid_at"]
         je = await db.finance_journal_entries.find_one(
-            {"idempotency_key": f"payslip:{p['id']}"}, {"_id": 0, "id": 1, "total": 1})
+            {"idempotency_key": f"payslip:{p['id']}"}, {"_id": 0, "id": 1, "total": 1, "lines": 1})
         if je:
-            b["posted_total"] += float(je.get("total") or 0)
+            # iter382 — the payroll JE now also carries withheld tax and
+            # employer contributions, so its TOTAL is bigger than take-home.
+            # Compare like with like: the cash actually paid out is the "Net
+            # pay" credit line. Older two-line entries fall back to the total.
+            net_line = sum(float(l.get("credit") or 0) for l in (je.get("lines") or [])
+                           if (l.get("memo") or "") == "Net pay")
+            b["posted_total"] += net_line or float(je.get("total") or 0)
         else:
             b["unposted"].append({
                 "payslip_id": p["id"], "staff_name": p.get("staff_name"), "net_salary": net,
@@ -4066,11 +4285,20 @@ async def _generate_payslip_pdf_bytes(payslip_id: str, fx: dict = None) -> bytes
         cur = fx["code"]
     def fmt(x): return f"{cur} {(float(x or 0) * fx_rate):,.2f}"
     line_rows = ""
+    employer_rows = ""
     for li in (p.get("line_items") or []):
-        sign = "&minus;" if li.get("type") == "deduction" else "+"
-        color = "#b45309" if li.get("type") == "deduction" else "#047857"
         amt = li.get("calculated_amount", li.get("amount", 0)) or 0
         details = f" <span class='meta'>({li['details']})</span>" if li.get("details") else ""
+        if li.get("type") == "employer_contribution":
+            mode_note = "paid with salary" if (li.get("mode") or "employer_cost") == "add_to_pay" else "employer cost"
+            employer_rows += (f"<tr><td>{li.get('name','')}{details} <span class='meta'>· {mode_note}</span></td>"
+                              f"<td style='text-align:right'>{(float(amt) * fx_rate):,.2f}</td></tr>")
+            if (li.get("mode") or "employer_cost") == "add_to_pay":
+                line_rows += (f"<tr><td>{li.get('name','')}{details}</td>"
+                              f"<td style='text-align:right;color:#047857'>+{(float(amt) * fx_rate):,.2f}</td></tr>")
+            continue
+        sign = "&minus;" if li.get("type") == "deduction" else "+"
+        color = "#b45309" if li.get("type") == "deduction" else "#047857"
         line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{(float(amt) * fx_rate):,.2f}</td></tr>"
     if not line_rows:
         line_rows = "<tr><td colspan='2' style='text-align:center;color:#94a3b8'>No adjustments</td></tr>"
@@ -4108,6 +4336,23 @@ async def _generate_payslip_pdf_bytes(payslip_id: str, fx: dict = None) -> bytes
     paid_note = ""
     if p.get("status") == "paid" and p.get("paid_at"):
         paid_note = f"<p class='meta' style='text-align:center;margin-top:14mm'>Paid on {p['paid_at'][:10]}</p>"
+    # iter381 — the employer side: what the organisation pays on top of the
+    # salary, and what this person really costs. Hidden when there is none.
+    employer_block = ""
+    employer_cost = float(p.get("employer_contributions") or 0)
+    if employer_rows:
+        total_cost = float(p.get("total_cost") or 0) or (
+            float(p.get("gross_salary") or 0) + float(p.get("allowances") or 0) + employer_cost)
+        employer_block = f"""
+  <h2>Employer contributions</h2>
+  <table>
+    <thead><tr><th>Description</th><th style='text-align:right'>Amount</th></tr></thead>
+    <tbody>{employer_rows}</tbody>
+  </table>
+  <div class='summary'>
+    <div class='row'><span>Employer contributions (not paid to staff)</span><span>{fmt(employer_cost)}</span></div>
+    <div class='row'><span>Total cost of employment</span><span><strong>{fmt(total_cost)}</strong></span></div>
+  </div>"""
     html = f"""<html><head><meta charset='utf-8' /><style>
 @page {{ size: A4; margin: 16mm; }}
 body {{ font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; color:#0f172a; }}
@@ -4166,6 +4411,7 @@ th {{ font-size:10.5px; color:#64748b; background:#f8fafc; }}
     <div class='row' style='color:#b45309'><span>&minus; Deductions</span><span>{fmt(p.get('deductions'))}</span></div>
     <div class='total'><span>Net Pay</span><span>{fmt(p.get('net_salary'))}</span></div>
   </div>
+  {employer_block}
   {paid_note}
   <p class='meta' style='margin-top:18mm; text-align:center'>This payslip is automatically generated. For corrections contact HR.</p>
 </body></html>"""
@@ -4266,3 +4512,324 @@ async def onboarding_checklist(location_id: Optional[str] = None, current_user: 
         "needs_attention": sum(1 for r in rows if r["completion_pct"] < 100),
         "rows": rows,
     }
+
+
+# ========== STATUTORY REMITTANCE (iter381) ==========
+#
+# What has to be paid over to URA / NSSF / the insurer for a period, broken
+# down by the person it was withheld from. Filing the return is the point —
+# a total with no names behind it can't be defended.
+
+async def _remittance_build(period_from: str, period_to: str, location_id: Optional[str],
+                            status: str = "paid") -> dict:
+    q: dict = {}
+    if status and status != "all":
+        q["status"] = status
+    if period_from or period_to:
+        q["period"] = {}
+        if period_from:
+            q["period"]["$gte"] = period_from
+        if period_to:
+            # '2026-03' must still catch '2026-03-09_…' windows inside it.
+            q["period"]["$lte"] = period_to + "\uffff"
+    if location_id:
+        q["$or"] = [{"payroll_location_id": location_id}, {"location_id": location_id}]
+
+    names = {l["id"]: l.get("name", "") async for l in db.locations.find({}, {"_id": 0, "id": 1, "name": 1})}
+    lines: dict = {}
+    rows = []
+    currency = ""
+    async for p in db.hr_payslips.find(q, {"_id": 0}):
+        currency = currency or (p.get("currency") or "UGX")
+        loc = p.get("payroll_location_id") or p.get("location_id") or ""
+        for li in (p.get("line_items") or []):
+            if li.get("source") != "statutory":
+                continue
+            ltype = (li.get("type") or "").lower()
+            if ltype not in ("deduction", EMPLOYER_TYPE):
+                continue
+            if ltype == EMPLOYER_TYPE and (li.get("mode") or "employer_cost") == "add_to_pay":
+                continue        # paid to the employee, nothing to remit
+            amt = round(float(li.get("calculated_amount") or li.get("amount") or 0), 2)
+            if amt <= 0:
+                continue
+            name = li.get("name") or li.get("key") or "Statutory"
+            bucket = lines.setdefault(name, {
+                "name": name,
+                "liability_account_code": li.get("liability_account_code") or DEFAULT_LIABILITY_CODE,
+                "employee_withheld": 0.0, "employer_contribution": 0.0, "total": 0.0, "staff_count": 0,
+                "staff": {},
+            })
+            side = "employee_withheld" if ltype == "deduction" else "employer_contribution"
+            bucket[side] += amt
+            bucket["total"] += amt
+            per = bucket["staff"].setdefault(p.get("staff_id") or p.get("id"), {
+                "staff_name": p.get("staff_name") or "—", "employee_withheld": 0.0,
+                "employer_contribution": 0.0, "total": 0.0,
+            })
+            per[side] += amt
+            per["total"] += amt
+            rows.append({
+                "period": p.get("period") or "", "staff_name": p.get("staff_name") or "—",
+                "campus": names.get(loc) or loc or "—", "line": name,
+                "kind": "Employee withheld" if ltype == "deduction" else "Employer contribution",
+                "amount": amt, "liability_account_code": bucket["liability_account_code"],
+                "payslip_id": p.get("id"), "status": p.get("status") or "",
+                "currency": p.get("currency") or "UGX",
+            })
+    out_lines = []
+    for b in sorted(lines.values(), key=lambda x: -x["total"]):
+        staff = sorted(b.pop("staff").values(), key=lambda s: -s["total"])
+        out_lines.append({**{k: (round(v, 2) if isinstance(v, float) else v) for k, v in b.items()},
+                          "staff_count": len(staff), "staff": staff})
+    # iter382 — subtract what has already been paid over, so the report says
+    # what is still OWED rather than what was ever accrued.
+    paid_q: dict = {"voided": {"$ne": True}}
+    if location_id:
+        paid_q["location_id"] = location_id
+    if period_from:
+        paid_q["period_from"] = {"$gte": period_from}
+    if period_to:
+        paid_q["period_to"] = {"$lte": period_to + "\uffff"}
+    remitted: dict = {}
+    async for pay in db.payroll_remittances.find(paid_q, {"_id": 0, "lines": 1}):
+        for pl in (pay.get("lines") or []):
+            remitted[pl.get("name")] = remitted.get(pl.get("name"), 0) + float(pl.get("amount") or 0)
+    for l in out_lines:
+        l["remitted"] = round(remitted.get(l["name"], 0), 2)
+        l["outstanding"] = round(l["total"] - l["remitted"], 2)
+    rows.sort(key=lambda r: (r["period"], r["line"], r["staff_name"]), reverse=True)
+    return {
+        "lines": out_lines,
+        "rows": rows,
+        "total_employee": round(sum(l["employee_withheld"] for l in out_lines), 2),
+        "total_employer": round(sum(l["employer_contribution"] for l in out_lines), 2),
+        "total": round(sum(l["total"] for l in out_lines), 2),
+        "total_remitted": round(sum(l["remitted"] for l in out_lines), 2),
+        "total_outstanding": round(sum(l["outstanding"] for l in out_lines), 2),
+        "currency": currency or "UGX",
+        "status": status,
+        "date_from": period_from or "", "date_to": period_to or "",
+        "location_id": location_id or "",
+    }
+
+
+@router.get("/payroll/remittance")
+async def payroll_remittance(
+    period_from: Optional[str] = Query(None, description="Earliest period label, e.g. 2026-01"),
+    period_to: Optional[str] = Query(None, description="Latest period label, e.g. 2026-06"),
+    location_id: Optional[str] = None,
+    status: str = Query("paid", description="paid | approved | all"),
+    current_user: dict = Depends(require_director),
+):
+    """PAYE / NSSF / insurance owed per period, with who it came from."""
+    return await _remittance_build(period_from, period_to, location_id, status)
+
+
+@router.get("/payroll/remittance.csv")
+async def payroll_remittance_csv(
+    period_from: Optional[str] = Query(None), period_to: Optional[str] = Query(None),
+    location_id: Optional[str] = None, status: str = "paid",
+    current_user: dict = Depends(require_director),
+):
+    import csv
+    import io as _io
+    from starlette.responses import StreamingResponse
+    data = await _remittance_build(period_from, period_to, location_id, status)
+    buf = _io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Period", "Staff", "Campus", "Statutory line", "Kind", "Liability account", "Amount", "Currency", "Payslip"])
+    for r in data["rows"]:
+        w.writerow([r["period"], r["staff_name"], r["campus"], r["line"], r["kind"],
+                    r["liability_account_code"], f"{r['amount']:.2f}", r["currency"], r["payslip_id"]])
+    w.writerow([])
+    w.writerow(["Employee withheld", f"{data['total_employee']:.2f}"])
+    w.writerow(["Employer contributions", f"{data['total_employer']:.2f}"])
+    w.writerow(["Total to remit", f"{data['total']:.2f}"])
+    from routers.reports import branded_filename
+    filename = await branded_filename("statutory-remittance", "csv")
+    return StreamingResponse(_io.BytesIO(buf.getvalue().encode()), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/payroll/remittance.pdf")
+async def payroll_remittance_pdf(
+    period_from: Optional[str] = Query(None), period_to: Optional[str] = Query(None),
+    location_id: Optional[str] = None, status: str = "paid",
+    fx_target: Optional[str] = None, fx_rate: Optional[float] = Query(None),
+    current_user: dict = Depends(require_director),
+):
+    from io import BytesIO
+    from starlette.responses import StreamingResponse
+
+    from routers.finance.fx import converter, resolve_fx
+    from routers.reports import branded_filename, report_header_html
+
+    data = await _remittance_build(period_from, period_to, location_id, status)
+    fx = await resolve_fx(fx_target, fx_rate)
+    convert = converter(fx)
+
+    def money(v):
+        return f"{convert(v):,.2f}"
+
+    loc_name = "All campuses"
+    if location_id:
+        loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1})
+        loc_name = (loc or {}).get("name") or location_id
+
+    summary = "".join(
+        f'<tr><td><strong>{l["name"]}</strong></td><td>{l["liability_account_code"]}</td>'
+        f'<td class="r">{l["staff_count"]}</td><td class="r">{money(l["employee_withheld"])}</td>'
+        f'<td class="r">{money(l["employer_contribution"])}</td>'
+        f'<td class="r"><strong>{money(l["total"])}</strong></td></tr>'
+        + "".join(f'<tr class="sub"><td colspan="3">{s["staff_name"]}</td>'
+                  f'<td class="r">{money(s["employee_withheld"])}</td>'
+                  f'<td class="r">{money(s["employer_contribution"])}</td>'
+                  f'<td class="r">{money(s["total"])}</td></tr>' for s in l["staff"])
+        for l in data["lines"]
+    ) or '<tr><td colspan="6" class="empty">Nothing withheld in this period.</td></tr>'
+
+    header = await report_header_html("Statutory Remittance", loc_name, data, current_user, fx=fx)
+    html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Statutory Remittance</title>
+<style>
+  @page {{ size: A4; margin: 14mm; }}
+  body {{ font-family:'Helvetica','Arial',sans-serif; color:#0f172a; font-size:9pt; }}
+  table {{ width:100%; border-collapse:collapse; }}
+  th {{ text-align:left; font-size:7.5pt; text-transform:uppercase; color:#64748b; border-bottom:1px solid #cbd5e1; padding:4px; }}
+  td {{ padding:4px; border-bottom:1px solid #f1f5f9; }}
+  tr.sub td {{ color:#475569; font-size:8pt; padding-left:14px; }}
+  .r {{ text-align:right; font-variant-numeric:tabular-nums; }}
+  .empty {{ text-align:center; color:#94a3b8; padding:14px; }}
+  .totals {{ margin-top:12px; font-size:10pt; }}
+  h2 {{ font-size:10pt; margin:14px 0 6px; }}
+</style></head><body>
+{header}
+<h2>Owed per statutory line ({data["status"]} payslips)</h2>
+<table><thead><tr><th>Statutory line</th><th>Liability a/c</th><th class="r">Staff</th>
+<th class="r">Withheld from staff</th><th class="r">Employer contribution</th><th class="r">Total to remit</th></tr></thead>
+<tbody>{summary}</tbody></table>
+<div class="totals">
+  <strong>Withheld from staff:</strong> {money(data["total_employee"])} &nbsp;·&nbsp;
+  <strong>Employer contributions:</strong> {money(data["total_employer"])} &nbsp;·&nbsp;
+  <strong>Total accrued:</strong> {money(data["total"])}<br>
+  <strong>Already remitted:</strong> {money(data.get("total_remitted", 0))} &nbsp;·&nbsp;
+  <strong>Still outstanding:</strong> {money(data.get("total_outstanding", data["total"]))}
+</div>
+</body></html>"""
+    try:
+        from weasyprint import HTML
+        pdf_bytes = HTML(string=html).write_pdf()
+    except Exception as e:
+        logger.error(f"WeasyPrint failed for remittance.pdf: {e}")
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {e}")
+    filename = await branded_filename("statutory-remittance")
+    return StreamingResponse(BytesIO(pdf_bytes), media_type="application/pdf",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+# ========== REMITTANCE PAYMENTS (iter382) ==========
+#
+# Paying URA / NSSF / the insurer is the other half of the liability: until it
+# is recorded, 2200 Taxes Payable keeps growing and nobody can tell which
+# filing has been settled.
+
+@router.post("/payroll/remittance/pay")
+async def pay_remittance(data: dict, current_user: dict = Depends(require_director)):
+    """Record a remittance payment and clear the liability in the ledger.
+
+    Body: {period_from, period_to, location_id, lines?: [name, …] (default: all
+    outstanding), paid_from_account_id (required), date?, reference?, payee?, notes?}
+
+    Posts Dr <liability account per line> / Cr <chosen bank or cash account>.
+    """
+    account_id = (data.get("paid_from_account_id") or "").strip()
+    if not account_id:
+        raise HTTPException(status_code=400, detail="Choose the bank or cash account the payment comes from")
+    account = await db.finance_chart_of_accounts.find_one(
+        {"id": account_id}, {"_id": 0, "id": 1, "code": 1, "name": 1, "type": 1})
+    if not account or account.get("type") != "asset":
+        raise HTTPException(status_code=400, detail="That is not a bank or cash account")
+
+    period_from = (data.get("period_from") or "").strip()
+    period_to = (data.get("period_to") or "").strip()
+    location_id = (data.get("location_id") or "").strip() or None
+    report = await _remittance_build(period_from, period_to, location_id, data.get("status") or "paid")
+
+    wanted = {n.strip() for n in (data.get("lines") or []) if (n or "").strip()}
+    pay_lines = []
+    for l in report["lines"]:
+        if wanted and l["name"] not in wanted:
+            continue
+        amount = round(float(l.get("outstanding") or 0), 2)
+        if amount <= 0:
+            continue
+        pay_lines.append({"name": l["name"],
+                          "liability_account_code": l["liability_account_code"],
+                          "amount": amount})
+    if not pay_lines:
+        raise HTTPException(status_code=400, detail="Nothing outstanding to remit for that selection")
+
+    total = round(sum(l["amount"] for l in pay_lines), 2)
+    date = (data.get("date") or datetime.now(timezone.utc).isoformat())[:10]
+    doc = {
+        "id": f"rem_{uuid.uuid4().hex[:10]}",
+        "date": date,
+        "period_from": period_from, "period_to": period_to,
+        "location_id": location_id or "",
+        "lines": pay_lines,
+        "total": total,
+        "currency": report.get("currency") or "UGX",
+        "paid_from_account_id": account["id"],
+        "paid_from_account_name": f"{account['code']} · {account['name']}",
+        "payee": (data.get("payee") or "").strip(),
+        "reference": (data.get("reference") or "").strip(),
+        "notes": (data.get("notes") or "").strip(),
+        "created_by": current_user["id"],
+        "created_by_name": current_user.get("name", ""),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    from routers.finance._common import post_journal_entry, get_account_by_code
+    je_lines = []
+    for l in pay_lines:
+        liab = await get_account_by_code(l["liability_account_code"]) or await get_account_by_code(DEFAULT_LIABILITY_CODE)
+        if not liab:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Chart of accounts has no {l['liability_account_code']} account to clear — add it in Finance → Chart of Accounts",
+            )
+        je_lines.append({"account_id": liab["id"], "account_code": liab["code"], "account_name": liab["name"],
+                         "debit": float(l["amount"]), "credit": 0, "memo": f"Remittance — {l['name']}"})
+    je_lines.append({"account_id": account["id"], "account_code": account["code"], "account_name": account["name"],
+                     "debit": 0, "credit": float(total), "memo": "Statutory remittance paid"})
+    je = await post_journal_entry(
+        date=date,
+        description=f"Statutory remittance {period_from or ''}{(' → ' + period_to) if period_to and period_to != period_from else ''}"
+                    + (f" — {doc['payee']}" if doc["payee"] else ""),
+        lines=je_lines,
+        source="payroll_remittance",
+        reference=doc["reference"] or doc["id"],
+        location_id=location_id or "",
+        created_by=current_user["id"],
+        created_by_name=current_user.get("name"),
+        idempotency_key=f"remittance:{doc['id']}",
+    )
+    doc["je_id"] = (je or {}).get("id")
+    await db.payroll_remittances.insert_one(dict(doc))
+    await _audit(current_user["id"], "remit", "payroll_remittance", doc["id"],
+                 {"total": total, "lines": [l["name"] for l in pay_lines]})
+    return {**doc, "message": f"{doc['currency']} {total:,.2f} recorded as remitted and cleared from the liability"}
+
+
+@router.get("/payroll/remittance/payments")
+async def list_remittance_payments(
+    location_id: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    current_user: dict = Depends(require_director),
+):
+    """Previous remittance payments — the filing history with references."""
+    q: dict = {"voided": {"$ne": True}}
+    if location_id:
+        q["location_id"] = location_id
+    rows = await db.payroll_remittances.find(q, {"_id": 0}).sort("date", -1).to_list(limit)
+    return {"payments": rows, "total": round(sum(float(r.get("total") or 0) for r in rows), 2)}

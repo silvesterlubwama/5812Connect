@@ -1906,3 +1906,82 @@ Changes:
 Tests: `backend/tests/test_iter380_vendor_autocomplete.py` (5 passed);
 frontend flows via testing agent `/app/test_reports/iteration_250.json` (6/7 PASS,
 1 partial due to test-side combobox flake — covered by the backend test).
+
+## iter381 — Serious payroll: statutory deductions, employer contributions, remittance (2026-06)
+Asked for: deductions set in HR settings must actually be used, be visible and editable
+per employee, plus employer contributions (added to the cheque or employer-only) that are
+properly accounted for in finance.
+
+Root cause found: `hr_settings.compliance_lines` were saved but **never read** during payslip
+generation — only the per-employee `line_items` were applied. Payroll also posted a single
+Dr 5000 / Cr Bank line, so withheld tax and employer cost never appeared in the books.
+
+New `backend/routers/payroll_engine.py` is the single source of truth:
+- campus lines auto-apply to every payslip (`compliance_lines_for` walks up to the parent
+  campus so sub-locations inherit),
+- `type`: deduct from staff / add to pay / **employer_contribution** (+ `mode`:
+  `employer_cost` | `add_to_pay`),
+- progressive `bands` support (Uganda URA PAYE seeded; verified 410k → 25,000),
+- per-employee `hr_salaries.statutory_overrides = {key: {enabled, amount, is_percentage}}`
+  for a different rate or an opt-out,
+- optional per-line `account_code` (employer expense) and `liability_account_code` (default 2200).
+
+Wired into: payslip generate, preview, manual slip and manual payslip edit (hr.py); payslip
+now stores `employer_contributions`, `statutory_withheld`, `total_cost`.
+
+Ledger (`finance/postings.py post_payroll_payslip`) now posts the real shape:
+  Dr 5002 Wages & Salaries (net + withheld) · Dr employer line account per contribution ·
+  Cr 2200 Taxes Payable (withheld + employer statutory) · Cr bank (net paid).
+
+New report: `GET /api/hr/payroll/remittance(.csv|.pdf)` — PAYE/NSSF/insurance owed per
+statutory line, broken down by the staff member it came from, branded PDF + FX aware.
+
+Frontend: `components/hr/ComplianceLinesEditor.jsx` (type/mode/accounts/bands),
+`components/hr/StatutoryOverrides.jsx` (per-employee rate + opt-out on the salary dialog),
+`components/hr/RemittanceDialog.jsx`; payslip cards show "Employer / Cost", the generate
+preview gained Employer + Total cost columns, payslip PDF gained an "Employer contributions"
+section with Total cost of employment. HR Settings now re-reads from the server on open.
+
+Presets updated for Uganda / Kenya / USA / Haiti / Thailand with employer-side lines and
+PAYE bands.
+
+Tests: `backend/tests/test_iter381_statutory_payroll.py` (5 passed — bands, modes, overrides,
+split JE, remittance JSON/CSV/PDF). Frontend: `/app/test_reports/iteration_251.json` 8/8 PASS.
+Note: `test_iter215` was updated — net no longer equals gross because statutory lines apply.
+Campus loc_419f5d5e now has PAYE (bands), NSSF Employee 5%, NSSF Employer 10% configured.
+
+## iter382 — Remittance payments, dual approval, payslip email, live finance cards (2026-06)
+Four follow-ups the user asked for in one pass.
+
+1. **Remittance payments** (`POST /api/hr/payroll/remittance/pay`,
+   `GET /api/hr/payroll/remittance/payments`): pick the statutory lines, pick the bank/cash
+   account, add a filing reference → posts Dr 2200 (per line's liability account) /
+   Cr chosen account, stores a `payroll_remittances` record, and the report now reports
+   `remitted` / `outstanding` per line (and `total_remitted` / `total_outstanding`) so it
+   says what is still OWED. UI: outstanding column + tick boxes + payment form + filing
+   history in `components/hr/RemittanceDialog.jsx`. Paid-from list is limited to real
+   cash/bank accounts.
+2. **Dual approval** (`_require_dual_approval` in hr.py): each Approve adds one signature to
+   `payslip.approvals`; the same person twice is still one. Marking paid (single or
+   `pay-batch`) is refused with a plain-English 400 until two different people have signed.
+   Per-campus switch `hr_settings.dual_approval` (default ON) with a toggle in HR Settings.
+   The card shows "Approved by A + B" and the button becomes "2nd Approval" (disabled for
+   whoever already signed).
+3. **Payslip email on payday** (`_email_payslip`): emails the staff member their payslip PDF
+   when it flips to paid; `hr_settings.email_payslips` (default ON). Records
+   `payslip_emailed_at` or a readable `payslip_email_error` on the payslip — never blocks the
+   payment. NOTE: the preview pod cannot reach the configured SMTP host, so this currently
+   records "Email was not accepted" rather than sending. Needs working email settings.
+4. **Live finance cards**: DashboardPage subscribes to the existing `dataEvents
+   'finance-changed'` bus and to `visibilitychange`, so the money cards update the moment an
+   entry is posted anywhere in the SPA (payslip payment and remittance payment now emit too).
+
+Also fixed: the "Payday vs ledger" banner falsely reported a gap after iter381, because the
+payroll JE total now includes withheld tax + employer cost. It compares against the
+"Net pay" credit line now (legacy two-line entries still fall back to the JE total).
+
+Tests: `backend/tests/test_iter382_remittance_and_approvals.py` (4 passed) + iter381 still
+green; frontend `/app/test_reports/iteration_252.json` 7/7 PASS (full two-admin signature
+flow, remittance payment + ledger check, live dashboard refresh).
+Cleanup: all test payslips, payroll/remittance journal entries, the test expense and the
+temporary second admin account created during testing were removed from the database.

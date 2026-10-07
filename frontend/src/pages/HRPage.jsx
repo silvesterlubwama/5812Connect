@@ -10,6 +10,10 @@ import { StaffPicker } from '../components/StaffPicker';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { ComplianceLinesEditor } from '../components/hr/ComplianceLinesEditor';
+import { StatutoryOverrides } from '../components/hr/StatutoryOverrides';
+import { RemittanceDialog } from '../components/hr/RemittanceDialog';
+import { dataEvents } from '../services/dataEvents';
 import { HolidayPolicyPanel } from '../components/HolidayPolicyPanel';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
 import { Switch } from '../components/ui/switch';
@@ -219,6 +223,7 @@ export default function HRPage() {
   const [showDocReq, setShowDocReq] = useState(false);
   const [showIssueContract, setShowIssueContract] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showRemittance, setShowRemittance] = useState(false);
   const [salaryForm, setSalaryForm] = useState({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', wage_type: 'salary', line_items: [], department_ids: [], department_splits: [] });
   // iter-departments: list of departments visible in the current campus, used
   // by the salary form's multi-department picker + funding-splits editor.
@@ -343,6 +348,7 @@ export default function HRPage() {
           ot_multiplier: parseFloat(salaryForm.ot_multiplier) || 1.5,
           holiday_hours: parseFloat(salaryForm.holiday_hours) || 8,
           line_items: salaryForm.line_items,
+          statutory_overrides: salaryForm.statutory_overrides || {},
           department_ids: salaryForm.department_ids || [],
           department_splits: (salaryForm.department_splits || []).map(s => ({ department_id: s.department_id, pct: parseFloat(s.pct) })),
           reason: editReason,
@@ -370,7 +376,7 @@ export default function HRPage() {
       setShowSalary(false);
       setEditingSalaryId(null);
       setEditReason('');
-      setSalaryForm({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [], department_ids: [], department_splits: [] });
+      setSalaryForm({ staff_id: '', base_salary: '', currency: 'UGX', pay_frequency: 'monthly', line_items: [], statutory_overrides: {}, department_ids: [], department_splits: [] });
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setSaving(false); }
   };
@@ -388,6 +394,7 @@ export default function HRPage() {
       currency: s.currency || 'UGX',
       pay_frequency: s.pay_frequency || 'monthly',
       line_items: s.line_items || [],
+      statutory_overrides: s.statutory_overrides || {},
       // iter-departments: hydrate multi-dept tag + funding splits so an
       // Edit → Save round-trip doesn't silently wipe them (same class of
       // hydration bug we fixed on UserEditDialog).
@@ -465,6 +472,15 @@ export default function HRPage() {
       .finally(() => setPaydaysLoading(false));
   }, [showPayslipGen, activeCampus]);
 
+  // Reopening HR Settings must show what is actually saved — holding the
+  // compliance lines in page state meant a Cancel left edits lying around.
+  useEffect(() => {
+    if (!showSettings || !activeCampus) return;
+    api.get(`/hr/settings/${activeCampus}`)
+      .then(r => setSettingsForm(r.data || { hr_enabled: false, pay_frequency: 'monthly', currency: 'UGX', pay_day: 28 }))
+      .catch(() => {});
+  }, [showSettings, activeCampus]);
+
   const handleIssueContract = async () => {
     setSaving(true);
     try {
@@ -487,8 +503,7 @@ export default function HRPage() {
     finally { setSaving(false); }
   };
 
-  const handleSaveSettings = async () => {
-    try {
+  const handleSaveSettings = async () => {    try {
       await api.put(`/hr/settings/${activeCampus}`, settingsForm);
       toast.success('HR settings saved');
       setShowSettings(false);
@@ -647,6 +662,7 @@ export default function HRPage() {
                   }
                 } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
               }}><CheckCircle size={14} /> Run Payday Now</Button>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowRemittance(true)} data-testid="remittance-btn"><FileText size={14} /> Statutory Remittance</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowManualPayslip(true)} data-testid="manual-payslip-btn"><FileText size={14} /> Manual Payslip</Button>
               <Button size="sm" className="gap-1.5" onClick={() => setShowPayslipGen(true)} data-testid="generate-payslips-btn"><Plus size={14} /> Generate Payslips</Button>
             </div>
@@ -659,12 +675,25 @@ export default function HRPage() {
                     <div>
                       <p className="text-sm font-medium">{p.staff_name}</p>
                       <p className="text-xs text-muted-foreground">Period: {p.period} · {p.department}</p>
+                      {(p.approvals || []).length > 0 && (
+                        <p className="text-[10px] text-muted-foreground" data-testid={`payslip-approvals-${p.id}`}>
+                          Approved by {(p.approvals || []).map(a => a.name || 'staff').join(' + ')}
+                          {(p.approvals || []).length < 2 && p.status !== 'paid' ? ' · needs a 2nd signature' : ''}
+                        </p>
+                      )}
+                      {p.payslip_emailed_at && <p className="text-[10px] text-emerald-600">Payslip emailed {p.payslip_emailed_at.slice(0, 10)}</p>}
+                      {p.payslip_email_error && <p className="text-[10px] text-amber-600">Email not sent: {p.payslip_email_error}</p>}
                       {(p.edit_history?.length || 0) > 0 && <p className="text-[10px] text-amber-600">✎ Edited {p.edit_history.length}x</p>}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="text-right">
                         <p className="text-sm font-bold text-green-600">{p.currency} {(p.net_salary || 0).toLocaleString()}</p>
                         <p className="text-[10px] text-muted-foreground">Gross: {(p.gross_salary || 0).toLocaleString()}</p>
+                        {(p.employer_contributions || 0) > 0 && (
+                          <p className="text-[10px] text-muted-foreground" data-testid={`payslip-employer-${p.id}`}>
+                            Employer: +{(p.employer_contributions || 0).toLocaleString()} · Cost: {(p.total_cost || 0).toLocaleString()}
+                          </p>
+                        )}
                       </div>
                       <Badge variant={p.status === 'approved' ? 'outline' : (p.status === 'paid' ? 'default' : 'secondary')} className={`text-xs ${p.status === 'approved' ? 'border-green-400 text-green-600' : ''}`}>{p.status}</Badge>
                       <Button size="sm" variant="ghost" className="h-7 text-xs gap-1" data-testid={`payslip-pdf-${p.id}`} title="Download PDF" onClick={async () => {
@@ -708,7 +737,24 @@ export default function HRPage() {
                           setPayslipHistory({ payslip: p, ...hr.data, allocations: ar.data?.allocations || [] });
                         } catch { toast.error('Failed to load history'); }
                       }}><History size={12} /></Button>
-                      {p.status === 'draft' && <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={async () => { await api.put(`/hr/payslips/${p.id}`, { status: 'approved' }); setPayslips(prev => prev.map(x => x.id === p.id ? { ...x, status: 'approved' } : x)); toast.success('Approved'); }}><CheckCircle size={12} /> Approve</Button>}
+                      {(p.status === 'draft' || (p.status === 'approved' && (p.approvals || []).length < 2)) && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                          data-testid={`payslip-approve-${p.id}`}
+                          disabled={(p.approvals || []).some(a => a.user_id === user?.id)}
+                          title={(p.approvals || []).some(a => a.user_id === user?.id)
+                            ? 'You have already signed this one — a second person must approve'
+                            : 'Approve this payslip'}
+                          onClick={async () => {
+                            try {
+                              const r = await api.put(`/hr/payslips/${p.id}`, { status: 'approved' });
+                              setPayslips(prev => prev.map(x => x.id === p.id ? r.data : x));
+                              const n = (r.data.approvals || []).length;
+                              toast.success(n >= 2 ? 'Second approval recorded — ready to pay' : 'Approved · needs a second approval before payment');
+                            } catch (err) { toast.error(err.response?.data?.detail || 'Approve failed'); }
+                          }}>
+                          <CheckCircle size={12} /> {p.status === 'draft' ? 'Approve' : '2nd Approval'}
+                        </Button>
+                      )}
                       {p.status === 'draft' && <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" data-testid={`payslip-delete-${p.id}`} title="Delete draft payslip" onClick={async () => {
                         if (!window.confirm(`Delete draft payslip for ${p.staff_name} (${p.period})? This cannot be undone.`)) return;
                         try {
@@ -935,6 +981,18 @@ export default function HRPage() {
                 <Button size="sm" className="h-8" onClick={addLineItem}>+</Button>
               </div>
             </div>
+            {/* iter381 — campus statutory lines, per-employee rate / opt-out */}
+            <div className="space-y-2">
+              <Label>Statutory deductions & employer contributions
+                <span className="text-[10px] text-muted-foreground ml-1">(from HR Settings)</span>
+              </Label>
+              <StatutoryOverrides
+                lines={settingsForm.compliance_lines || []}
+                value={salaryForm.statutory_overrides || {}}
+                currency={salaryForm.currency}
+                onChange={next => setSalaryForm({ ...salaryForm, statutory_overrides: next })}
+              />
+            </div>
             {/* iter-departments: multi-department tagging + funding splits.
                 Departments are cost centres, not physical locations. Split
                 percentages must sum to 100 (enforced client-side + server-side). */}
@@ -1113,6 +1171,7 @@ export default function HRPage() {
                 const r = await api.put(`/hr/payslips/${editingPayslip.id}`, payload);
                 setPayslips(prev => prev.map(x => x.id === editingPayslip.id ? r.data : x));
                 setEditingPayslip(null);
+                if (r.data?.status === 'paid') dataEvents.emit('finance-changed', { source: 'payslip_paid' });
                 if (r.data?.finance_post_error) {
                   toast.error(`Payslip saved, but it did NOT post to finance — ${r.data.finance_post_error}`, { duration: 14000 });
                 } else {
@@ -1239,12 +1298,14 @@ export default function HRPage() {
                         <th className="text-right px-2 py-1.5 hidden sm:table-cell">Allowances</th>
                         <th className="text-right px-2 py-1.5 hidden sm:table-cell">Deductions</th>
                         <th className="text-right px-2 py-1.5">Net</th>
+                        <th className="text-right px-2 py-1.5 hidden md:table-cell">Employer</th>
+                        <th className="text-right px-2 py-1.5 hidden md:table-cell">Total cost</th>
                         <th className="text-center px-2 py-1.5">Status</th>
                       </tr>
                     </thead>
                     <tbody>
                       {previewRows.length === 0 ? (
-                        <tr><td colSpan={7} className="text-center text-muted-foreground py-4">No active salary records for this campus.</td></tr>
+                        <tr><td colSpan={9} className="text-center text-muted-foreground py-4">No active salary records for this campus.</td></tr>
                       ) : previewRows.map(r => (
                         <tr key={r.staff_id} className={r.already_generated ? 'opacity-50' : ''} data-testid={`preview-row-${r.staff_id}`}>
                           <td className="px-2 py-1.5">{r.staff_name}</td>
@@ -1258,6 +1319,8 @@ export default function HRPage() {
                           <td className="px-2 py-1.5 text-right hidden sm:table-cell text-emerald-700">+{r.allowances.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td className="px-2 py-1.5 text-right hidden sm:table-cell text-amber-700">-{r.deductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td className="px-2 py-1.5 text-right font-semibold">{r.currency} {r.net.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right hidden md:table-cell text-muted-foreground">{(r.employer_contributions || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right hidden md:table-cell">{(r.total_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td className="px-2 py-1.5 text-center">
                             {r.already_generated ? (
                               <span className="text-[10px] rounded-full bg-slate-200 text-slate-700 px-2 py-0.5">Existing — skipped</span>
@@ -1274,6 +1337,12 @@ export default function HRPage() {
                           <td colSpan={5} className="px-2 py-1.5 text-right font-medium text-muted-foreground">Total net pay ({previewRows.filter(r => !r.already_generated).length} new payslips)</td>
                           <td className="px-2 py-1.5 text-right font-bold" data-testid="preview-total-net">
                             {previewRows[0].currency} {previewRows.filter(r => !r.already_generated).reduce((s, r) => s + r.net, 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="px-2 py-1.5 text-right hidden md:table-cell text-muted-foreground" data-testid="preview-total-employer">
+                            {previewRows.filter(r => !r.already_generated).reduce((s, r) => s + (r.employer_contributions || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="px-2 py-1.5 text-right hidden md:table-cell font-bold" data-testid="preview-total-cost">
+                            {previewRows.filter(r => !r.already_generated).reduce((s, r) => s + (r.total_cost || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                           </td>
                           <td></td>
                         </tr>
@@ -1618,31 +1687,13 @@ export default function HRPage() {
                 </Select>
               </div>
               {/* Existing lines */}
-              {(settingsForm.compliance_lines || []).map((cl, i) => (
-                <div key={i} className="grid grid-cols-[1fr_90px_90px_90px_24px] gap-2 items-center text-xs">
-                  <Input className="h-8 text-xs" value={cl.name} onChange={e => {
-                    const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], name: e.target.value}; setSettingsForm({...settingsForm, compliance_lines: next});
-                  }} />
-                  <Select value={cl.type} onValueChange={v => {
-                    const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], type: v}; setSettingsForm({...settingsForm, compliance_lines: next});
-                  }}>
-                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="deduction">Deduction</SelectItem><SelectItem value="addition">Addition</SelectItem></SelectContent>
-                  </Select>
-                  <Input className="h-8 text-xs" type="number" step="0.01" value={cl.amount || 0} onChange={e => {
-                    const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], amount: parseFloat(e.target.value) || 0}; setSettingsForm({...settingsForm, compliance_lines: next});
-                  }} />
-                  <label className="flex items-center gap-1 text-[10px] cursor-pointer">
-                    <input type="checkbox" checked={!!cl.is_percentage} onChange={e => {
-                      const next = [...settingsForm.compliance_lines]; next[i] = {...next[i], is_percentage: e.target.checked}; setSettingsForm({...settingsForm, compliance_lines: next});
-                    }} /> %
-                  </label>
-                  <button type="button" className="text-destructive" onClick={() => {
-                    setSettingsForm({...settingsForm, compliance_lines: settingsForm.compliance_lines.filter((_, j) => j !== i)});
-                  }}>×</button>
-                </div>
-              ))}
-              {(settingsForm.compliance_lines || []).length === 0 && <p className="text-[10px] text-muted-foreground">No compliance lines yet. Add common ones for your country below.</p>}
+              <ComplianceLinesEditor
+                lines={settingsForm.compliance_lines || []}
+                onChange={next => setSettingsForm({ ...settingsForm, compliance_lines: next })}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                These apply automatically to every payslip in this campus. A single employee's rate can be changed (or switched off) on their pay settings.
+              </p>
 
               {/* Compliance options dropdown */}
               <ComplianceOptionsPicker
@@ -1654,6 +1705,29 @@ export default function HRPage() {
               />
             </div>
 
+            {/* iter382 — payroll controls: second signature + payslip emails */}
+            <div className="border-t pt-3 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label className="text-sm font-semibold">Require two approvals before payment</Label>
+                  <p className="text-[10px] text-muted-foreground">Two different managers must press Approve before a payslip can be marked paid.</p>
+                </div>
+                <Switch checked={settingsForm.dual_approval !== false}
+                  onCheckedChange={v => setSettingsForm({ ...settingsForm, dual_approval: v })}
+                  data-testid="hr-dual-approval-toggle" />
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label className="text-sm font-semibold">Email payslip when paid</Label>
+                  <p className="text-[10px] text-muted-foreground">Sends each staff member their payslip PDF as soon as the payment is recorded.</p>
+                </div>
+                <Switch checked={settingsForm.email_payslips !== false}
+                  onCheckedChange={v => setSettingsForm({ ...settingsForm, email_payslips: v })}
+                  data-testid="hr-email-payslips-toggle" />
+              </div>
+            </div>
+
+
             <div className="flex gap-3 pt-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowSettings(false)}>Cancel</Button>
               <Button className="flex-1" onClick={handleSaveSettings} data-testid="hr-settings-save">Save Settings</Button>
@@ -1661,6 +1735,10 @@ export default function HRPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Statutory remittance report (iter381) */}
+      <RemittanceDialog open={showRemittance} onOpenChange={setShowRemittance}
+        locationId={activeCampus} periods={(hrPayPeriods || []).map(p => p.period || p)} />
 
       {/* Salary Change History Dialog */}
       <Dialog open={!!historySalary} onOpenChange={(o) => { if (!o) { setHistorySalary(null); setHistoryEntries([]); } }}>

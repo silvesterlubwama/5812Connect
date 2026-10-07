@@ -1,0 +1,46 @@
+{
+  "summary": "Frontend-only verification of iter381 statutory payroll UI (ComplianceLinesEditor, StatutoryOverrides on salary edit, Payslip preview Employer/Total cost columns, payslip card employer line, RemittanceDialog with CSV/PDF, and VendorPicker additions in PortalExpenses + AssetsRegister). All eight requested checks pass. Zero console errors across HR landing, Payslips tab, and all HR sub-tabs (Salaries/Contracts/Leave/Timesheets). Backend remittance endpoints return real data (UGX 1,141,303.57 employee / UGX 446,607.14 employer / UGX 1,587,910.71 total for 2026-01..2026-12 All payslips).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "HR landing (no campus selected)", "issues": ["When the top-left campus selector is blank on first HR page load, HR Settings dialog shows 'No statutory lines yet' and the richer compliance editor (compliance-lines-editor) is absent. Only after explicitly picking '58:12 Uganda' does the editor render. Not a bug per se — the admin had no active campus set in session — but worth noting for UX (consider auto-selecting the user's default campus)."]},
+      {"screen": "HR Settings dialog state", "issues": ["Compliance lines state is held in parent HRPage state and NOT re-fetched when the dialog is reopened. If a user clicks 'Use progressive bands' then presses Cancel, the added band row still appears on next open. Only Save/Reload reverts. Minor — consider resetting state on open or on Cancel."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/.screenshots/settings_with_lines.png",
+    "/app/.screenshots/salary_edit.png",
+    "/app/.screenshots/preview_table.png",
+    "/app/.screenshots/remittance_refreshed.png",
+    "/app/.screenshots/vendor_type_ahead.png",
+    "/app/.screenshots/finance_assets_tab.png"
+  ],
+  "detailed_results": {
+    "compliance_editor": "PASS — type dropdown is a shadcn Select BUTTON (not native SELECT) with 'Deduct from staff' | 'Add to pay' | 'Employer contribution'. Switching line to Employer contribution reveals compliance-mode-N + compliance-expense-acct-N. compliance-liability-acct-N present on every line. compliance-add-bands-N adds compliance-band-upto-N-0 / compliance-band-rate-N-0 rows, and compliance-amount-N becomes disabled when bands exist. Save shows toast 'HR settings saved'.",
+    "statutory_overrides_persistence": "PASS — Edited salary sal_b71837e5 (Christopher Ssekito): set statutory-amount-nssf_employee=7, left statutory-pct-nssf_employee checked, toggled statutory-toggle-nssf_employer OFF. Save shows 'Salary updated' toast. Reopened dialog: amount still 7, pct still checked, nssf_employer toggle still unchecked. Round-trip persistence confirmed. Cleaned up to defaults afterwards.",
+    "payslip_preview_columns": "PASS — Preview table headers include ['Staff','Dept','Gross','Allowances','Deductions','Net','Employer','Total cost','Status']. Footer renders preview-total-employer=127,500.00 and preview-total-cost=1,402,500.00. Back button returns to generate step without creating payslips.",
+    "payslip_card_employer_line": "PASS — Cards expose payslip-employer-<id>. Example: ps_28b355a7 shows 'Employer: +10,000 · Cost: 110,000' (Gross 100,000 + Employer 10,000 = Cost 110,000). Math consistent across all five sampled cards (ps_e215f696 +8,181.82 → 108,181.82; etc.).",
+    "remittance_dialog": "PASS — remittance-btn opens remittance-dialog. remittance-total-employee / remittance-total-employer / remittance-total render. Setting From=2026-01, To=2026-12, Status=All, pressing remittance-refresh populates per-line totals (PAYE, NSSF Employer, NSSF Employee, PAYE second line) with per-staff sub-rows (Christopher Ssekito, Zipporah Lubega, Henry Lubega). remittance-csv downloaded 'statutory-remittance-2026-01.csv'; remittance-pdf downloaded 'statutory-remittance-2026-01.pdf'. No error toasts.",
+    "expense_vendor_typeahead": "PASS — /portal/expenses → Add Expense opens dialog with expense-vendor-input. Typing 'air' shows suggestion 'Airtel Uganda · supplier' + 'Add \u201cair\u201d as a new vendor'. Clicking suggestion fills field to 'Airtel Uganda'.",
+    "asset_vendor_typeahead": "PASS — Finance → Fixed Assets → Add asset opens dialog with asset-vendor-input. Typing 'kam' suggests 'Kampala Hardware Ltd · supplier · 0772000111'. Selecting fills vendor to 'Kampala Hardware Ltd'. The 58:12 Uganda campus has no fixed assets yet so the Spend dialog (asset-spend-vendor) could not be opened; asset-spend-vendor was therefore not visually exercised, but the component code is the same VendorPicker.",
+    "regression_hr_tabs": "PASS — HR page loads with 0 console errors / 0 pageerrors. Salaries, Contracts, Leave, Timesheets all switch and render without errors."
+  },
+  "action_items": [
+    "(Optional UX) Auto-select the admin's primary campus on HR page load so the Compliance editor is visible without manual campus pick.",
+    "(Optional UX) Reset ComplianceLinesEditor state when the HR Settings dialog closes via Cancel, so transient 'add band' changes don't persist in local state across opens."
+  ],
+  "critical_code_review_comments": [
+    "VendorPicker shows the dropdown even when there are no exact matches — the 'Add \u201ckam\u201d as a new vendor' row is handy but double-check that selecting it does not silently create a vendor on the server when the user just intended free-text input.",
+    "RemittanceDialog successfully downloads blobs — ensure the CSV/PDF endpoints respect the Payslips=All vs Paid only filter server-side (verified by backend pytest per handoff note).",
+    "HRPage statutory-overrides payload must preserve the pct boolean separately from amount — persistence test confirms both round-trip correctly."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% (8/8 checks)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (as per /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Salary sal_b71837e5 was temporarily edited and restored. Settings were briefly modified (added a band on NSSF Employee) and then reverted / cleaned up with Save.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter381 statutory payroll UI is fully functional on the main campus (58:12 Uganda, loc_419f5d5e). Three statutory lines configured: PAYE (progressive bands), NSSF Employee 5%, NSSF Employer 10%. 48 payslips exist with employer-contribution lines rendered. The only UX nit is that HR Settings compliance editor only appears after a campus is explicitly selected (first page load after login shows empty campus → 'No statutory lines yet')."
+}

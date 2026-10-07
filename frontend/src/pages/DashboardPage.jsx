@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import UniversalUploadDialog from '../components/UniversalUploadDialog';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import DirectorDigestWidget from '../components/DirectorDigestWidget';
+import { dataEvents } from '../services/dataEvents';
 
 const StatCard = ({ title, value, sub, icon: Icon, color, loading, onClick }) => (
   <Card className={`shadow-soft rounded-xl ${onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : ''}`} onClick={onClick}>
@@ -131,6 +132,17 @@ export default function DashboardPage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { fetchAll(); }, [isParent]);
+
+  // iter382 — the money cards must not go stale: any finance mutation anywhere
+  // in the app pings 'finance-changed', and coming back to the tab refetches
+  // so another person's entry shows up too.
+  useEffect(() => {
+    const off = dataEvents.on('finance-changed', () => { fetchAll(); });
+    const onVisible = () => { if (document.visibilityState === 'visible') fetchAll(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { off(); document.removeEventListener('visibilitychange', onVisible); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isParent]);
 
   // ---- PARENT VIEW ----
   if (isParent) {

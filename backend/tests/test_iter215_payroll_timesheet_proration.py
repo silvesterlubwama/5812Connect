@@ -158,7 +158,10 @@ class TestPayrollTimesheetProration:
         wd = _working_days(period)
         assert ps["days_worked"] == wd, f"expected full month {wd}, got {ps['days_worked']}"
         assert ps["pto_days"] == 0
-        assert ps["net_salary"] == ps["gross_salary"] == 100000
+        assert ps["gross_salary"] == 100000
+        # iter381: campus statutory lines (PAYE/NSSF) now apply automatically, so
+        # net only has to equal gross minus those — not gross itself.
+        assert ps["net_salary"] == round(100000 + ps["allowances"] - ps["deductions"], 2)
         adj = [li for li in ps.get("line_items", []) if li.get("name") == "Days-worked adjustment"]
         assert not adj, "should have no days-worked adjustment when ignoring timesheets"
 
