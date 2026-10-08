@@ -589,6 +589,8 @@ try:
     app.include_router(biometric_nfc_router)
     app.include_router(google_auth_router)
     app.include_router(push_router)
+    from routers.cron import router as cron_router
+    app.include_router(cron_router)
     logger.info("All modular routers loaded")
 except Exception as e:
     logger.warning(f"Router loading: {e}")

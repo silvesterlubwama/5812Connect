@@ -15,6 +15,7 @@ from deps import db, require_admin, _audit, logger
 from datetime import datetime, timezone
 from typing import Optional
 import re
+import os
 
 router = APIRouter(prefix="/api/admin/system-settings", tags=["system_settings"])
 
@@ -358,9 +359,13 @@ async def send_test_email(data: dict, current_user: dict = Depends(require_admin
     if not target or "@" not in target:
         raise HTTPException(status_code=400, detail="Recipient email required")
     raw = await _load_raw()
-    e = raw.get("email") or {}
+    e = {**(raw.get("email") or {})}
+    # Fall back to the environment the same way live sending does, otherwise
+    # "Test" fails on a deployment whose key lives in env rather than the DB.
+    if not (e.get("resend_api_key") or "").strip():
+        e["resend_api_key"] = os.environ.get("RESEND_API_KEY", "")
     provider = e.get("provider") or "resend"
-    sender = (e.get("sender_email") or "").strip()
+    sender = (e.get("sender_email") or os.environ.get("SENDER_EMAIL") or "").strip()
     sender_name = e.get("sender_name") or "58:12 Connect"
     if not sender:
         raise HTTPException(status_code=400, detail="Sender email is not configured")

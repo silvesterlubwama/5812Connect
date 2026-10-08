@@ -1985,3 +1985,90 @@ green; frontend `/app/test_reports/iteration_252.json` 7/7 PASS (full two-admin 
 flow, remittance payment + ledger check, live dashboard refresh).
 Cleanup: all test payslips, payroll/remittance journal entries, the test expense and the
 temporary second admin account created during testing were removed from the database.
+
+## iter383 — Calendar overhaul: event types, multi-day spans, ticket finance, my-calendars (2026-06)
+Asked for: editable event types, events lasting more than one day, ticket prices enforced and
+wired to sales/finance, default capacity 5, imported calendars that only the importer sees
+unless shared, a typical "my calendars" tick list, webcal import, plus "multi-day events
+should spread across their days and events should be ordered earliest first".
+
+Backend (`routers/events.py`):
+- `_validate_event_money_and_dates`: a non-free event must carry a price or a priced tier
+  (this was the "ticket prices are missing" bug); end_date can't precede date.
+- `_resolve_capacity`: capacity defaults to the chosen venue's/sub-location's capacity,
+  otherwise 5 (`models.py EventCreate.capacity = 5`).
+- Imported calendars are first-class: `imported_calendars` collection, `calendar_id` stamped
+  on each imported event; `GET /events/imported-calendars`, `PUT .../share`
+  (user_ids + location_ids), `DELETE ...`, `POST .../refresh`; `POST /events/import/ical-url`
+  fetches a `webcal://`/https .ics feed server-side; the paste import now takes a name and
+  honours DTEND (multi-day). `list_events` grants visibility by owner, direct share or
+  campus share.
+- `GET/PUT /events/calendar-prefs`: per-user hidden campuses / hidden calendars / holidays /
+  task scope (everything on until unticked).
+- Ticket money: `postings.post_event_ticket_sale` (Dr campus cash or 1030 for card/mobile,
+  Cr 4100 Sales Revenue, booked at the EVENT's campus) called from
+  `PUT /public/bookings/{id}/mark-paid`, which now returns `finance_posted`.
+
+Frontend:
+- `components/calendar/CalendarsPanel.jsx` — tick list of campuses/sub-locations and imported
+  calendars with share / refresh / remove, holidays tick and task scope; prefs persist server-side.
+- `components/calendar/EventTypesDialog.jsx` — add/rename/recolour/remove event types; the
+  calendar's type dropdowns and legend are now driven by `/event-types` (custom hex colours).
+- Create dialog gained **End date**; capacity starts at 5 and follows the picked venue.
+- Import dialog takes a calendar name and a webcal/https link.
+- Month view renders a multi-day run as ONE continuous bar (square inner edges, ◀ ▶
+  continuation arrows, title/time on the start day); week/day view gained an **all-day strip**
+  so a run spans the week instead of landing in its start hour. Each day is ordered
+  multi-day/all-day first, then timed events earliest-first.
+
+BUG FIXED (user: "event edits fail if user didnt create the event"): per-day copies of a
+multi-day event carried a synthetic id (`evt_x_d2`), so editing or deleting from any day but
+the first PUT/DELETEd a non-existent id and showed a generic "Failed to update event". Items
+now carry `_eventId` and every write uses it; error toasts show the server's message.
+
+Email: provider switched from the unreachable SMTP host to **Resend**, and
+`POST /admin/system-settings/test-email` now falls back to the env `RESEND_API_KEY` /
+`SENDER_EMAIL` like live sending does (the Test button is no longer disabled). Sender set to
+`noreply@5812uganda.org` ("58:12 Uganda") per the user; live test email delivered
+(Resend message id returned) and a paid payslip emailed its PDF successfully
+(`payslip_emailed_at` set, no error).
+
+Tests: `backend/tests/test_iter383_events_calendars.py` (7 passed);
+frontend `/app/test_reports/iteration_253.json` 10/10 PASS incl. the multi-day edit fix.
+Cleanup: all QA/ITER383 events, bookings, ticket JEs, duplicate "Test Type" event types and
+imported calendars removed from the DB.
+
+## iter384 — Drag to reschedule, event reminders, frequent calendar sync (2026-06)
+Asked for: drag events to reschedule or extend across days; email ticket holders the day
+before; refresh subscribed webcal calendars far more often than nightly ("hourly or even as
+new events are added / when the user visits the calendar page").
+
+Drag to reschedule (`pages/CalendarPage.jsx`):
+- Month chips are draggable; dropping on a day moves the event and KEEPS its length
+  (`date` + recomputed `end_date`). Day cells highlight as a drop target
+  (`data-testid="cal-cell-YYYY-MM-DD"`).
+- A grip on the right edge of the last day (`cal-resize-<id>`) stretches the run:
+  dropping on a later day sets `end_date`; dropping before the start refuses with
+  "An event can't end before it starts" and writes nothing.
+- Optimistic move, then confirmed against the API; 409 says the venue is taken, and a
+  series occurrence is changed on its own (with a toast saying so).
+
+Platform crons (`.emergent/crons.yml` + new `backend/routers/cron.py`, secret
+`WEBHOOK_CRON_SECRET` in backend/.env):
+- `event-reminders` — 08:00 Africa/Kampala daily: emails every ticket holder for tomorrow's
+  events (including `pending_payment` holders, with a line about settling at the door),
+  stamps `reminder_sent_at` so nobody is emailed twice.
+- `calendar-sync` — every 15 minutes: re-pulls subscribed `source_url` calendars whose
+  `last_synced_at` is older than 30 minutes, recording `last_sync_error` when a feed breaks.
+- Both verify `Authorization: Bearer $WEBHOOK_CRON_SECRET` in constant time, dedupe on
+  `X-Webhook-Id` via `cron_runs`, ack 2xx immediately and do the work in a background task.
+- Plus `POST /events/imported-calendars/sync-stale` — the calendar page calls it on open, so
+  a feed is refreshed on visit (15-minute staleness window) without waiting for the cron.
+
+Tests: `backend/tests/test_iter384_crons_and_drag.py` 5/5 (auth rejection, idempotent
+delivery, reminder sent exactly once, sync-stale shape, drag move/resize payloads incl. the
+end<start rejection); frontend `/app/test_reports/iteration_254.json` — move, resize and
+invalid-resize all PASS via dispatched HTML5 DnD events.
+Housekeeping: deleted 33 leftover TEST_/QA_/CRONCHECK events (and their bookings) left by
+earlier iterations, so the customer's calendar is clean. NOTE for future tests: Playwright's
+native `drag_to()` does not trigger these HTML5 handlers — dispatch dragstart/dragover/drop.

@@ -2225,3 +2225,25 @@ See `/app/memory/test_credentials.md`.
 - **Dashboard money cards refresh live** after any finance entry, and when the tab regains focus.
 - Next (P2): dual-approval needs at least two manager accounts to be usable — the second test
   admin was removed after testing; payroll approval audit report; bulk remittance scheduling.
+
+## iter383 additions (June 2026)
+- Event types are data, not code: staff add/rename/recolour them and the calendar follows.
+- Any event can span days; multi-day runs draw as one bar across the days and sit above the
+  timed events, which are ordered earliest-first in every view.
+- A paid event must have a price or a priced tier, and ticket money (public checkout as well
+  as POS) posts to 4100 Sales Revenue at the event's own campus.
+- Default event capacity is 5, or the capacity of the venue/sub-location chosen.
+- "My calendars" tick list: campuses, sub-locations and imported calendars, all on by default,
+  remembered per user. Imported calendars (paste, file or webcal/https link) stay private to
+  the importer until shared with chosen people, campuses or locations; owners can refresh or
+  remove them.
+- Email now DELIVERS via Resend from `noreply@5812uganda.org` ("58:12 Uganda") — verified
+  with a live test email and a real payslip PDF emailed on payment.
+
+## iter384 additions (June 2026)
+- Drag an event chip to another day to reschedule (length preserved), or drag the right edge
+  to stretch it across more days; invalid ranges are refused on the spot.
+- Ticket holders are emailed the day before their event (08:00 Kampala), once each.
+- Subscribed webcal/.ics calendars refresh every 15 minutes via platform cron, and also when
+  someone opens the calendar page if the feed is more than 15 minutes stale.
+- Cron contract: `.emergent/crons.yml` (2 entries, max 5 allowed) + `WEBHOOK_CRON_SECRET`.

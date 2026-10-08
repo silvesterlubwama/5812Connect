@@ -150,7 +150,7 @@ class EventCreate(BaseModel):
     location: Optional[str] = None
     location_id: Optional[str] = None
     venue_id: Optional[str] = None
-    capacity: int = 100
+    capacity: int = 5   # iter383 — small by default; the venue's own capacity wins when one is picked
     description: Optional[str] = None
     is_public: bool = False   # iter 265 — default to private
     is_free: bool = True

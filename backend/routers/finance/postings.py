@@ -175,3 +175,51 @@ async def post_sale(sale: dict, current_user: dict) -> Optional[dict]:
         created_by_name=current_user.get("name"),
         idempotency_key=f"sale:{sale.get('id')}",
     )
+
+async def post_event_ticket_sale(booking: dict, event: dict, current_user: dict) -> Optional[dict]:
+    """Ticket money from the public event pages (iter383).
+
+        Debit  campus cash/bank (or 1030 Online Payments for card/mobile money)
+        Credit 4100 Sales Revenue
+
+    Until now only POS-routed ticket sales reached the ledger, so tickets sold
+    on the public page were invisible in the accounts. Booked against the
+    EVENT's campus so each location's income is its own.
+    """
+    total = _q(booking.get("total") or 0)
+    if total <= 0:
+        return None
+    revenue_acct = await get_account_by_code("4100")
+    if not revenue_acct:
+        raise LedgerSetupError(
+            "Chart of accounts has no 4100 Sales Revenue account — add it in "
+            "Finance → Chart of Accounts and the ticket income will post"
+        )
+    location_id = event.get("location_id") or booking.get("location_id") or ""
+    method = (booking.get("payment_method") or "").lower()
+    channel = "online" if method in ("card", "mobile_money", "momo", "online") else None
+    cash_acct = await _cash_account_id(location_id, channel)
+    if not cash_acct:
+        raise LedgerSetupError(
+            "No bank or cash account for this campus — set a default cash account "
+            "or add 1010 Bank — Operating in Finance → Chart of Accounts"
+        )
+    tickets = int(booking.get("num_tickets") or 1)
+    return await post_journal_entry(
+        date=(booking.get("paid_at") or booking.get("created_at") or "")[:10],
+        description=f"Event tickets — {event.get('title') or 'event'} ({tickets} × {booking.get('name') or 'guest'})",
+        lines=[
+            {"account_id": cash_acct["id"], "account_code": cash_acct["code"],
+             "account_name": cash_acct["name"], "debit": float(total), "credit": 0,
+             "memo": booking.get("tier_name") or "Ticket sales"},
+            {"account_id": revenue_acct["id"], "account_code": revenue_acct["code"],
+             "account_name": revenue_acct["name"], "debit": 0, "credit": float(total),
+             "memo": f"Tickets — {event.get('title') or ''}"},
+        ],
+        source="event_ticket",
+        reference=booking.get("id"),
+        location_id=location_id,
+        created_by=(current_user or {}).get("id"),
+        created_by_name=(current_user or {}).get("name"),
+        idempotency_key=f"booking:{booking.get('id')}",
+    )

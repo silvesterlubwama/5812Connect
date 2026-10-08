@@ -1,0 +1,16 @@
+crons:
+  - name: event-reminders
+    description: "Emails ticket holders the day before their event, every morning at 8am Kampala time"
+    cron: "0 8 * * *"
+    timezone: "Africa/Kampala"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/event-reminders"
+    method: POST
+    enabled: true
+  - name: calendar-sync
+    description: "Re-pulls subscribed webcal/.ics calendars every 15 minutes so imported events stay current"
+    cron: "*/15 * * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/calendar-sync"
+    method: POST
+    enabled: true

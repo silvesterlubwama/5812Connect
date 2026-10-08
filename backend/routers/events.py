@@ -214,13 +214,17 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
     status_order = {"upcoming": 0, "ongoing": 1, "completed": 2, "cancelled": 3}
     events.sort(key=lambda e: (status_order.get(e.get("status", ""), 9), e.get("date", "")))
     # Filter imported events: only show to importer or invited users
+    # Filter imported events: the importer, anyone the calendar is shared with
+    # (directly or via their campus), and admins.
     uid = current_user["id"]
+    visible_calendars = await _visible_calendar_ids(current_user)
     filtered = []
     for ev in events:
         if ev.get("type") == "imported" and ev.get("imported_by"):
-            if ev["imported_by"] == uid or uid in (ev.get("visible_to") or []):
-                filtered.append(ev)
-            elif is_system_admin(current_user):
+            if (ev["imported_by"] == uid
+                    or uid in (ev.get("visible_to") or [])
+                    or (ev.get("calendar_id") and ev["calendar_id"] in visible_calendars)
+                    or is_system_admin(current_user)):
                 filtered.append(ev)
         else:
             filtered.append(ev)
@@ -239,6 +243,46 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
     return filtered
 
 
+DEFAULT_EVENT_CAPACITY = 5
+
+
+async def _resolve_capacity(capacity, venue_id: Optional[str]) -> Optional[int]:
+    """Capacity falls back to the venue's own seating, then to a small default.
+
+    Asked for in iter383: a venue that holds 40 shouldn't need the number typed
+    in again, and a brand-new event should start at 5 rather than a made-up 100.
+    `None`/0 stays as "unlimited" only when no venue says otherwise.
+    """
+    if capacity not in (None, "", 0):
+        return int(capacity)
+    if venue_id:
+        for coll in (db.venues, db.locations):
+            doc = await coll.find_one({"id": venue_id}, {"_id": 0, "capacity": 1})
+            if doc and doc.get("capacity"):
+                return int(doc["capacity"])
+    return DEFAULT_EVENT_CAPACITY
+
+
+async def _validate_event_money_and_dates(payload: dict) -> None:
+    """A paid event with no price is the bug behind "ticket prices are missing".
+
+    Also guards multi-day ranges so an end date can never land before the start.
+    """
+    date = (payload.get("date") or "").strip()
+    end_date = (payload.get("end_date") or "").strip()
+    if date and end_date and end_date < date:
+        raise HTTPException(status_code=400, detail="The end date can't be before the start date")
+    if payload.get("is_free") is False:
+        tiers = payload.get("ticket_tiers") or []
+        priced_tiers = [t for t in tiers if float(t.get("price") or 0) > 0]
+        price = float(payload.get("price") or 0)
+        if price <= 0 and not priced_tiers:
+            raise HTTPException(
+                status_code=400,
+                detail="This event is marked as paid — set a ticket price, or add at least one ticket tier with a price",
+            )
+
+
 @router.post("/events")
 async def create_event(data: EventCreate, force: bool = Query(False), current_user: dict = Depends(get_current_user)) -> dict:
     # Venue availability check — block double-booking unless a privileged user forces
@@ -252,6 +296,7 @@ async def create_event(data: EventCreate, force: bool = Query(False), current_us
                 "conflict": conflict,
                 "can_override": _can_override_conflict(current_user),
             })
+    await _validate_event_money_and_dates(data.model_dump())
     event_id = f"evt_{str(uuid.uuid4())[:8]}"
     event = {
         "id": event_id,
@@ -261,6 +306,7 @@ async def create_event(data: EventCreate, force: bool = Query(False), current_us
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
     }
+    event["capacity"] = await _resolve_capacity(event.get("capacity"), event.get("venue_id"))
     # iter-main-loc — events land at the creator's MAIN campus by default
     # (not the currently-switched active campus). Multi-campus users often
     # created events that landed on whichever campus they'd switched to and
@@ -789,27 +835,21 @@ async def public_calendar_user_json(token: str):
     }
 
 
-@router.post("/events/import/ical")
-async def import_calendar_ical(data: dict, current_user: dict = Depends(get_current_user)):
-    """Import events from iCal text content."""
-    ical_text = data.get("ical_content", "")
-    if not ical_text:
-        raise HTTPException(status_code=400, detail="No iCal content provided")
-
-    imported = 0
+async def _parse_ical_events(ical_text: str, current_user: dict, calendar_id: str) -> list:
+    """Shared .ics parser — used by the paste/upload import and the URL subscribe."""
     events = []
-    current_event = {}
-    for line in ical_text.split("\n"):
+    current_event: dict = {}
+    for line in ical_text.replace("\r\n", "\n").split("\n"):
         line = line.strip()
         if line == "BEGIN:VEVENT":
             current_event = {}
         elif line == "END:VEVENT":
             if current_event.get("title"):
-                event_id = f"evt_{str(uuid.uuid4())[:8]}"
-                event_doc = {
-                    "id": event_id,
+                events.append({
+                    "id": f"evt_{str(uuid.uuid4())[:8]}",
                     "title": current_event.get("title", "Imported Event"),
                     "date": current_event.get("date", ""),
+                    "end_date": current_event.get("end_date") or None,
                     "time": current_event.get("time", ""),
                     "description": current_event.get("description", ""),
                     "location": current_event.get("location", ""),
@@ -818,30 +858,235 @@ async def import_calendar_ical(data: dict, current_user: dict = Depends(get_curr
                     "status": "upcoming",
                     "is_public": False,
                     "imported_by": current_user["id"],
+                    "calendar_id": calendar_id,
                     "visible_to": [],
                     "created_by": current_user["id"],
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                events.append(event_doc)
-                imported += 1
+                })
             current_event = {}
         elif line.startswith("SUMMARY:"):
             current_event["title"] = line[8:]
-        elif line.startswith("DTSTART:"):
-            dt = line[8:].replace("T", " ")[:15]
+        elif line.startswith("DTSTART"):
+            dt = line.split(":", 1)[-1].replace("T", " ")[:15]
             if len(dt) >= 8:
                 current_event["date"] = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]}"
-                if len(dt) >= 12:
+                if len(dt) >= 13:
                     current_event["time"] = f"{dt[9:11]}:{dt[11:13]}"
+        elif line.startswith("DTEND"):
+            dt = line.split(":", 1)[-1].replace("T", " ")[:15]
+            if len(dt) >= 8:
+                current_event["end_date"] = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]}"
         elif line.startswith("DESCRIPTION:"):
             current_event["description"] = line[12:].replace("\\n", "\n")
         elif line.startswith("LOCATION:"):
             current_event["location"] = line[9:]
+    return events
 
+
+async def _fetch_ical(url: str) -> str:
+    """Pull an .ics feed. `webcal://` is just http(s) with a different scheme."""
+    import httpx
+    fetch_url = url.strip()
+    if fetch_url.lower().startswith("webcal://"):
+        fetch_url = "https://" + fetch_url[9:]
+    if not fetch_url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Give a webcal:// or https:// calendar link")
+    try:
+        async with httpx.AsyncClient(timeout=25, follow_redirects=True) as client:
+            r = await client.get(fetch_url)
+    except Exception as ex:
+        raise HTTPException(status_code=400, detail=f"Could not reach that calendar link: {str(ex)[:120]}")
+    if r.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"That calendar link returned {r.status_code} — check it is the secret iCal address and is shared")
+    text = r.text
+    if "BEGIN:VCALENDAR" not in text.upper():
+        raise HTTPException(status_code=400, detail="That link didn't return a calendar (.ics) file")
+    return text
+
+
+@router.post("/events/import/ical-url")
+async def import_calendar_from_url(data: dict, current_user: dict = Depends(get_current_user)):
+    """Subscribe to a webcal:// or https .ics link (Google, Outlook, Apple).
+
+    Stored as an imported calendar with its `source_url`, so it can be
+    refreshed, shared or removed later.
+    """
+    url = (data.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="No calendar link provided")
+    text = await _fetch_ical(url)
+    calendar_id = f"ical_{uuid.uuid4().hex[:10]}"
+    events = await _parse_ical_events(text, current_user, calendar_id)
     if events:
         await db.events.insert_many(events)
+    calendar = {
+        "id": calendar_id,
+        "name": (data.get("name") or "").strip() or "Subscribed calendar",
+        "color": data.get("color") or "#64748b",
+        "owner_id": current_user["id"],
+        "owner_name": current_user.get("name", ""),
+        "source_url": url,
+        "event_count": len(events),
+        "visible_to_users": [],
+        "visible_to_locations": [],
+        "last_synced_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.imported_calendars.insert_one(dict(calendar))
+    return {"imported": len(events), "calendar": calendar,
+            "message": f"Subscribed — {len(events)} events added from '{calendar['name']}'"}
 
-    return {"imported": imported, "message": f"Imported {imported} events"}
+
+@router.post("/events/imported-calendars/{calendar_id}/refresh")
+async def refresh_imported_calendar(calendar_id: str, current_user: dict = Depends(get_current_user)):
+    """Re-pull a subscribed calendar: old copies out, fresh ones in."""
+    cal = await db.imported_calendars.find_one({"id": calendar_id}, {"_id": 0})
+    if not cal:
+        raise HTTPException(status_code=404, detail="Imported calendar not found")
+    if cal.get("owner_id") != current_user["id"] and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only the person who imported this calendar can refresh it")
+    if not cal.get("source_url"):
+        raise HTTPException(status_code=400, detail="This calendar was pasted in, so there is no link to refresh. Import it again to update it.")
+    text = await _fetch_ical(cal["source_url"])
+    events = await _parse_ical_events(text, current_user, calendar_id)
+    await db.events.delete_many({"calendar_id": calendar_id})
+    if events:
+        await db.events.insert_many(events)
+        if cal.get("visible_to_users"):
+            await db.events.update_many({"calendar_id": calendar_id},
+                                        {"$set": {"visible_to": cal["visible_to_users"]}})
+    await db.imported_calendars.update_one({"id": calendar_id}, {"$set": {
+        "event_count": len(events), "last_synced_at": datetime.now(timezone.utc).isoformat()}})
+    return {"imported": len(events), "message": f"Refreshed — {len(events)} events now showing"}
+
+
+@router.post("/events/import/ical")
+async def import_calendar_ical(data: dict, current_user: dict = Depends(get_current_user)):
+    """Import events from iCal text content.
+
+    iter383 — the imported events now belong to a named *calendar*
+    (`imported_calendars`) so it can be toggled, shared or removed as a unit
+    instead of being 200 loose rows only the importer could ever see.
+    """
+    ical_text = data.get("ical_content", "")
+    if not ical_text:
+        raise HTTPException(status_code=400, detail="No iCal content provided")
+
+    calendar_id = f"ical_{uuid.uuid4().hex[:10]}"
+    events = await _parse_ical_events(ical_text, current_user, calendar_id)
+    imported = len(events)
+    if events:
+        await db.events.insert_many(events)
+    calendar = {
+        "id": calendar_id,
+        "name": (data.get("name") or "").strip() or f"Imported calendar {datetime.now(timezone.utc).strftime('%d %b %Y')}",
+        "color": data.get("color") or "#64748b",
+        "owner_id": current_user["id"],
+        "owner_name": current_user.get("name", ""),
+        "source_url": (data.get("source_url") or "").strip(),
+        "event_count": imported,
+        "visible_to_users": [],
+        "visible_to_locations": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.imported_calendars.insert_one(dict(calendar))
+    return {"imported": imported, "calendar": calendar,
+            "message": f"Imported {imported} events into '{calendar['name']}'"}
+
+
+async def _visible_calendar_ids(current_user: dict) -> set:
+    """Imported calendars this person may see: their own, ones shared with them
+    directly, and ones shared with a campus/location they belong to."""
+    uid = current_user["id"]
+    user_locs = set(current_user.get("location_ids") or [])
+    if current_user.get("location_id"):
+        user_locs.add(current_user["location_id"])
+    if current_user.get("active_campus_id"):
+        user_locs.add(current_user["active_campus_id"])
+    q = {"$or": [{"owner_id": uid}, {"visible_to_users": uid}]}
+    if user_locs:
+        q["$or"].append({"visible_to_locations": {"$in": list(user_locs)}})
+    rows = await db.imported_calendars.find(q, {"_id": 0, "id": 1}).to_list(200)
+    return {r["id"] for r in rows}
+
+
+@router.get("/events/imported-calendars")
+async def list_imported_calendars(current_user: dict = Depends(get_current_user)):
+    """Imported calendars I own or that someone shared with me."""
+    visible = await _visible_calendar_ids(current_user)
+    rows = await db.imported_calendars.find({"id": {"$in": list(visible)}}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    for r in rows:
+        r["is_owner"] = r.get("owner_id") == current_user["id"]
+        r["event_count"] = await db.events.count_documents({"calendar_id": r["id"]})
+    return {"calendars": rows}
+
+
+@router.put("/events/imported-calendars/{calendar_id}/share")
+async def share_imported_calendar(calendar_id: str, data: dict, current_user: dict = Depends(get_current_user)):
+    """Share my imported calendar with specific people, campuses or locations.
+
+    Body: {user_ids: [...], location_ids: [...]} — the full list replaces the
+    previous one, so unticking somebody actually removes their access.
+    """
+    cal = await db.imported_calendars.find_one({"id": calendar_id}, {"_id": 0})
+    if not cal:
+        raise HTTPException(status_code=404, detail="Imported calendar not found")
+    if cal.get("owner_id") != current_user["id"] and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only the person who imported this calendar can share it")
+    users = [u for u in (data.get("user_ids") or []) if u]
+    locs = [l for l in (data.get("location_ids") or []) if l]
+    await db.imported_calendars.update_one({"id": calendar_id}, {"$set": {
+        "visible_to_users": users, "visible_to_locations": locs,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    # Keep the per-event list in step so older viewers keep working.
+    await db.events.update_many({"calendar_id": calendar_id}, {"$set": {"visible_to": users}})
+    return await db.imported_calendars.find_one({"id": calendar_id}, {"_id": 0})
+
+
+@router.delete("/events/imported-calendars/{calendar_id}")
+async def delete_imported_calendar(calendar_id: str, current_user: dict = Depends(get_current_user)):
+    """Remove an imported calendar and the events that came with it."""
+    cal = await db.imported_calendars.find_one({"id": calendar_id}, {"_id": 0})
+    if not cal:
+        raise HTTPException(status_code=404, detail="Imported calendar not found")
+    if cal.get("owner_id") != current_user["id"] and not is_system_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only the person who imported this calendar can remove it")
+    removed = await db.events.delete_many({"calendar_id": calendar_id})
+    await db.imported_calendars.delete_one({"id": calendar_id})
+    return {"message": f"Removed '{cal.get('name')}' and {removed.deleted_count} events"}
+
+
+@router.post("/events/imported-calendars/sync-stale")
+async def sync_my_stale_calendars(current_user: dict = Depends(get_current_user)):
+    """Opportunistic refresh — the calendar page calls this on open so a
+    subscribed feed is current without waiting for the 15-minute cron."""
+    from routers.cron import sync_subscribed_calendars
+    return await sync_subscribed_calendars(stale_minutes=15, owner_id=current_user["id"])
+
+
+@router.get("/events/calendar-prefs")
+async def get_calendar_prefs(current_user: dict = Depends(get_current_user)):
+    """Which calendars this person has switched off. Everything is on until
+    they untick something, so a new user sees the whole picture."""
+    row = await db.calendar_prefs.find_one({"user_id": current_user["id"]}, {"_id": 0}) or {}
+    return {
+        "hidden_location_ids": row.get("hidden_location_ids") or [],
+        "hidden_calendar_ids": row.get("hidden_calendar_ids") or [],
+        "hidden_types": row.get("hidden_types") or [],
+        "show_holidays": row.get("show_holidays", True),
+        "task_scope": row.get("task_scope") or "campus",
+    }
+
+
+@router.put("/events/calendar-prefs")
+async def save_calendar_prefs(data: dict, current_user: dict = Depends(get_current_user)):
+    update = {k: v for k, v in data.items()
+              if k in ("hidden_location_ids", "hidden_calendar_ids", "hidden_types", "show_holidays", "task_scope")}
+    update["user_id"] = current_user["id"]
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.calendar_prefs.update_one({"user_id": current_user["id"]}, {"$set": update}, upsert=True)
+    return await get_calendar_prefs(current_user)
 
 
 
@@ -944,6 +1189,7 @@ async def update_event(event_id: str, data: EventUpdate, force: bool = Query(Fal
                 "conflict": conflict,
                 "can_override": _can_override_conflict(current_user),
             })
+    await _validate_event_money_and_dates({**existing, **update_data})
     result = await db.events.update_one({"id": event_id}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -2541,7 +2787,28 @@ async def mark_booking_paid(booking_id: str, data: dict, current_user: dict = De
         "transaction_ref": data.get("transaction_ref", ""),
         "payment_notes": data.get("notes", ""),
     }})
-    return {"message": "Booking marked as paid"}
+    # iter383 — ticket money now reaches the books. Public ticket sales used to
+    # post nothing at all, so event income never showed up in finance.
+    posted = False
+    post_error = ""
+    fresh = await db.public_bookings.find_one({"id": booking_id}, {"_id": 0})
+    if fresh.get("event_id") and float(fresh.get("total") or 0) > 0:
+        event = await db.events.find_one({"id": fresh["event_id"]}, {"_id": 0}) or {}
+        try:
+            from routers.finance.postings import post_event_ticket_sale
+            je = await post_event_ticket_sale(fresh, event, current_user)
+            posted = bool(je)
+            if je:
+                await db.public_bookings.update_one({"id": booking_id}, {"$set": {
+                    "finance_je_id": je["id"], "finance_posted": True}})
+        except Exception as ex:
+            post_error = str(ex)
+            logger.warning(f"ticket sale posting failed for {booking_id}: {ex}")
+            await db.public_bookings.update_one({"id": booking_id}, {"$set": {
+                "finance_posted": False, "finance_post_error": post_error[:300]}})
+    return {"message": "Booking marked as paid",
+            "finance_posted": posted,
+            "finance_post_error": post_error}
 
 
 @router.get("/public/bookings/pending-payments")

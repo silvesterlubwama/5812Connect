@@ -2,7 +2,7 @@
 // One canvas for events + tasks, three view modes (month/week/day), a
 // visibility toggle for task scope, an event/task detail drawer, quick create,
 // and shareable public feed URLs (JSON + iCal).
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat, Share2, Copy, Check, Link as LinkIcon, X, Calendar as CalIcon, MapPin, Filter, Clock, Users as UsersIcon, BookOpen } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -18,6 +18,9 @@ import { TicketTiersEditor } from '../components/TicketTiersEditor';
 import { EventDetailTabs } from '../components/EventDetailTabs';
 import { HolidayPolicyDialog } from '../components/HolidayPolicyDialog';
 import { EventVenuePicker } from '../components/EventVenuePicker';
+import { CalendarsPanel } from '../components/calendar/CalendarsPanel';
+import { EventTypesDialog } from '../components/calendar/EventTypesDialog';
+import api from '../services/api';
 import { secureStorage } from '../services/secureStorage';
 import { useAuth } from '../context/AuthContext';
 import { useAutoTranslate } from '../hooks/useAutoTranslate';
@@ -90,11 +93,18 @@ export default function CalendarPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [holidayItem, setHolidayItem] = useState(null);
   const [createKind, setCreateKind] = useState('event');
-  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
+  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), end_date: '', time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 5, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
   const [saving, setSaving] = useState(false);
   const [boards, setBoards] = useState([]);
   const [locations, setLocations] = useState([]);
   const [venues, setVenues] = useState([]);
+  // iter383 — event types come from the DB so staff can add/rename/recolour them,
+  // and the per-user "my calendars" ticks decide what actually renders.
+  const [eventTypes, setEventTypes] = useState([]);
+  const [importedCalendars, setImportedCalendars] = useState([]);
+  const [staffUsers, setStaffUsers] = useState([]);
+  const [prefs, setPrefs] = useState({ hidden_location_ids: [], hidden_calendar_ids: [], show_holidays: true, task_scope: 'campus' });
+  const [showEventTypes, setShowEventTypes] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [showRecurring, setShowRecurring] = useState(false);
   // iter373 — "this date only" vs "this and all later dates" prompt
@@ -147,7 +157,7 @@ export default function CalendarPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [evtRes, sessRes, progRes, taskRes, boardsRes, locsRes, venuesRes] = await Promise.all([
+      const [evtRes, sessRes, progRes, taskRes, boardsRes, locsRes, venuesRes, typesRes, calsRes, prefsRes] = await Promise.all([
         eventsApi.list().catch(() => ({ data: [] })),
         outreachApi.sessions().catch(() => ({ data: [] })),
         outreachApi.programs().catch(() => ({ data: [] })),
@@ -155,6 +165,9 @@ export default function CalendarPage() {
         boardsApi.list().catch(() => ({ data: [] })),
         locationsApi.list().catch(() => ({ data: [] })),
         venuesApi.list().catch(() => ({ data: [] })),
+        api.get('/event-types').catch(() => ({ data: [] })),
+        api.get('/events/imported-calendars').catch(() => ({ data: { calendars: [] } })),
+        api.get('/events/calendar-prefs').catch(() => ({ data: null })),
       ]);
       // Convert outreach sessions to event-like objects
       const progMap = Object.fromEntries((progRes.data || []).map(p => [p.id, p]));
@@ -174,25 +187,93 @@ export default function CalendarPage() {
       setBoards(boardsRes.data || []);
       setLocations(locsRes.data || []);
       setVenues(venuesRes.data || []);
+      setEventTypes(typesRes.data || []);
+      setImportedCalendars(calsRes.data?.calendars || []);
+      if (prefsRes.data) {
+        setPrefs(prefsRes.data);
+        setTaskScope(prefsRes.data.task_scope || 'campus');
+        setShowHolidays(prefsRes.data.show_holidays !== false);
+      }
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Opportunistic sync: opening the calendar pulls any subscribed feed that
+  // hasn't been checked in the last 15 minutes (the cron covers the rest).
+  useEffect(() => {
+    api.post('/events/imported-calendars/sync-stale')
+      .then(r => { if (r.data?.refreshed) loadAll(); })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Users list only matters when sharing an imported calendar — fetch lazily.
+  useEffect(() => {
+    if (!importedCalendars.some(c => c.is_owner)) return;
+    api.get('/admin/users').then(r => {
+      const rows = Array.isArray(r.data) ? r.data : (r.data?.users || []);
+      setStaffUsers(rows.filter(u => u.id !== user?.id).map(u => ({ id: u.id, name: u.name, email: u.email })));
+    }).catch(() => setStaffUsers([]));
+  }, [importedCalendars, user?.id]);
+
+  const savePrefs = useCallback(async (patch) => {
+    const next = { ...prefs, ...patch };
+    setPrefs(next);
+    if (patch.task_scope) setTaskScope(patch.task_scope);
+    if (patch.show_holidays !== undefined) setShowHolidays(patch.show_holidays);
+    try { await api.put('/events/calendar-prefs', next); } catch { /* local view still correct */ }
+  }, [prefs]);
+
+  const reloadCalendars = useCallback(async () => {
+    const [calsRes, evtRes] = await Promise.all([
+      api.get('/events/imported-calendars').catch(() => ({ data: { calendars: [] } })),
+      eventsApi.list().catch(() => ({ data: [] })),
+    ]);
+    setImportedCalendars(calsRes.data?.calendars || []);
+    setRawEvents(evtRes.data || []);
+  }, []);
+
+  const typeMap = useMemo(() => Object.fromEntries((eventTypes || []).map(t => [t.name, t])), [eventTypes]);
+  const selectableTypes = useMemo(() => (eventTypes || []).map(t => ({ name: t.name, label: t.label || t.name })), [eventTypes]);
+  const typeHex = useCallback((type) => typeMap[type]?.color, [typeMap]);
+  const venueCapacity = useCallback((venueId) => {
+    const v = venues.find(x => x.id === venueId) || locations.find(x => x.id === venueId);
+    return v?.capacity ? parseInt(v.capacity) : null;
+  }, [venues, locations]);
+
   // Expand multi-day events into every day and merge tasks (scoped by taskScope).
   const items = useMemo(() => {
     const out = [];
-    for (const ev of rawEvents) {
-      if (!ev.end_date || ev.end_date === ev.date) { out.push({ ...ev, _kind: 'event' }); continue; }
+    const hiddenLocs = new Set(prefs.hidden_location_ids || []);
+    const hiddenCals = new Set(prefs.hidden_calendar_ids || []);
+    // "My calendars" ticks: an unticked campus or imported calendar simply
+    // doesn't render — nothing is deleted, it's a view switch.
+    const visible = rawEvents.filter(ev => {
+      if (ev.calendar_id && hiddenCals.has(ev.calendar_id)) return false;
+      if (ev.location_id && hiddenLocs.has(ev.location_id)) return false;
+      return true;
+    });
+    for (const ev of visible) {
+      if (!ev.end_date || ev.end_date === ev.date) { out.push({ ...ev, _kind: 'event', _eventId: ev.id }); continue; }
       try {
         const s = new Date(ev.date + 'T00:00:00');
         const e = new Date(ev.end_date + 'T00:00:00');
-        if (isNaN(s) || isNaN(e) || e < s) { out.push({ ...ev, _kind: 'event' }); continue; }
+        if (isNaN(s) || isNaN(e) || e < s) { out.push({ ...ev, _kind: 'event', _eventId: ev.id }); continue; }
         let c = new Date(s); let idx = 1;
         while (c <= e) {
-          out.push({ ...ev, _kind: 'event', date: iso(c), id: iso(c) === ev.date ? ev.id : `${ev.id}_d${idx}`, _multiDay: true });
+          // The per-day copies need their own React key, but every write must
+          // still go to the REAL event — editing day 2 used to 404.
+          const isStart = iso(c) === ev.date;
+          const isEnd = iso(c) === ev.end_date;
+          out.push({
+            ...ev, _kind: 'event', _eventId: ev.id, date: iso(c),
+            id: isStart ? ev.id : `${ev.id}_d${idx}`,
+            _multiDay: true, _spanStart: isStart, _spanEnd: isEnd,
+            _spanDay: idx, _spanTotal: Math.round((e - s) / 86400000) + 1,
+          });
           c = addDays(c, 1); idx += 1;
         }
-      } catch { out.push({ ...ev, _kind: 'event' }); }
+      } catch { out.push({ ...ev, _kind: 'event', _eventId: ev.id }); }
     }
     if (taskScope !== 'off') {
       const myId = user?.id;
@@ -231,7 +312,7 @@ export default function CalendarPage() {
       }
     }
     return out;
-  }, [rawEvents, rawTasks, taskScope, user?.id, holidays, showHolidays]);
+  }, [rawEvents, rawTasks, taskScope, user?.id, holidays, showHolidays, prefs]);
 
   // Item bucketing by ISO date for fast rendering
   const byDate = useMemo(() => {
@@ -241,7 +322,14 @@ export default function CalendarPage() {
       if (!m.has(it.date)) m.set(it.date, []);
       m.get(it.date).push(it);
     }
-    for (const arr of m.values()) arr.sort((a, b) => (a.time || 'z').localeCompare(b.time || 'z'));
+    // Order each day like a real calendar: all-day and multi-day runs sit at
+    // the top, then timed items earliest first.
+    const rank = (x) => (x._multiDay ? 0 : (x.time ? 2 : 1));
+    for (const arr of m.values()) {
+      arr.sort((a, b) => rank(a) - rank(b)
+        || (a.time || '').localeCompare(b.time || '')
+        || (a.title || '').localeCompare(b.title || ''));
+    }
     return m;
   }, [items]);
 
@@ -286,19 +374,20 @@ export default function CalendarPage() {
       time: it.time || '', end_time: it.end_time || '', location: it.location || '',
       description: it.description || '', type: it.type || 'meeting',
       venue_id: it.venue_id || '', location_id: it.location_id || '',
-      capacity: it.capacity ?? 100, is_public: it.is_public ?? false,
+      capacity: it.capacity ?? 5, is_public: it.is_public ?? false,
       is_free: it.is_free !== false, price: it.price ?? null,
       ticket_tiers: it.ticket_tiers || [],
     });
     // Pull the full record so Registrations / Check-ins / Waitlist are live.
-    eventsApi.get(it.id).then(r => setSelected(s => (s && s.id === it.id ? { ...s, ...r.data } : s))).catch(() => {});
+    const realId = it._eventId || it.id;
+    eventsApi.get(realId).then(r => setSelected(s => (s && (s._eventId || s.id) === realId ? { ...s, ...r.data, _eventId: realId } : s))).catch(() => {});
   };
   const refreshSelected = async () => {
     if (!selected) return;
-    try { const r = await eventsApi.get(selected.id); setSelected(s => ({ ...s, ...r.data })); } catch { /* ignore */ }
+    try { const r = await eventsApi.get(selected._eventId || selected.id); setSelected(s => ({ ...s, ...r.data })); } catch { /* ignore */ }
   };
   const duplicateSelected = async () => {
-    try { await eventsApi.duplicate(selected.id); toast.success('Event duplicated'); setSelected(null); loadAll(); }
+    try { await eventsApi.duplicate(selected._eventId || selected.id); toast.success('Event duplicated'); setSelected(null); loadAll(); }
     catch { toast.error('Duplicate failed'); }
   };
   const saveEdit = async (e, scope) => {
@@ -309,15 +398,18 @@ export default function CalendarPage() {
     try {
       const payload = { ...editForm };
       if (!payload.end_date || payload.end_date === payload.date) delete payload.end_date;
-      const res = await eventsApi.update(selected.id, payload, scope === 'future' ? { scope: 'future' } : {});
+      const res = await eventsApi.update(selected._eventId || selected.id, payload, scope === 'future' ? { scope: 'future' } : {});
       toast.success(scope === 'future' ? `Updated ${res.data?.series_updated || 1} dates in the series` : 'Event updated');
       setSelected({ ...selected, ...res.data });
       setEditMode(false);
       setSeriesAsk(null);
       loadAll();
     } catch (err) {
+      // Say what actually went wrong — a silent "Failed to update" hid a 404
+      // on multi-day copies and the new "set a ticket price" rule.
+      const detail = err.response?.data?.detail;
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
-      else toast.error('Failed to update event');
+      else toast.error(typeof detail === 'string' ? detail : (detail?.message || 'Failed to update event'));
     }
     finally { setSavingEdit(false); }
   };
@@ -326,16 +418,16 @@ export default function CalendarPage() {
     if (selected.series_id && !scope) { setSeriesAsk({ action: 'delete' }); return; }
     if (!scope && !window.confirm('Delete this event?')) return;
     try {
-      const res = await eventsApi.delete(selected.id, scope === 'future' ? { scope: 'future' } : {});
+      const res = await eventsApi.delete(selected._eventId || selected.id, scope === 'future' ? { scope: 'future' } : {});
       toast.success(res.data?.message || 'Event deleted');
       setSeriesAsk(null); setSelected(null); loadAll();
-    } catch { toast.error('Failed to delete'); }
+    } catch (err) { toast.error(err.response?.data?.detail || 'Failed to delete'); }
   };
   const submitCreate = async (e) => {
     e.preventDefault(); setSaving(true);
     try {
       if (createKind === 'event') {
-        const payload = { title: createForm.title, type: createForm.type, date: createForm.date, time: createForm.time || undefined, end_time: createForm.end_time || undefined, location: createForm.location, venue_id: createForm.venue_id || undefined, location_id: createForm.location_id || undefined, description: createForm.description, is_public: createForm.is_public, capacity: parseInt(createForm.capacity) || 100, is_free: createForm.is_free !== false, price: createForm.is_free === false ? (parseFloat(createForm.price) || 0) : null, ticket_tiers: createForm.is_free === false ? (createForm.ticket_tiers || []) : [] };
+        const payload = { title: createForm.title, type: createForm.type, date: createForm.date, end_date: createForm.end_date || undefined, time: createForm.time || undefined, end_time: createForm.end_time || undefined, location: createForm.location, venue_id: createForm.venue_id || undefined, location_id: createForm.location_id || undefined, description: createForm.description, is_public: createForm.is_public, capacity: parseInt(createForm.capacity) || 5, is_free: createForm.is_free !== false, price: createForm.is_free === false ? (parseFloat(createForm.price) || 0) : null, ticket_tiers: createForm.is_free === false ? (createForm.ticket_tiers || []) : [] };
         if (createForm.repeats) {
           // iter373 — repeating straight from this form, so the campus and
           // venue already chosen here travel to every occurrence.
@@ -374,7 +466,7 @@ export default function CalendarPage() {
         toast.success('Task created');
       }
       setShowCreate(false);
-      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 100, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
+      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), end_date: '', time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 5, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
       loadAll();
     } catch (err) {
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
@@ -426,13 +518,97 @@ export default function CalendarPage() {
   // translation file; they go through the AI translator, which caches.
   const txTitle = useAutoTranslate(items.map(i => i.title));
 
-  const CellItem = ({ it }) => (
-    <div onClick={(e) => { e.stopPropagation(); openItem(it); }}
-         className={`text-[10px] px-1 py-0.5 rounded truncate cursor-pointer hover:opacity-80 ${it._kind === 'task' ? `${TYPE_COLORS.task} text-white` : it._kind === 'holiday' ? `text-white ${TYPE_COLORS[it.type] || 'bg-slate-500'}` : `text-white ${it._authoredByMe ? TYPE_COLORS.user_event : (TYPE_COLORS[it.type] || 'bg-slate-500')}`}`}
-         title={it.title} data-testid={`cal-item-${it.id}`}>
-      {it.time && <span className="opacity-80">{it.time} </span>}{txTitle(it.title)}
-    </div>
-  );
+  // Types staff invented in Settings carry a hex colour instead of a tailwind
+  // class, so fall back to an inline background for those.
+  const customHex = (it) => (it._kind === 'event' && !it._authoredByMe
+    && !TYPE_COLORS[it.type] && typeHex(it.type)) ? typeHex(it.type) : undefined;
+
+  // Drag to reschedule: dragging the bar moves the whole event (keeping its
+  // length), dragging the right-hand grip stretches its end date.
+  const dragRef = useRef(null);
+  const [dragOverDate, setDragOverDate] = useState(null);
+
+  const startDrag = (it, mode) => (e) => {
+    e.stopPropagation();
+    if (it._kind !== 'event' || it._readOnly) return;
+    dragRef.current = { id: it._eventId || it.id, mode, date: it.date, start: it.date, end: it.end_date || it.date, title: it.title, series_id: it.series_id };
+    if (it._multiDay) dragRef.current.start = it.start_date_original || it.date;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', it._eventId || it.id);
+  };
+
+  const dropOnDate = async (dateStr) => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag || !dateStr) return;
+    const src = rawEvents.find(ev => ev.id === drag.id);
+    if (!src) return;
+    const startIso = src.date;
+    const endIso = src.end_date || src.date;
+    let payload;
+    if (drag.mode === 'resize') {
+      if (dateStr < startIso) { toast.error("An event can't end before it starts"); return; }
+      if (dateStr === endIso) return;
+      payload = { end_date: dateStr === startIso ? '' : dateStr };
+    } else {
+      if (dateStr === startIso) return;
+      const lengthDays = Math.round((new Date(endIso) - new Date(startIso)) / 86400000);
+      const newEnd = iso(addDays(new Date(dateStr + 'T00:00:00'), lengthDays));
+      payload = { date: dateStr, end_date: lengthDays > 0 ? newEnd : '' };
+    }
+    // Optimistic — the grid moves under the cursor, then we confirm with the API.
+    setRawEvents(prev => prev.map(ev => ev.id === drag.id ? { ...ev, ...payload, end_date: payload.end_date || null } : ev));
+    try {
+      await eventsApi.update(drag.id, { ...payload, end_date: payload.end_date || null });
+      toast.success(drag.mode === 'resize'
+        ? `"${src.title}" now runs to ${payload.end_date || startIso}`
+        : `"${src.title}" moved to ${dateStr}`);
+      if (src.series_id) toast.info('Only this date in the series was changed');
+      loadAll();
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      toast.error(err.response?.status === 409 ? 'Venue already booked for that time'
+        : (typeof detail === 'string' ? detail : 'Could not move the event'));
+      loadAll();
+    }
+  };
+
+  const CellItem = ({ it }) => {
+    // A multi-day run reads as ONE bar across the week: square inner edges,
+    // the title only where it starts, and arrows where it carries on.
+    const span = it._multiDay
+      ? `${it._spanStart ? 'rounded-l' : 'rounded-l-none -ml-1 pl-1'} ${it._spanEnd ? 'rounded-r' : 'rounded-r-none -mr-1 pr-1'}`
+      : 'rounded';
+    return (
+      <div onClick={(e) => { e.stopPropagation(); openItem(it); }}
+           draggable={it._kind === 'event' && !it._readOnly}
+           onDragStart={startDrag(it, 'move')}
+           onDragEnd={() => { dragRef.current = null; setDragOverDate(null); }}
+           className={`group relative text-[10px] px-1 py-0.5 truncate cursor-pointer hover:opacity-80 ${span} ${it._kind === 'task' ? `${TYPE_COLORS.task} text-white` : it._kind === 'holiday' ? `text-white ${TYPE_COLORS[it.type] || 'bg-slate-500'}` : `text-white ${it._authoredByMe ? TYPE_COLORS.user_event : (TYPE_COLORS[it.type] || 'bg-slate-500')}`}`}
+           style={customHex(it) ? { backgroundColor: customHex(it) } : undefined}
+           title={it._multiDay ? `${it.title} — day ${it._spanDay} of ${it._spanTotal} (drag to move, drag the right edge to extend)` : `${it.title}${it._kind === 'event' ? ' — drag to move, drag the right edge to extend' : ''}`}
+           data-testid={`cal-item-${it.id}`}>
+        {it._multiDay ? (
+          <>
+            {!it._spanStart && <span className="opacity-70 mr-0.5">◀</span>}
+            {it._spanStart && it.time && <span className="opacity-80">{it.time} </span>}
+            {txTitle(it.title)}
+            {!it._spanEnd && <span className="opacity-70 ml-0.5">▶</span>}
+          </>
+        ) : (
+          <>{it.time && <span className="opacity-80">{it.time} </span>}{txTitle(it.title)}</>
+        )}
+        {it._kind === 'event' && !it._readOnly && (!it._multiDay || it._spanEnd) && (
+          <span draggable onDragStart={startDrag(it, 'resize')}
+                onClick={(e) => e.stopPropagation()}
+                onDragEnd={() => { dragRef.current = null; setDragOverDate(null); }}
+                className="absolute right-0 top-0 h-full w-1.5 cursor-ew-resize bg-white/0 group-hover:bg-white/40"
+                title="Drag to extend across days"
+                data-testid={`cal-resize-${it.id}`} />
+        )}
+      </div>
+    );
+  };
 
   const MonthGrid = () => {
     const y = cursor.getFullYear(), m = cursor.getMonth();
@@ -451,13 +627,17 @@ export default function CalendarPage() {
             const isToday = d === today.getDate() && m === today.getMonth() && y === today.getFullYear();
             return (
               <div key={i} onClick={() => d && (setCreateForm(f => ({ ...f, date: dateStr })), setShowCreate(true))}
-                   className={`min-h-[100px] p-1.5 border-b border-r border-border last:border-r-0 ${!d ? 'bg-muted/20' : 'hover:bg-accent/20 transition-colors cursor-pointer'}`}>
+                   onDragOver={(e) => { if (dragRef.current && d) { e.preventDefault(); setDragOverDate(dateStr); } }}
+                   onDragLeave={() => setDragOverDate(od => (od === dateStr ? null : od))}
+                   onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverDate(null); if (d) dropOnDate(dateStr); }}
+                   data-testid={d ? `cal-cell-${dateStr}` : undefined}
+                   className={`min-h-[100px] p-1.5 border-b border-r border-border last:border-r-0 ${!d ? 'bg-muted/20' : 'hover:bg-accent/20 transition-colors cursor-pointer'} ${dragOverDate === dateStr ? 'ring-2 ring-inset ring-primary/60 bg-primary/5' : ''}`}>
                 {d && (
                   <>
                     <span className={`text-sm font-medium inline-flex items-center justify-center w-7 h-7 rounded-full mb-1 ${isToday ? 'bg-primary text-primary-foreground' : ''}`}>{d}</span>
                     <div className="space-y-0.5">
-                      {dayItems.slice(0, 3).map(it => <CellItem key={it.id} it={it} />)}
-                      {dayItems.length > 3 && <p className="text-[10px] text-muted-foreground pl-1">+{dayItems.length - 3} more</p>}
+                      {dayItems.slice(0, 4).map(it => <CellItem key={it.id} it={it} />)}
+                      {dayItems.length > 4 && <p className="text-[10px] text-muted-foreground pl-1">+{dayItems.length - 4} more</p>}
                     </div>
                   </>
                 )}
@@ -496,12 +676,26 @@ export default function CalendarPage() {
             );
           })}
         </div>
+        {/* All-day / multi-day strip — a run across days reads as one bar
+            instead of being dropped into whatever hour it started at. */}
+        <div className="grid border-b border-border bg-muted/10" style={{ gridTemplateColumns: `56px repeat(${cols}, minmax(0, 1fr))` }}>
+          <div className="text-[10px] text-muted-foreground text-right pr-1 py-1">all-day</div>
+          {days.map(d => {
+            const spans = (byDate.get(iso(d)) || []).filter(it => it._multiDay || (!it.time && it._kind !== 'task'));
+            return (
+              <div key={iso(d)} className="border-r border-border last:border-r-0 p-0.5 space-y-0.5 min-h-[22px]"
+                   data-testid={`cal-allday-${iso(d)}`}>
+                {spans.map(it => <CellItem key={it.id} it={it} />)}
+              </div>
+            );
+          })}
+        </div>
         <div className="grid relative" style={{ gridTemplateColumns: `56px repeat(${cols}, minmax(0, 1fr))` }}>
           <div>
             {hours.map(h => <div key={h} className="h-10 pr-1 text-right text-[10px] text-muted-foreground border-b border-border">{h}:00</div>)}
           </div>
           {days.map(d => {
-            const dayItems = byDate.get(iso(d)) || [];
+            const dayItems = (byDate.get(iso(d)) || []).filter(it => !it._multiDay && (it.time || it._kind === 'task'));
             return (
               <div key={iso(d)} className="relative border-r border-border last:border-r-0" onClick={() => (setCreateForm(f => ({ ...f, date: iso(d) })), setShowCreate(true))}>
                 {hours.map(h => <div key={h} className="h-10 border-b border-border hover:bg-accent/10 cursor-pointer" />)}
@@ -515,7 +709,7 @@ export default function CalendarPage() {
                   return (
                     <div key={it.id} onClick={(e) => { e.stopPropagation(); openItem(it); }}
                          className={`absolute left-1 right-1 rounded px-1.5 py-0.5 text-[10px] text-white cursor-pointer hover:opacity-90 ${color} overflow-hidden`}
-                         style={{ top, height }} data-testid={`cal-item-${it.id}`}>
+                         style={{ top, height, ...(customHex(it) ? { backgroundColor: customHex(it) } : {}) }} data-testid={`cal-item-${it.id}`}>
                       <div className="font-semibold truncate">{txTitle(it.title)}</div>
                       {it.time && <div className="opacity-80">{it.time}{it.end_time ? `–${it.end_time}` : ''}</div>}
                     </div>
@@ -546,11 +740,12 @@ export default function CalendarPage() {
               <Button key={v} size="sm" variant={view === v ? 'default' : 'ghost'} className="h-8 rounded-none text-xs capitalize" onClick={() => setView(v)} data-testid={`view-${v}`}>{v}</Button>
             ))}
           </div>
-          {/* Task scope */}
-          <Select value={taskScope} onValueChange={setTaskScope}>
-            <SelectTrigger className="h-8 text-xs w-[170px]" data-testid="task-scope-toggle"><Filter size={13} className="mr-1" /><SelectValue /></SelectTrigger>
-            <SelectContent>{TASK_SCOPES.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}</SelectContent>
-          </Select>
+          {/* Calendars panel (campuses, imported calendars, holidays, tasks) */}
+          <CalendarsPanel
+            locations={locations} calendars={importedCalendars} prefs={prefs}
+            onPrefsChange={savePrefs} onCalendarsChanged={reloadCalendars}
+            users={staffUsers} onManageTypes={() => setShowEventTypes(true)}
+          />
           <Button variant="outline" size="icon" onClick={goPrev} data-testid="cal-prev"><ChevronLeft size={16} /></Button>
           <Button variant="outline" size="sm" onClick={goToday} data-testid="cal-today">Today</Button>
           <Button variant="outline" size="icon" onClick={goNext} data-testid="cal-next"><ChevronRight size={16} /></Button>
@@ -568,7 +763,7 @@ export default function CalendarPage() {
               }}><Download size={14} /> Export .ics</Button>
             </PopoverContent>
           </Popover>
-          <Button size="sm" variant={showHolidays ? 'default' : 'outline'} className="h-8 text-xs gap-1" onClick={() => setShowHolidays(v => !v)} data-testid="cal-holidays-toggle" title="Toggle US federal + Ugandan public holidays">
+          <Button size="sm" variant={showHolidays ? 'default' : 'outline'} className="h-8 text-xs gap-1" onClick={() => savePrefs({ show_holidays: !showHolidays })} data-testid="cal-holidays-toggle" title="Toggle US federal + Ugandan public holidays">
             {showHolidays ? '🎉 Holidays on' : 'Holidays off'}
           </Button>
           <Button size="sm" className="gap-1.5" onClick={() => { setCreateKind('event'); setCreateForm(f => ({ ...f, date: iso(cursor) })); setShowCreate(true); }} data-testid="cal-new-btn"><Plus size={14} />New</Button>
@@ -584,15 +779,15 @@ export default function CalendarPage() {
           ['holiday_us', 'US Holiday'],
           ['holiday_ug', 'UG Holiday'],
           ['outreach', 'Outreach'],
-          ['service', 'Service'],
-          ['conference', 'Conference'],
-          ['meeting', 'Meeting'],
-          ['community', 'Community'],
-          ['workshop', 'Workshop'],
-          ['training', 'Training'],
-          ['social', 'Social'],
         ].map(([k, label]) => (
           <div key={k} className="flex items-center gap-1.5"><div className={`w-2.5 h-2.5 rounded-full ${TYPE_COLORS[k] || 'bg-slate-500'}`} /><span>{label}</span></div>
+        ))}
+        {(eventTypes || []).map(t => (
+          <div key={t.id} className="flex items-center gap-1.5" data-testid={`legend-${t.name}`}>
+            <div className={`w-2.5 h-2.5 rounded-full ${TYPE_COLORS[t.name] || ''}`}
+              style={TYPE_COLORS[t.name] ? undefined : { backgroundColor: t.color || '#64748b' }} />
+            <span className="capitalize">{t.label || t.name}</span>
+          </div>
         ))}
       </div>
 
@@ -648,7 +843,7 @@ export default function CalendarPage() {
                 <div><Label>Type</Label>
                   <Select value={editForm.type} onValueChange={v => setEditForm({ ...editForm, type: v })}>
                     <SelectTrigger data-testid="edit-event-type"><SelectValue /></SelectTrigger>
-                    <SelectContent>{Object.keys(TYPE_COLORS).filter(t => t !== 'imported' && t !== 'task' && t !== 'user_event' && !t.startsWith('holiday')).map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}</SelectContent>
+                    <SelectContent>{selectableTypes.map(t => <SelectItem key={t.name} value={t.name} className="capitalize">{t.label}</SelectItem>)}</SelectContent>
                   </Select>
                 </div>
                 <div><Label>Capacity</Label><Input type="number" min="0" value={editForm.capacity ?? ''} onChange={e => setEditForm({ ...editForm, capacity: e.target.value === '' ? null : parseInt(e.target.value) })} data-testid="edit-event-capacity" /></div>
@@ -707,11 +902,19 @@ export default function CalendarPage() {
             {createKind === 'event' && (
               <>
                 <div className="grid grid-cols-2 gap-2">
+                  <div><Label>End date</Label>
+                    <Input type="date" value={createForm.end_date || ''} min={createForm.date}
+                      onChange={e => setCreateForm({ ...createForm, end_date: e.target.value })}
+                      data-testid="create-event-end-date" />
+                    <p className="text-[11px] text-muted-foreground mt-1">Leave blank for a single day.</p>
+                  </div>
                   <div><Label>End time</Label><Input type="time" value={createForm.end_time} onChange={e => setCreateForm({ ...createForm, end_time: e.target.value })} /></div>
-                  <div><Label>Type</Label>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2"><Label>Type</Label>
                     <Select value={createForm.type} onValueChange={v => setCreateForm({ ...createForm, type: v })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>{Object.keys(TYPE_COLORS).filter(t => t !== 'imported' && t !== 'task').map(t => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}</SelectContent>
+                      <SelectTrigger data-testid="create-event-type"><SelectValue /></SelectTrigger>
+                      <SelectContent>{selectableTypes.map(t => <SelectItem key={t.name} value={t.name} className="capitalize">{t.label}</SelectItem>)}</SelectContent>
                     </Select>
                   </div>
                 </div>
@@ -725,7 +928,11 @@ export default function CalendarPage() {
                   </div>
                   <div className="col-span-2"><EventVenuePicker
                     idPrefix="create-venue" value={createForm} venues={venues} locations={locations}
-                    onChange={patch => setCreateForm(f => ({ ...f, ...patch }))}
+                    onChange={patch => setCreateForm(f => ({
+                      ...f, ...patch,
+                      // A venue that holds 40 shouldn't need the number typed again.
+                      ...(patch.venue_id ? { capacity: venueCapacity(patch.venue_id) ?? f.capacity } : {}),
+                    }))}
                     onVenueCreated={reloadVenues}
                   /></div>
                   <div><Label>Capacity</Label><Input type="number" min="0" value={createForm.capacity ?? ''} onChange={e => setCreateForm({ ...createForm, capacity: e.target.value === '' ? '' : parseInt(e.target.value) })} data-testid="create-event-capacity" /></div>
@@ -953,6 +1160,8 @@ export default function CalendarPage() {
         onSaved={loadHolidays}
       />      {/* Import iCal */}
       <ImportIcalDialog open={showImportCal} onOpenChange={setShowImportCal} onImported={loadAll} />
+      <EventTypesDialog open={showEventTypes} onOpenChange={setShowEventTypes}
+        onChanged={() => api.get('/event-types').then(r => setEventTypes(r.data || [])).catch(() => {})} />
     </div>
   );
 }
@@ -1075,26 +1284,47 @@ function RecurringEventsDialog({ open, onOpenChange, onCreated }) {
 
 function ImportIcalDialog({ open, onOpenChange, onImported }) {
   const [content, setContent] = useState('');
+  const [url, setUrl] = useState('');
+  const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const onFile = (e) => {
     const f = e.target.files[0]; if (!f) return;
+    setName(n => n || f.name.replace(/\.(ics|ical)$/i, ''));
     const r = new FileReader(); r.onload = (ev) => setContent(ev.target.result); r.readAsText(f);
   };
   const submit = async () => {
-    if (!content.trim()) return;
+    if (!content.trim() && !url.trim()) return;
     setBusy(true);
-    try { const res = await exportApi.icalImport({ ical_content: content }); toast.success(res.data.message || `Imported ${res.data.imported} events`); onOpenChange(false); setContent(''); onImported?.(); }
-    catch { toast.error('Import failed'); }
+    try {
+      // A webcal:// or https .ics link is fetched server-side and kept as a
+      // subscription that can be refreshed later.
+      const res = url.trim()
+        ? await api.post('/events/import/ical-url', { url: url.trim(), name: name.trim() || undefined })
+        : await exportApi.icalImport({ ical_content: content, name: name.trim() || undefined });
+      toast.success(res.data.message || `Imported ${res.data.imported} events`);
+      onOpenChange(false); setContent(''); setUrl(''); setName('');
+      onImported?.();
+    }
+    catch (e) { toast.error(e.response?.data?.detail || 'Import failed'); }
     finally { setBusy(false); }
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Import Calendar (.ics)</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>Import a calendar</DialogTitle></DialogHeader>
         <div className="space-y-3 mt-2">
-          <div><Label>Upload file</Label><Input type="file" accept=".ics,.ical" onChange={onFile} /></div>
-          <div><Label>Or paste content</Label><Textarea rows={8} value={content} onChange={e => setContent(e.target.value)} placeholder="BEGIN:VCALENDAR..." /></div>
-          <div className="flex gap-2 pt-2"><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><div className="flex-1" /><Button onClick={submit} disabled={busy || !content.trim()}>{busy ? 'Importing…' : 'Import'}</Button></div>
+          <div><Label>Calendar name</Label>
+            <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. My Google Calendar"
+              data-testid="import-cal-name" />
+          </div>
+          <div><Label>Subscribe to a link (webcal:// or .ics URL)</Label>
+            <Input value={url} onChange={e => setUrl(e.target.value)} data-testid="import-cal-url"
+              placeholder="webcal://calendar.google.com/calendar/ical/..." />
+            <p className="text-[11px] text-muted-foreground mt-1">We fetch it for you — paste the secret iCal address from Google, Outlook or Apple Calendar.</p>
+          </div>
+          <div className="border-t pt-3"><Label>Or upload a file</Label><Input type="file" accept=".ics,.ical" onChange={onFile} /></div>
+          <div><Label>Or paste content</Label><Textarea rows={5} value={content} onChange={e => setContent(e.target.value)} placeholder="BEGIN:VCALENDAR..." /></div>
+          <div className="flex gap-2 pt-2"><Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button><div className="flex-1" /><Button onClick={submit} disabled={busy || (!content.trim() && !url.trim())} data-testid="import-cal-submit">{busy ? 'Importing…' : 'Import'}</Button></div>
         </div>
       </DialogContent>
     </Dialog>

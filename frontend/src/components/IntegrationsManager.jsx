@@ -242,7 +242,7 @@ export default function IntegrationsManager() {
 
                 <div className="flex gap-2 pt-1">
                   <Button onClick={saveEmail} disabled={saving} data-testid="email-save-btn">{saving ? 'Saving…' : 'Save'}</Button>
-                  <Button variant="outline" onClick={sendTest} disabled={testing || !settings.email?.resend_api_key_set} title={!settings.email?.resend_api_key_set ? 'Save the key first, then test' : ''} data-testid="email-test-btn">
+                  <Button variant="outline" onClick={sendTest} disabled={testing} data-testid="email-test-btn">
                     <Send size={12} className="mr-1" /> {testing ? 'Sending…' : 'Send test email'}
                   </Button>
                 </div>

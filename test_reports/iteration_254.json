@@ -1,0 +1,52 @@
+{
+  "summary": "iter384 verification: platform crons (event reminders D-1, subscribed calendar sync, opportunistic sync-stale, cron auth + idempotency) AND Calendar drag-to-reschedule (move preserves duration, resize extends end_date, invalid end<start rejected). Backend pytest 5/5 PASS. Frontend drag E2E PASS end-to-end via HTML5 DnD dispatch against September 2026 view (drag source Sept 8 chip + drop target Sept 15 cell both visible without scrolling at 1920x1080). Added data-testid='cal-cell-YYYY-MM-DD' to MonthGrid cells for testability (missing before). No ITER384 leftover events remain in DB.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "detailed_results": {
+    "backend_cron_endpoints_reject_bad_auth": "PASS - /api/cron/event-reminders and /api/cron/calendar-sync return 401 without secret and with wrong bearer.",
+    "backend_cron_idempotency": "PASS - same run_id to /api/cron/calendar-sync returns duplicate=true on second call; db.cron_runs row keyed on {run_id, job}.",
+    "backend_event_reminders_once_per_holder": "PASS - created paid event tomorrow with a booking, triggered cron, polled /api/public/bookings/status until reminder_sent_at populated; second run with a fresh run_id did NOT bump reminder_sent_at (no double-send).",
+    "backend_opportunistic_sync_stale_safe": "PASS - POST /api/events/imported-calendars/sync-stale returns 200 with {refreshed, events, errors} shape even when nothing is stale.",
+    "backend_drag_move_and_resize_payloads": "PASS - PUT /api/events/<id> accepts {date, end_date} shift (preserves duration), accepts isolated {end_date} extension, returns 400 'end date ...' when end_date < start.",
+    "frontend_drag_source_target_visibility": "PASS - at 1920x1080 on September 2026 view: QA_DRAG_iter384 Sept 8 chip at y=353 (bottom 372) and Sept 15 target cell at y=415 (bottom 515) are both fully within the 1080 viewport without any scrolling.",
+    "frontend_move_drag": "PASS - dispatched HTML5 dragstart/dragover/drop from cal-item-<id> to cal-cell-2026-09-15. Toast: '\"QA_DRAG_iter384_5c8d\" moved to 2026-09-15'. GET /api/events/<id> returned date=2026-09-15, end_date=2026-09-17 (duration = 2 extra days preserved).",
+    "frontend_resize_drag_extend": "PASS - resize grip on last-day segment (cal-resize-<id>_d3) drag to cal-cell-2026-09-22 produced toast '\"...\" now runs to 2026-09-22'; backend end_date updated to 2026-09-22.",
+    "frontend_resize_rejects_end_before_start": "PASS - dragging the resize grip to cal-cell-2026-09-01 (before current start 2026-09-15) surfaced the inline toast 'An event can't end before it starts' and the event remained date=2026-09-15, end_date=2026-09-22 (no backend write)."
+  },
+  "leftover_test_events": {
+    "before_run": ["evt_fcf872f4 | 2026-10-09 | ITER384 Reminder Gala 2b7b (not cleaned by backend-test teardown)"],
+    "cleaned_in_this_run": ["evt_fcf872f4 (ITER384 Reminder Gala 2b7b)", "evt_c16a0b29 (QA_DRAG_iter384_5c8d)"],
+    "remaining_after_run": "NONE - all ITER384/QA_DRAG_iter384 events purged.",
+    "unrelated_test_data_still_in_db": "Many TEST_Recurring_* events from iter373 and TEST_Event_* from older iterations remain (not from this run). Also one 'Test Imported Event' on 2026-02-15. These are out of scope for iter384 and were not created today."
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter384_crons_and_drag.py",
+    "/app/test_reports/pytest/iter384.xml",
+    "/app/.screenshots/iter384_sept.png",
+    "/app/.screenshots/iter384_after_move.png"
+  ],
+  "action_items": [
+    "Consider adding a teardown that always deletes 'ITER384 Reminder Gala' events in test_reminder_goes_to_ticket_holders_once (currently the DELETE is in the body and skipped if an assert fails earlier).",
+    "Nice-to-have: Calendar day cells had no data-testid - added `data-testid=cal-cell-YYYY-MM-DD` on the Month grid cell in CalendarPage.jsx so drag-to-reschedule tests can address target cells. Week/Day grid cells still don't have a per-day data-testid (not needed for this iter but worth adding for parity).",
+    "Pre-existing DB cruft: many TEST_Recurring_*/TEST_Event_*/Test Imported Event rows from older iterations. Recommend a one-time bulk cleanup script in /app/scripts/."
+  ],
+  "critical_code_review_comments": [
+    "CalendarPage.jsx dropOnDate uses optimistic setRawEvents followed by eventsApi.update; on 409 it toasts 'Venue already booked' and loadAll(). Good surfacing.",
+    "cron.py _seen_before guard: dedupe key is {run_id, job} so the SAME run_id can be reused across different jobs - correct, and matches the test.",
+    "The resize handle is only rendered on the last day of a multi-day event (`!it._multiDay || it._spanEnd`) which is right, but its data-testid uses the per-day synthetic id (`cal-resize-<realId>_d{idx}`). That's not wrong, just something tests must account for (I did: scanned document.querySelectorAll('[data-testid^=cal-resize-<id>]') and took the last one).",
+    "startDrag reads `it._eventId || it.id` so dragging from a day-N copy correctly routes to the real event id - verified."
+  ],
+  "updated_files": [
+    "/app/frontend/src/pages/CalendarPage.jsx (added data-testid=cal-cell-YYYY-MM-DD on Month grid cells for drag-to-reschedule test targeting)"
+  ],
+  "success_rate": {"backend": "100% (5/5 pytest)", "frontend": "100% (move + resize + reject-bad-resize all pass with on-screen toasts matching source of truth)"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812",
+  "seed_data_creation": "Created and deleted QA_DRAG_iter384_* during this run; final DB has no iter384 artifacts.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter384 drag-to-reschedule works end-to-end. Playwright's native drag_to() does NOT fire the HTML5 DnD handlers against this React calendar - you MUST dispatch 'dragstart', 'dragenter', 'dragover', 'drop', 'dragend' manually with a shared DataTransfer via page.evaluate (see /app/test_reports/iteration_254.json detailed_results). cal-cell-YYYY-MM-DD testid now exists for Month view; Week/Day cells still lack one. The resize handle testid for multi-day events is cal-resize-<id>_d{spanLast}, not plain cal-resize-<id>."
+}
