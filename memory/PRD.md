@@ -2247,3 +2247,32 @@ See `/app/memory/test_credentials.md`.
 - Subscribed webcal/.ics calendars refresh every 15 minutes via platform cron, and also when
   someone opens the calendar page if the feed is more than 15 minutes stale.
 - Cron contract: `.emergent/crons.yml` (2 entries, max 5 allowed) + `WEBHOOK_CRON_SECRET`.
+
+---
+
+## iter385 (2026-06) — requirements added
+
+1. **Task checklist ordering** — a checklist item that is ticked moves to the bottom of the
+   list. (Done — also made the tick save instantly, which the user approved.)
+2. **Passcode-protected full-calendar link for outside viewers** — distinct from the public
+   booking page. An outsider with a passcode sees the WHOLE calendar for the chosen
+   campuses, read-only, and can also subscribe via .ics/webcal using the passcode.
+   User choices: "All events except ones explicitly marked private"; ".ics/webcal subscribe
+   with the passcode"; optional expiry. (Done.)
+3. **Private events** — an event marked private does not show up on other staff calendars
+   unless they are guests, **but it still blocks availability** (everyone else sees an
+   opaque "Busy" block and the venue conflict check still fires). (Done.)
+4. **Ubuntu self-host 405 on login** — diagnosed as DNS/hosting, not code. See CHANGELOG
+   iter385 §4. Still waiting on the user to repoint `www.5812uganda.org` at the appliance.
+
+### Still open from iter385
+- Rotate/retire the default passwords in `seed_data.py` / `routers/admin.py`
+  (`Admin@5812`, `Admin@1234`, `Test@5812!`) — the user asked for the list, has not yet
+  said whether to rotate them or replace the hardcoded default with a random one-time
+  temp password. App is in production, so this is a real exposure.
+
+## iter386 (2026-06) — requirements added
+5. **Hide salaries in the HR employee list behind a view toggle** — amounts masked by
+   default, one Show pay / Hide pay toggle reveals them. (Done.)
+6. **Apex domain** — user wants `5812uganda.org` (not just `www`) served via the tunnel.
+   Needs a second public hostname + its DNS record in Cloudflare. (User action.)

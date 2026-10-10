@@ -2,7 +2,7 @@
 // and renders a compact month grid. Tasks are never included on this feed.
 import React, { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Calendar as CalIcon, MapPin, Clock, Download } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalIcon, MapPin, Clock, Download, Lock } from 'lucide-react';
 import axios from 'axios';
 
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -24,24 +24,58 @@ export default function PublicCalendarPage() {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [cursor, setCursor] = useState(new Date());
+  // Passcode-gated links: the code lives in sessionStorage so a refresh or a
+  // month flip doesn't re-prompt, but closing the tab forgets it.
+  const codeKey = `cal_passcode_${token}`;
+  const [passcode, setPasscode] = useState(() => sessionStorage.getItem(codeKey) || '');
+  const [needsCode, setNeedsCode] = useState(false);
+  const [codeInput, setCodeInput] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [checking, setChecking] = useState(false);
 
   const backend = process.env.REACT_APP_BACKEND_URL || '';
+  const codeQuery = passcode ? `?passcode=${encodeURIComponent(passcode)}` : '';
   const jsonUrl = scope === 'global'
     ? `${backend}/api/public/calendar/global?token=${token}`
     : scope === 'user'
-      ? `${backend}/api/public/calendar/user/${token}`
+      ? `${backend}/api/public/calendar/user/${token}${codeQuery}`
       : `${backend}/api/public/calendar/location/${locationId}?token=${token}`;
   const icalUrl = scope === 'global'
     ? `${backend}/api/public/calendar/global.ics?token=${token}`
     : scope === 'user'
-      ? `${backend}/api/public/calendar/user/${token}.ics`
+      ? `${backend}/api/public/calendar/user/${token}.ics${codeQuery}`
       : `${backend}/api/public/calendar/location/${locationId}.ics?token=${token}`;
 
   useEffect(() => {
     axios.get(jsonUrl)
-      .then(r => setData(r.data))
-      .catch(err => setError(err.response?.status === 404 ? 'Invalid or expired link' : 'Failed to load calendar'));
+      .then(r => { setData(r.data); setNeedsCode(false); setError(null); })
+      .catch(err => {
+        if (err.response?.status === 401) {
+          sessionStorage.removeItem(codeKey);
+          setNeedsCode(true);
+          setCodeError(err.response?.data?.detail === 'passcode_invalid' ? 'That passcode is not right.' : '');
+          return;
+        }
+        setError(err.response?.status === 404 ? (err.response?.data?.detail || 'Invalid or expired link') : 'Failed to load calendar');
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jsonUrl]);
+
+  const submitCode = async (e) => {
+    e.preventDefault();
+    const code = codeInput.trim();
+    if (!code) return;
+    setChecking(true); setCodeError('');
+    try {
+      const r = await axios.get(`${backend}/api/public/calendar/user/${token}?passcode=${encodeURIComponent(code)}`);
+      sessionStorage.setItem(codeKey, code);
+      setPasscode(code);
+      setData(r.data);
+      setNeedsCode(false);
+    } catch (err) {
+      setCodeError(err.response?.status === 401 ? 'That passcode is not right.' : 'Could not open this calendar.');
+    } finally { setChecking(false); }
+  };
 
   const byDate = useMemo(() => {
     const m = new Map();
@@ -76,6 +110,25 @@ export default function PublicCalendarPage() {
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
   const today = new Date();
 
+  if (needsCode) return (
+    <div className="min-h-screen flex items-center justify-center bg-background p-6">
+      <form onSubmit={submitCode} className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-card p-7" data-testid="public-cal-passcode-form">
+        <div className="space-y-1.5">
+          <Lock size={26} className="text-primary" />
+          <h1 className="text-lg font-semibold">This calendar is passcode-protected</h1>
+          <p className="text-sm text-muted-foreground">Enter the passcode you were given to view the schedule.</p>
+        </div>
+        <input type="password" value={codeInput} onChange={e => setCodeInput(e.target.value)} autoFocus
+          placeholder="Passcode" autoComplete="off" data-testid="public-cal-passcode-input"
+          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40" />
+        {codeError && <p className="text-xs text-destructive" data-testid="public-cal-passcode-error">{codeError}</p>}
+        <button type="submit" disabled={checking || !codeInput.trim()} data-testid="public-cal-passcode-submit"
+          className="w-full rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50">
+          {checking ? 'Checking…' : 'View calendar'}
+        </button>
+      </form>
+    </div>
+  );
   if (error) return <div className="min-h-screen flex items-center justify-center bg-background p-6"><div className="max-w-md text-center space-y-2"><CalIcon size={40} className="mx-auto text-muted-foreground" /><h1 className="text-lg font-semibold">{error}</h1><p className="text-sm text-muted-foreground">Please check the link and try again.</p></div></div>;
   if (!data) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-2 border-primary border-t-transparent" /></div>;
 

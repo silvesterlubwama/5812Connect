@@ -167,6 +167,9 @@ class EventCreate(BaseModel):
     country: Optional[str] = None
     ticket_tiers: Optional[List[Dict[str, Any]]] = []
     waitlist_enabled: bool = True
+    # Staff invited to a `visibility: "private"` event. Everyone else sees an
+    # opaque "Busy" block instead of the details.
+    invitee_ids: Optional[List[str]] = []
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -191,6 +194,7 @@ class EventUpdate(BaseModel):
     country: Optional[str] = None
     ticket_tiers: Optional[List[Dict[str, Any]]] = None
     waitlist_enabled: Optional[bool] = None
+    invitee_ids: Optional[List[str]] = None
 
 class TaskCreate(BaseModel):
     title: str

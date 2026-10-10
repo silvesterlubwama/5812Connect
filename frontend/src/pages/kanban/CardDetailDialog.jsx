@@ -58,15 +58,31 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
     finally { setSaving(false); }
   };
 
+  // Ticked items sink below the open ones (each group keeps its own order).
+  const sinkCompleted = (arr) => [...arr.filter(i => !i.completed), ...arr.filter(i => i.completed)];
+
+  // Checklist edits persist straight away — waiting for a blur on another
+  // field used to silently lose ticks.
+  const commitChecklist = async (next) => {
+    setChecklist(next);
+    if (!card) return;
+    try {
+      const res = await tasksApi.update(card.id, { checklist: next });
+      onSaved?.(res.data);
+    } catch { toast.error('Could not save the checklist'); }
+  };
+
   const toggleCheck = (idx) => {
-    const cl = [...checklist];
-    cl[idx] = { ...cl[idx], completed: !cl[idx].completed };
-    setChecklist(cl);
+    const item = { ...checklist[idx], completed: !checklist[idx].completed };
+    const rest = checklist.filter((_, i) => i !== idx);
+    // A freshly ticked item drops to the very bottom; unticking lifts it back
+    // to the end of the still-open items.
+    commitChecklist(item.completed ? [...rest, item] : sinkCompleted([...rest, item]));
   };
 
   const addCheck = () => {
     if (!newCheckItem.trim()) return;
-    setChecklist([...checklist, { text: newCheckItem.trim(), completed: false }]);
+    commitChecklist(sinkCompleted([...checklist, { text: newCheckItem.trim(), completed: false }]));
     setNewCheckItem('');
   };
 
@@ -165,11 +181,13 @@ export function CardDetailDialog({ card, board, boardStaff, onClose, onSaved, on
                 </div>
                 <div className="space-y-1.5">
                   {checklist.map((item, i) => (
-                    <div key={item?.text || item?.label || i} className="flex items-center gap-2 group">
-                      <input type="checkbox" checked={item.completed} className="h-4 w-4 rounded accent-emerald-500" onChange={() => toggleCheck(i)} />
-                      <span className={`text-sm flex-1 ${item.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>{item.text}</span>
+                    <div key={item?.text || item?.label || i} className="flex items-center gap-2 group transition-colors" data-testid={`checklist-item-${i}`}>
+                      <input type="checkbox" checked={!!item.completed} className="h-4 w-4 rounded accent-emerald-500 cursor-pointer"
+                        onChange={() => toggleCheck(i)} data-testid={`checklist-toggle-${i}`} />
+                      <span className={`text-sm flex-1 ${item.completed ? 'line-through text-slate-500' : 'text-slate-200'}`} data-testid={`checklist-text-${i}`}>{item.text}</span>
                       <button className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400"
-                        onClick={() => setChecklist(checklist.filter((_, ci) => ci !== i))}><X size={12} /></button>
+                        data-testid={`checklist-remove-${i}`}
+                        onClick={() => commitChecklist(checklist.filter((_, ci) => ci !== i))}><X size={12} /></button>
                     </div>
                   ))}
                 </div>

@@ -2072,3 +2072,102 @@ invalid-resize all PASS via dispatched HTML5 DnD events.
 Housekeeping: deleted 33 leftover TEST_/QA_/CRONCHECK events (and their bookings) left by
 earlier iterations, so the customer's calendar is clean. NOTE for future tests: Playwright's
 native `drag_to()` does not trigger these HTML5 handlers — dispatch dragstart/dragover/drop.
+
+## iter385 — 2026-06 · Checklist sink-to-bottom, private events, passcode calendar links
+
+**1. Task checklist (`frontend/src/pages/kanban/CardDetailDialog.jsx`)**
+- Ticking an item now drops it to the very bottom of the list; unticking lifts it back to
+  the end of the still-open items (`sinkCompleted` stable partition).
+- Checklist edits (tick, add, delete) persist immediately via `PUT /tasks/{id}` through
+  `commitChecklist`. Before this, a tick was only saved if you happened to blur the title
+  or description afterwards — ticks were silently lost.
+- Added `checklist-item-{i}` / `checklist-toggle-{i}` / `checklist-text-{i}` /
+  `checklist-remove-{i}` test ids.
+
+**2. Private events (`visibility: "private"` + `invitee_ids`)**
+- `models.py`: `invitee_ids` on EventCreate/EventUpdate.
+- `routers/events.py`: `_is_private_event` / `_can_see_private` / `_redact_private_event`.
+  `GET /events` returns an opaque stub (`title: "Busy"`, `type: "busy"`,
+  `private_blocked: true`, dates/times/venue kept, description + location stripped) for
+  anyone who isn't the creator, an invitee, or a system admin — so the slot still blocks
+  everyone's availability without leaking what it is. `GET /events/{id}` → 403 for them.
+- `_find_venue_conflict` reports a private clash as "Private event" instead of its title.
+- Private events are excluded from every share feed (`_fetch_public_events`,
+  `_fetch_events_for_config`).
+- `CalendarPage.jsx`: `PrivacyPicker` (checkbox + campus-scoped guest list) on the create
+  and edit forms, a "Private · N guests" badge on the detail drawer, grey `busy` colour for
+  redacted blocks, and they're non-draggable / non-openable.
+- Staff list now comes from `GET /admin/users/directory` (staff-safe, campus-scoped) and is
+  always loaded — it used to load only when an imported calendar existed.
+
+**3. Passcode-gated whole-calendar share links**
+- `calendar_share_configs` gained `include_all_events`, `requires_passcode`,
+  `passcode_hash` (bcrypt), `expires_at`.
+- `include_all_events` = every event in the chosen campuses, public or internal, EXCEPT
+  anything marked private and except other people's imported feeds. Requires a passcode of
+  4+ chars (400 otherwise).
+- `GET /public/calendar/user/{token}` and `…{token}.ics` take `?passcode=` — 401
+  `passcode_required` / `passcode_invalid`, throttled 10 attempts / 10 min per IP via
+  `enforce_public_rate_limit`. Expired links 404.
+- The hash never leaves the server (`SHARE_CONFIG_PUBLIC_PROJECTION`).
+- `PublicCalendarPage.jsx` shows a passcode screen on 401 and keeps the code in
+  sessionStorage; `CalendarPage.jsx` share dialog gained the whole-calendar checkbox,
+  passcode field, expiry select, and renders the subscribe URL with `?passcode=` baked in
+  right after creation (the plaintext is only known client-side at that moment).
+
+Tests: `backend/tests/test_iter385_private_events_and_passcode_share.py` 4/4. Frontend
+verified by Playwright: sink-to-bottom + untick + instant persistence, privacy picker and
+guest list render, share dialog at 1920 and 390 px with no overflow.
+
+**4. Production 405 on login at www.5812uganda.org — DIAGNOSED, NOT A CODE BUG**
+The hostname does not point at the user's Ubuntu/Docker appliance at all:
+- `5812uganda.org` (apex) has no DNS record; only `www` resolves, to Cloudflare (104.21.x).
+- `POST /api/auth/login` → `405` with `allow: GET, HEAD`, `server: cloudflare` — a
+  static-only host answering a POST. `GET /healthz` returns the SPA index.html instead of
+  Caddy's `ok`, and `GET /api/health` also returns index.html. The appliance's own
+  `backend-1` log shows ONLY `127.0.0.1 GET /api/health` (its internal healthcheck) — zero
+  external traffic.
+- Caddy logs confirm it is listening on `:80` only (`SITE_DOMAIN` unset).
+- Fix is DNS/hosting, not code: point www (and the apex) at the appliance — A record to the
+  host IP, or `docker compose --profile tunnel up -d` with the Cloudflare Tunnel public
+  hostname mapped to `http://caddy:80` — and remove whatever Cloudflare Pages/static
+  project currently claims `www.5812uganda.org`. The shipped bundle is correct: it has no
+  backend URL baked in, so it calls `/api/...` relative to the origin.
+
+## iter386 — 2026-06 · HR pay masking + corrected 405 root cause
+
+**HR pay amounts masked by default (`frontend/src/pages/HRPage.jsx`)**
+- New `showAmounts` state (session-only, defaults to OFF). Salaries tab shows `•••••`
+  instead of `{currency} {base_salary}`; Payslips tab masks net, gross, employer
+  contributions and total cost.
+- One shared "Show pay / Hide pay" Eye/EyeOff toggle rendered in both tab headers
+  (`hr-amounts-toggle`, `hr-amounts-toggle-payslips`) — flipping either reveals both.
+- Amounts inside the Add/Edit Salary dialog and payslip PDFs are untouched (you opened
+  those deliberately).
+- Verified by Playwright: 10 salary rows masked on load, revealed after the toggle, payslip
+  net/gross/employer masked on the other tab, no overflow at 1920.
+
+**405 on login — CORRECTED root cause (supersedes iter385 §4)**
+Earlier conclusion (Cloudflare Pages) was WRONG. The user confirmed: no Pages project,
+cloudflared is running, and the tunnel public hostname is `www.5812uganda.org →
+http://caddy:80`. The tunnel works fine. The decisive clue is `last-modified:
+Wed, 22 Jul 2026 02:57:02 GMT`, identical on `/` and on every `/static/*` asset, plus a
+Caddy-style etag — those are the mtimes baked into the `connect-frontend` Docker image.
+- `appliance/docker-compose.yml:59-73` — the caddy service has NO bind mount for the
+  Caddyfile; both `/srv` and `/etc/caddy/Caddyfile` come from
+  `ghcr.io/silvesterlubwama/connect-frontend:latest`.
+- The box is therefore running a **22 July image**, whose Caddyfile did not proxy `/api/*`
+  on the plain-HTTP `:80` site. Requests arriving from the tunnel with Host
+  `www.5812uganda.org` fall into the file_server, which answers a POST with
+  `405 Allow: GET, HEAD` and answers `/healthz` + `/api/health` with index.html. Exactly
+  the observed behaviour.
+- The CURRENT `appliance/Caddyfile:78-100` `:80` block does have `handle /healthz`,
+  `handle /api/*` → `{$BACKEND_UPSTREAM:backend:8001}` and the websocket route. So the fix
+  is purely `docker compose pull && docker compose up -d` (image refresh), NOT a code or
+  DNS change.
+- Verification after they pull: `curl -s http://localhost/healthz` must print `ok` (not
+  HTML), and `curl -sI https://www.5812uganda.org/ | grep last-modified` must show a recent
+  date. `.github/workflows/docker-publish.yml:12-19` publishes `:latest` on every push to
+  main/master, so if `:latest` is still July they need a successful Actions run first.
+- Separately: the apex `5812uganda.org` still has NO DNS record — needs a second public
+  hostname on the tunnel pointing at the same service.

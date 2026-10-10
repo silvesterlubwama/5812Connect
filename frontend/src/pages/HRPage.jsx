@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import AdminPage from './AdminPage';
-import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench, FileDown, CalendarDays } from 'lucide-react';
+import { Users, DollarSign, FileText, Clock, Plus, Trash2, Send, CheckCircle, CheckCircle2, XCircle, Download, RefreshCw, Settings, Pencil, History, Wrench, FileDown, CalendarDays, Eye, EyeOff } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -193,6 +193,9 @@ export default function HRPage() {
   const [hrSettings, setHrSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showSalary, setShowSalary] = useState(false);
+  // Pay amounts are masked by default so nobody reads a colleague's salary over
+  // your shoulder. The reveal lasts for the browser session only.
+  const [showAmounts, setShowAmounts] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [repairModal, setRepairModal] = useState(null);   // { data, busy, phase }
   const [showPayslipGen, setShowPayslipGen] = useState(false);
@@ -554,7 +557,11 @@ export default function HRPage() {
 
         {/* SALARIES TAB */}
         <TabsContent value="salaries" className="mt-4">
-          <div className="flex justify-end mb-3">
+          <div className="flex justify-end gap-2 mb-3">
+            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowAmounts(v => !v)}
+              data-testid="hr-amounts-toggle" title={showAmounts ? 'Hide pay amounts' : 'Show pay amounts'}>
+              {showAmounts ? <EyeOff size={14} /> : <Eye size={14} />} {showAmounts ? 'Hide pay' : 'Show pay'}
+            </Button>
             <Button size="sm" className="gap-1.5" onClick={() => setShowSalary(true)} data-testid="add-salary-btn"><Plus size={14} /> Add Salary</Button>
           </div>
           {salaries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No salary records yet.</p> : (
@@ -567,7 +574,7 @@ export default function HRPage() {
                       <p className="text-xs text-muted-foreground">{s.staff_role} · {s.department} · {s.pay_frequency}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-bold">{s.currency} {(s.base_salary || 0).toLocaleString()}</p>
+                      <p className="text-sm font-bold" data-testid={`salary-amount-${s.id}`}>{showAmounts ? `${s.currency} ${(s.base_salary || 0).toLocaleString()}` : '•••••'}</p>
                       <p className="text-[10px] text-muted-foreground">{(s.line_items || []).length} line items</p>
                     </div>
                     <div className="flex items-center gap-1">
@@ -662,6 +669,10 @@ export default function HRPage() {
                   }
                 } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
               }}><CheckCircle size={14} /> Run Payday Now</Button>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowAmounts(v => !v)}
+                data-testid="hr-amounts-toggle-payslips" title={showAmounts ? 'Hide pay amounts' : 'Show pay amounts'}>
+                {showAmounts ? <EyeOff size={14} /> : <Eye size={14} />} {showAmounts ? 'Hide pay' : 'Show pay'}
+              </Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowRemittance(true)} data-testid="remittance-btn"><FileText size={14} /> Statutory Remittance</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowManualPayslip(true)} data-testid="manual-payslip-btn"><FileText size={14} /> Manual Payslip</Button>
               <Button size="sm" className="gap-1.5" onClick={() => setShowPayslipGen(true)} data-testid="generate-payslips-btn"><Plus size={14} /> Generate Payslips</Button>
@@ -687,11 +698,13 @@ export default function HRPage() {
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="text-right">
-                        <p className="text-sm font-bold text-green-600">{p.currency} {(p.net_salary || 0).toLocaleString()}</p>
-                        <p className="text-[10px] text-muted-foreground">Gross: {(p.gross_salary || 0).toLocaleString()}</p>
+                        <p className="text-sm font-bold text-green-600" data-testid={`payslip-net-${p.id}`}>{showAmounts ? `${p.currency} ${(p.net_salary || 0).toLocaleString()}` : '•••••'}</p>
+                        <p className="text-[10px] text-muted-foreground">Gross: {showAmounts ? (p.gross_salary || 0).toLocaleString() : '•••••'}</p>
                         {(p.employer_contributions || 0) > 0 && (
                           <p className="text-[10px] text-muted-foreground" data-testid={`payslip-employer-${p.id}`}>
-                            Employer: +{(p.employer_contributions || 0).toLocaleString()} · Cost: {(p.total_cost || 0).toLocaleString()}
+                            {showAmounts
+                              ? `Employer: +${(p.employer_contributions || 0).toLocaleString()} · Cost: ${(p.total_cost || 0).toLocaleString()}`
+                              : 'Employer: ••••• · Cost: •••••'}
                           </p>
                         )}
                       </div>

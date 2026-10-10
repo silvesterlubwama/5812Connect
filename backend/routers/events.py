@@ -56,7 +56,9 @@ async def _find_venue_conflict(venue_id: Optional[str], date: Optional[str],
             return {
                 "source": "event",
                 "id": ev.get("id"),
-                "title": ev.get("title"),
+                # A private event still blocks the venue, but its title must
+                # not leak to whoever is trying to book over it.
+                "title": "Private event" if _is_private_event(ev) else ev.get("title"),
                 "date": ev.get("date"),
                 "end_date": ev.get("end_date"),
                 "time": ev.get("time"),
@@ -220,6 +222,9 @@ async def list_events(search: Optional[str] = None, type: Optional[str] = None, 
     visible_calendars = await _visible_calendar_ids(current_user)
     filtered = []
     for ev in events:
+        if _is_private_event(ev) and not _can_see_private(ev, current_user):
+            filtered.append(_redact_private_event(ev))
+            continue
         if ev.get("type") == "imported" and ev.get("imported_by"):
             if (ev["imported_by"] == uid
                     or uid in (ev.get("visible_to") or [])
@@ -281,6 +286,41 @@ async def _validate_event_money_and_dates(payload: dict) -> None:
                 status_code=400,
                 detail="This event is marked as paid — set a ticket price, or add at least one ticket tier with a price",
             )
+
+
+# ========== PRIVATE EVENTS ==========
+# `visibility: "private"` hides an event's details from every staff member who
+# isn't the creator or an invited guest — but the slot still shows up as an
+# opaque "Busy" block so it keeps blocking everyone's availability (and the
+# venue conflict check below still sees it).
+
+def _is_private_event(ev: dict) -> bool:
+    return (ev.get("visibility") or "") == "private"
+
+
+def _can_see_private(ev: dict, user: dict) -> bool:
+    uid = user.get("id")
+    return (ev.get("created_by") == uid
+            or uid in (ev.get("invitee_ids") or [])
+            or is_system_admin(user))
+
+
+def _redact_private_event(ev: dict) -> dict:
+    return {
+        "id": ev.get("id"),
+        "title": "Busy",
+        "type": "busy",
+        "date": ev.get("date"),
+        "end_date": ev.get("end_date"),
+        "time": ev.get("time"),
+        "end_time": ev.get("end_time"),
+        "status": ev.get("status"),
+        "location_id": ev.get("location_id"),
+        "venue_id": ev.get("venue_id"),
+        "visibility": "private",
+        "is_public": False,
+        "private_blocked": True,
+    }
 
 
 @router.post("/events")
@@ -576,7 +616,7 @@ async def get_calendar_share_links(current_user: dict = Depends(get_current_user
 
 
 async def _fetch_public_events(location_id: Optional[str] = None) -> list:
-    q: dict = {"is_public": True, "status": {"$ne": "cancelled"}}
+    q: dict = {"is_public": True, "status": {"$ne": "cancelled"}, "visibility": {"$ne": "private"}}
     if location_id:
         q["location_id"] = location_id
     return await db.events.find(q, {"_id": 0}).sort("date", 1).to_list(1000)
@@ -637,9 +677,10 @@ async def _fetch_events_for_config(cfg: dict) -> list:
     owner's allowed campus scope (we recompute the descendant set from the
     owner's user doc every request so removing a campus assignment
     immediately narrows what the share link exposes)."""
+    include_all = bool(cfg.get("include_all_events"))
     include_public = bool(cfg.get("include_public_events", True))
     include_private = bool(cfg.get("include_private_events", False))
-    if not include_public and not include_private:
+    if not include_all and not include_public and not include_private:
         return []
     owner = await db.users.find_one({"id": cfg["user_id"]}, {"_id": 0})
     if not owner:
@@ -660,16 +701,24 @@ async def _fetch_events_for_config(cfg: dict) -> list:
         if not allowed:
             return []
     q: dict = {"status": {"$ne": "cancelled"}, "location_id": {"$in": list(allowed)} if allowed else {"$exists": True}}
-    # is_public filter: (public and want public) OR (private and want private)
-    or_clauses = []
-    if include_public:
-        or_clauses.append({"is_public": True})
-    if include_private:
-        or_clauses.append({"$or": [{"is_public": False}, {"is_public": {"$exists": False}}]})
-    if len(or_clauses) == 1:
-        q.update(or_clauses[0])
+    # Events explicitly marked private never travel down a share link, no
+    # matter how the link is configured.
+    q["visibility"] = {"$ne": "private"}
+    if include_all:
+        # "Whole calendar" mode (passcode-gated): everything in scope except
+        # private events and somebody else's imported feeds.
+        q["type"] = {"$ne": "imported"}
     else:
-        q["$or"] = or_clauses
+        # is_public filter: (public and want public) OR (private and want private)
+        or_clauses = []
+        if include_public:
+            or_clauses.append({"is_public": True})
+        if include_private:
+            or_clauses.append({"$or": [{"is_public": False}, {"is_public": {"$exists": False}}]})
+        if len(or_clauses) == 1:
+            q.update(or_clauses[0])
+        else:
+            q["$or"] = or_clauses
     return await db.events.find(q, {"_id": 0}).sort("date", 1).to_list(2000)
 
 
@@ -750,6 +799,9 @@ def _combined_to_ical(events: list, tasks: list, cal_name: str) -> str:
     return body.replace(end_marker, "\r\n" + "\r\n".join(task_lines) + end_marker)
 
 
+SHARE_CONFIG_PUBLIC_PROJECTION = {"_id": 0, "passcode_hash": 0}
+
+
 @router.post("/calendar/share-configs")
 async def create_share_config(data: dict, current_user: dict = Depends(get_current_user)):
     """Create a personalised share link. Body:
@@ -757,11 +809,18 @@ async def create_share_config(data: dict, current_user: dict = Depends(get_curre
       "name": "My weekly plan",                      # label for the link
       "include_public_events": true,
       "include_private_events": false,
+      "include_all_events": false,                   # whole calendar (needs a passcode)
       "include_tasks": false,
       "task_scope": "mine",                          # 'mine' | 'campus'
-      "location_ids": ["loc_419f5d5e", "loc_002"]    # empty = all owner's scope
+      "location_ids": ["loc_419f5d5e", "loc_002"],   # empty = all owner's scope
+      "passcode": "1234",                            # optional gate for outsiders
+      "expires_at": "2026-12-31"                     # optional, empty = never
     }
     """
+    include_all = bool(data.get("include_all_events"))
+    passcode = (data.get("passcode") or "").strip()
+    if include_all and len(passcode) < 4:
+        raise HTTPException(status_code=400, detail="A whole-calendar link needs a passcode of at least 4 characters")
     token = _secrets.token_urlsafe(24)
     cfg = {
         "id": f"cshare_{uuid.uuid4().hex[:10]}",
@@ -770,20 +829,26 @@ async def create_share_config(data: dict, current_user: dict = Depends(get_curre
         "name": (data.get("name") or "My calendar").strip()[:80],
         "include_public_events": bool(data.get("include_public_events", True)),
         "include_private_events": bool(data.get("include_private_events", False)),
+        "include_all_events": include_all,
         "include_tasks": bool(data.get("include_tasks", False)),
         "task_scope": data.get("task_scope") if data.get("task_scope") in ("mine", "campus") else "mine",
         "location_ids": [l for l in (data.get("location_ids") or []) if isinstance(l, str)],
+        "requires_passcode": bool(passcode),
+        "expires_at": (data.get("expires_at") or "").strip() or None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    if passcode:
+        cfg["passcode_hash"] = hash_password(passcode)
     await db.calendar_share_configs.insert_one(cfg)
     cfg.pop("_id", None)
+    cfg.pop("passcode_hash", None)
     return cfg
 
 
 @router.get("/calendar/share-configs")
 async def list_share_configs(current_user: dict = Depends(get_current_user)):
     docs = await db.calendar_share_configs.find(
-        {"user_id": current_user["id"]}, {"_id": 0}
+        {"user_id": current_user["id"]}, SHARE_CONFIG_PUBLIC_PROJECTION
     ).sort("created_at", -1).to_list(50)
     return docs
 
@@ -801,12 +866,29 @@ async def _load_public_config(token: str) -> dict:
     cfg = await db.calendar_share_configs.find_one({"token": token}, {"_id": 0})
     if not cfg:
         raise HTTPException(status_code=404, detail="Invalid or revoked calendar link")
+    expires = cfg.get("expires_at")
+    if expires and datetime.now(timezone.utc).strftime("%Y-%m-%d") > expires[:10]:
+        raise HTTPException(status_code=404, detail="This calendar link has expired")
     return cfg
 
 
+async def _gate_share_passcode(cfg: dict, passcode: Optional[str], request: Request) -> None:
+    """Passcode-protected links let an outsider see the whole calendar, so the
+    check is throttled per IP and the wrong-code answer never reveals whether
+    the token itself is valid."""
+    if not cfg.get("requires_passcode"):
+        return
+    if not passcode:
+        raise HTTPException(status_code=401, detail="passcode_required")
+    await enforce_public_rate_limit(request, f"calshare:{cfg['id']}", 10, 10)
+    if not verify_password(passcode, cfg.get("passcode_hash") or _DUMMY_PASSWORD_HASH):
+        raise HTTPException(status_code=401, detail="passcode_invalid")
+
+
 @router.get("/public/calendar/user/{token}.ics")
-async def public_calendar_user_ical(token: str):
+async def public_calendar_user_ical(token: str, request: Request, passcode: Optional[str] = None):
     cfg = await _load_public_config(token)
+    await _gate_share_passcode(cfg, passcode, request)
     events = await _fetch_events_for_config(cfg)
     tasks = await _fetch_tasks_for_config(cfg)
     ical = _combined_to_ical(events, tasks, cfg.get("name") or "58:12 Calendar")
@@ -816,8 +898,9 @@ async def public_calendar_user_ical(token: str):
 
 
 @router.get("/public/calendar/user/{token}")
-async def public_calendar_user_json(token: str):
+async def public_calendar_user_json(token: str, request: Request, passcode: Optional[str] = None):
     cfg = await _load_public_config(token)
+    await _gate_share_passcode(cfg, passcode, request)
     events = await _fetch_events_for_config(cfg)
     tasks = await _fetch_tasks_for_config(cfg)
     return {
@@ -826,6 +909,7 @@ async def public_calendar_user_json(token: str):
         "includes": {
             "public_events": cfg.get("include_public_events", True),
             "private_events": cfg.get("include_private_events", False),
+            "all_events": cfg.get("include_all_events", False),
             "tasks": cfg.get("include_tasks", False),
             "task_scope": cfg.get("task_scope") or "mine",
         },
@@ -1096,6 +1180,8 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
     event = await db.events.find_one({"id": event_id}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
+    if _is_private_event(event) and not _can_see_private(event, current_user):
+        raise HTTPException(status_code=403, detail="This is a private event — you're not on the guest list")
     # Public signups land in db.public_bookings (see POST /api/public/bookings/event).
     # Legacy / internal registrations may live in db.event_registrations. Merge both
     # so the staff "Registrations" tab shows everyone regardless of entry path.

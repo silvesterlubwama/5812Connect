@@ -4,7 +4,7 @@
 // and shareable public feed URLs (JSON + iCal).
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat, Share2, Copy, Check, Link as LinkIcon, X, Calendar as CalIcon, MapPin, Filter, Clock, Users as UsersIcon, BookOpen } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Download, Upload, Repeat, Share2, Copy, Check, Link as LinkIcon, X, Calendar as CalIcon, MapPin, Filter, Clock, Users as UsersIcon, BookOpen, Lock } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
@@ -47,6 +47,7 @@ const TYPE_COLORS = {
   social:     'bg-orange-500',
   task:       'bg-sky-400',
   imported:   'bg-gray-300',
+  busy:       'bg-slate-400',   // someone else's private event — details hidden
   holiday_us: 'bg-blue-700',
   holiday_ug: 'bg-red-600',
   user_event: 'bg-amber-800',   // brown-ish, for events the current user authored
@@ -93,7 +94,7 @@ export default function CalendarPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [holidayItem, setHolidayItem] = useState(null);
   const [createKind, setCreateKind] = useState('event');
-  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), end_date: '', time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 5, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
+  const [createForm, setCreateForm] = useState({ title: '', type: 'meeting', date: iso(today), end_date: '', time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, visibility: 'internal', invitee_ids: [], capacity: 5, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
   const [saving, setSaving] = useState(false);
   const [boards, setBoards] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -207,14 +208,15 @@ export default function CalendarPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Users list only matters when sharing an imported calendar — fetch lazily.
+  // Campus-scoped staff list — drives both imported-calendar sharing and the
+  // guest list on private events. The directory endpoint is staff-safe
+  // (unlike /admin/users) so non-admins get a populated picker too.
   useEffect(() => {
-    if (!importedCalendars.some(c => c.is_owner)) return;
-    api.get('/admin/users').then(r => {
+    api.get('/admin/users/directory').then(r => {
       const rows = Array.isArray(r.data) ? r.data : (r.data?.users || []);
       setStaffUsers(rows.filter(u => u.id !== user?.id).map(u => ({ id: u.id, name: u.name, email: u.email })));
     }).catch(() => setStaffUsers([]));
-  }, [importedCalendars, user?.id]);
+  }, [user?.id]);
 
   const savePrefs = useCallback(async (patch) => {
     const next = { ...prefs, ...patch };
@@ -253,7 +255,10 @@ export default function CalendarPage() {
       if (ev.location_id && hiddenLocs.has(ev.location_id)) return false;
       return true;
     });
-    for (const ev of visible) {
+    for (const ev0 of visible) {
+      // Someone else's private event arrives redacted as an opaque "Busy"
+      // block — it still takes up the slot but can't be opened or dragged.
+      const ev = ev0.private_blocked ? { ...ev0, _readOnly: true } : ev0;
       if (!ev.end_date || ev.end_date === ev.date) { out.push({ ...ev, _kind: 'event', _eventId: ev.id }); continue; }
       try {
         const s = new Date(ev.date + 'T00:00:00');
@@ -366,6 +371,7 @@ export default function CalendarPage() {
       return;
     }
     if (it._kind === 'holiday') { setHolidayItem(it._holiday); return; }
+    if (it.private_blocked) { toast.info('This slot is blocked by a private event — you are not on the guest list'); return; }
     if (it._isSession) return;
     setSelected(it);
     setEditMode(false);
@@ -375,6 +381,7 @@ export default function CalendarPage() {
       description: it.description || '', type: it.type || 'meeting',
       venue_id: it.venue_id || '', location_id: it.location_id || '',
       capacity: it.capacity ?? 5, is_public: it.is_public ?? false,
+      visibility: it.visibility || 'internal', invitee_ids: it.invitee_ids || [],
       is_free: it.is_free !== false, price: it.price ?? null,
       ticket_tiers: it.ticket_tiers || [],
     });
@@ -427,7 +434,7 @@ export default function CalendarPage() {
     e.preventDefault(); setSaving(true);
     try {
       if (createKind === 'event') {
-        const payload = { title: createForm.title, type: createForm.type, date: createForm.date, end_date: createForm.end_date || undefined, time: createForm.time || undefined, end_time: createForm.end_time || undefined, location: createForm.location, venue_id: createForm.venue_id || undefined, location_id: createForm.location_id || undefined, description: createForm.description, is_public: createForm.is_public, capacity: parseInt(createForm.capacity) || 5, is_free: createForm.is_free !== false, price: createForm.is_free === false ? (parseFloat(createForm.price) || 0) : null, ticket_tiers: createForm.is_free === false ? (createForm.ticket_tiers || []) : [] };
+        const payload = { title: createForm.title, type: createForm.type, date: createForm.date, end_date: createForm.end_date || undefined, time: createForm.time || undefined, end_time: createForm.end_time || undefined, location: createForm.location, venue_id: createForm.venue_id || undefined, location_id: createForm.location_id || undefined, description: createForm.description, is_public: createForm.is_public, capacity: parseInt(createForm.capacity) || 5, is_free: createForm.is_free !== false, price: createForm.is_free === false ? (parseFloat(createForm.price) || 0) : null, ticket_tiers: createForm.is_free === false ? (createForm.ticket_tiers || []) : [], visibility: createForm.visibility || 'internal', invitee_ids: createForm.visibility === 'private' ? (createForm.invitee_ids || []) : [] };
         if (createForm.repeats) {
           // iter373 — repeating straight from this form, so the campus and
           // venue already chosen here travel to every occurrence.
@@ -466,7 +473,7 @@ export default function CalendarPage() {
         toast.success('Task created');
       }
       setShowCreate(false);
-      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), end_date: '', time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, capacity: 5, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
+      setCreateForm({ title: '', type: 'meeting', date: iso(cursor), end_date: '', time: '', end_time: '', location: '', venue_id: '', location_id: activeCampus, description: '', is_public: false, visibility: 'internal', invitee_ids: [], capacity: 5, is_free: true, price: null, ticket_tiers: [], board_id: '', priority: 'medium', repeats: false, repeat_pattern: 'weekly', repeat_mode: 'count', repeat_count: 8, repeat_until: '', repeat_day_of_week: 0, repeat_nth_week: 1, repeat_day_of_month: 1, repeat_days_of_week: [] });
       loadAll();
     } catch (err) {
       if (err.response?.status === 409) toast.error('Venue already booked for that time');
@@ -490,9 +497,9 @@ export default function CalendarPage() {
     setShareConfigsLoading(false);
   };
   const backend = process.env.REACT_APP_BACKEND_URL || '';
-  const buildIcalUrl = (scope, id, token) => {
+  const buildIcalUrl = (scope, id, token, passcode) => {
     if (scope === 'global') return `${backend}/api/public/calendar/global.ics?token=${token}`;
-    if (scope === 'user') return `${backend}/api/public/calendar/user/${token}.ics`;
+    if (scope === 'user') return `${backend}/api/public/calendar/user/${token}.ics${passcode ? `?passcode=${encodeURIComponent(passcode)}` : ''}`;
     return `${backend}/api/public/calendar/location/${id}.ics?token=${token}`;
   };
   const buildViewUrl = (scope, id, token) => {
@@ -500,12 +507,17 @@ export default function CalendarPage() {
     if (scope === 'user') return `${window.location.origin}/p/calendar/user/${token}`;
     return `${window.location.origin}/p/calendar/location/${id}/${token}`;
   };
+  const [sharePasscodes, setSharePasscodes] = useState({});
   const createShareConfig = async (payload) => {
     try {
       const r = await publicCalendarApi.createConfig(payload);
       setShareConfigs(list => [r.data, ...list]);
+      if (payload.passcode) setSharePasscodes(m => ({ ...m, [r.data.id]: payload.passcode }));
       toast.success('Share link created');
-    } catch { toast.error('Could not create share link'); }
+    } catch (e) {
+      const detail = e.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : 'Could not create share link');
+    }
   };
   const revokeShareConfig = async (id) => {
     if (!window.confirm('Revoke this share link? Anyone using it will lose access.')) return;
@@ -811,6 +823,11 @@ export default function CalendarPage() {
               <div className="flex items-center gap-2 pt-2 border-t border-border">
                 <Badge variant="outline" className="capitalize">{selected.type}</Badge>
                 {selected.is_public && <Badge variant="secondary">Public</Badge>}
+                {selected.visibility === 'private' && (
+                  <Badge variant="outline" className="border-amber-500/50 text-amber-600" data-testid="event-private-badge">
+                    <Lock size={11} className="mr-1" />Private · {(selected.invitee_ids || []).length} guest{(selected.invitee_ids || []).length === 1 ? '' : 's'}
+                  </Badge>
+                )}
                 <Badge variant="outline">{selected.registered ?? 0}/{selected.capacity ?? '∞'}</Badge>
                 {selected.is_free === false && <Badge variant="outline" data-testid="event-price-badge">{(selected.currency || 'UGX')} {Number(selected.price || 0).toLocaleString()}</Badge>}
                 {selected.series_id && <Badge variant="outline" className="border-primary/40 text-primary" data-testid="event-series-badge"><Repeat size={11} className="mr-1" />Repeats {selected.recurrence_pattern || ''}</Badge>}
@@ -867,6 +884,8 @@ export default function CalendarPage() {
                 )}
               </div>
               <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editForm.is_public} onChange={e => setEditForm({ ...editForm, is_public: e.target.checked })} /> Public event (appears on shared calendar)</label>
+              <PrivacyPicker idPrefix="edit" value={editForm} staffUsers={staffUsers}
+                onChange={patch => setEditForm(f => ({ ...f, ...patch }))} />
               {editForm.is_free === false && (
                 <TicketTiersEditor idPrefix="edit-tier" tiers={editForm.ticket_tiers || []} onChange={tiers => setEditForm({ ...editForm, ticket_tiers: tiers })} />
               )}
@@ -944,6 +963,8 @@ export default function CalendarPage() {
                   )}
                 </div>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_public} onChange={e => setCreateForm({ ...createForm, is_public: e.target.checked })} data-testid="create-is-public" /> Public event (appears on shared calendar)</label>
+                <PrivacyPicker idPrefix="create" value={createForm} staffUsers={staffUsers}
+                  onChange={patch => setCreateForm(f => ({ ...f, ...patch }))} />
                 <div className="space-y-2 rounded-lg border p-3">
                   <label className="flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={!!createForm.repeats} onChange={e => setCreateForm({ ...createForm, repeats: e.target.checked })} data-testid="create-repeats" />
@@ -1074,7 +1095,7 @@ export default function CalendarPage() {
           <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
             <div>
               <p className="text-sm font-semibold">Create a custom share link</p>
-              <p className="text-xs text-muted-foreground">Pick exactly what to include — public events, your private events, your tasks, and which campuses. Each link has its own unique code so you can revoke it later.</p>
+              <p className="text-xs text-muted-foreground">Pick exactly what to include — the whole calendar for an outside viewer, just public events, your tasks, and which campuses. Each link has its own unique code, can be passcode-protected, and can be revoked later.</p>
             </div>
             <CustomShareForm locations={locations} onCreate={createShareConfig} />
           </div>
@@ -1090,10 +1111,13 @@ export default function CalendarPage() {
                     <div className="min-w-0">
                       <p className="text-sm font-semibold truncate">{cfg.name}</p>
                       <p className="text-[10px] text-muted-foreground">
-                        {cfg.include_public_events && '· Public events '}
-                        {cfg.include_private_events && '· Private events '}
+                        {cfg.include_all_events && '· Whole calendar (no private events) '}
+                        {!cfg.include_all_events && cfg.include_public_events && '· Public events '}
+                        {!cfg.include_all_events && cfg.include_private_events && '· My private events '}
                         {cfg.include_tasks && `· Tasks (${cfg.task_scope}) `}
                         {(cfg.location_ids || []).length ? `· ${cfg.location_ids.length} campus${cfg.location_ids.length > 1 ? 'es' : ''}` : '· All my campuses'}
+                        {cfg.requires_passcode && ' · Passcode required'}
+                        {cfg.expires_at && ` · Expires ${cfg.expires_at.slice(0, 10)}`}
                       </p>
                     </div>
                     <Button size="sm" variant="ghost" className="text-destructive h-8" onClick={() => revokeShareConfig(cfg.id)} data-testid={`revoke-share-${cfg.id}`}><X size={14} /></Button>
@@ -1103,9 +1127,16 @@ export default function CalendarPage() {
                     <Button size="sm" variant="outline" className="h-8" onClick={() => { navigator.clipboard.writeText(buildViewUrl('user', '', cfg.token)); toast.success('Link copied'); }}><Copy size={14} /></Button>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Input readOnly value={buildIcalUrl('user', '', cfg.token)} className="text-xs font-mono h-8" />
-                    <Button size="sm" variant="outline" className="h-8" onClick={() => { navigator.clipboard.writeText(buildIcalUrl('user', '', cfg.token)); toast.success('Subscribe URL copied'); }}><Copy size={14} /></Button>
+                    <Input readOnly value={buildIcalUrl('user', '', cfg.token, sharePasscodes[cfg.id])} className="text-xs font-mono h-8" />
+                    <Button size="sm" variant="outline" className="h-8" onClick={() => { navigator.clipboard.writeText(buildIcalUrl('user', '', cfg.token, sharePasscodes[cfg.id])); toast.success('Subscribe URL copied'); }}><Copy size={14} /></Button>
                   </div>
+                  {cfg.requires_passcode && (
+                    <p className="text-[10px] text-amber-600" data-testid={`share-passcode-note-${cfg.id}`}>
+                      {sharePasscodes[cfg.id]
+                        ? 'The subscribe URL above already carries the passcode — the page link asks for it instead.'
+                        : 'Add ?passcode=YOUR-CODE to the subscribe URL for Google/Apple Calendar. We never store the code in readable form, so re-create the link if you forget it.'}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
@@ -1188,27 +1219,40 @@ function ShareBlock({ title, viewUrl, icalUrl }) {
 // Selection wizard for personalised share links.
 function CustomShareForm({ locations, onCreate }) {
   const [name, setName] = useState('My calendar');
+  const [inclAll, setInclAll] = useState(false);
   const [inclPublic, setInclPublic] = useState(true);
   const [inclPrivate, setInclPrivate] = useState(false);
   const [inclTasks, setInclTasks] = useState(false);
   const [taskScope, setTaskScope] = useState('mine');
   const [selectedLocs, setSelectedLocs] = useState([]);   // empty = all
+  const [passcode, setPasscode] = useState('');
+  const [expiry, setExpiry] = useState('never');
   const [busy, setBusy] = useState(false);
   const toggleLoc = (id) => setSelectedLocs(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
+  const expiryDate = () => {
+    if (expiry === 'never') return '';
+    const d = new Date(); d.setDate(d.getDate() + parseInt(expiry, 10));
+    return iso(d);
+  };
   const submit = async (e) => {
     e.preventDefault();
-    if (!inclPublic && !inclPrivate && !inclTasks) { toast.error('Include at least one thing'); return; }
+    if (!inclAll && !inclPublic && !inclPrivate && !inclTasks) { toast.error('Include at least one thing'); return; }
+    if (inclAll && passcode.trim().length < 4) { toast.error('A whole-calendar link needs a passcode of at least 4 characters'); return; }
     setBusy(true);
     await onCreate({
       name: name.trim() || 'My calendar',
-      include_public_events: inclPublic,
-      include_private_events: inclPrivate,
+      include_all_events: inclAll,
+      include_public_events: inclAll ? false : inclPublic,
+      include_private_events: inclAll ? false : inclPrivate,
       include_tasks: inclTasks,
       task_scope: taskScope,
       location_ids: selectedLocs,
+      passcode: passcode.trim() || undefined,
+      expires_at: expiryDate() || undefined,
     });
     setBusy(false);
     setName('My calendar');
+    setPasscode('');
   };
   return (
     <form onSubmit={submit} className="space-y-3" data-testid="custom-share-form">
@@ -1216,9 +1260,20 @@ function CustomShareForm({ locations, onCreate }) {
         <Label className="text-xs">Link name</Label>
         <Input value={name} onChange={e => setName(e.target.value)} placeholder="My weekly plan" data-testid="share-name-input" />
       </div>
+      <label className="flex items-start gap-2 text-sm rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5">
+        <input type="checkbox" checked={inclAll} onChange={e => setInclAll(e.target.checked)} className="mt-0.5" data-testid="share-incl-all" />
+        <span>
+          <span className="font-medium">Whole calendar for an outside viewer</span>
+          <span className="block text-[11px] text-muted-foreground">Every event in the campuses below — public or internal — except anything marked private. Needs a passcode.</span>
+        </span>
+      </label>
+      {!inclAll && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-sm">
+          <label className="flex items-center gap-2"><input type="checkbox" checked={inclPublic} onChange={e => setInclPublic(e.target.checked)} data-testid="share-incl-public" /> Public events</label>
+          <label className="flex items-center gap-2"><input type="checkbox" checked={inclPrivate} onChange={e => setInclPrivate(e.target.checked)} data-testid="share-incl-private" /> My internal events</label>
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-sm">
-        <label className="flex items-center gap-2"><input type="checkbox" checked={inclPublic} onChange={e => setInclPublic(e.target.checked)} data-testid="share-incl-public" /> Public events</label>
-        <label className="flex items-center gap-2"><input type="checkbox" checked={inclPrivate} onChange={e => setInclPrivate(e.target.checked)} data-testid="share-incl-private" /> My private events</label>
         <label className="flex items-center gap-2"><input type="checkbox" checked={inclTasks} onChange={e => setInclTasks(e.target.checked)} data-testid="share-incl-tasks" /> Tasks (with due dates)</label>
         {inclTasks && (
           <Select value={taskScope} onValueChange={setTaskScope}>
@@ -1226,6 +1281,25 @@ function CustomShareForm({ locations, onCreate }) {
             <SelectContent><SelectItem value="mine">Only my tasks</SelectItem><SelectItem value="campus">All in my campus</SelectItem></SelectContent>
           </Select>
         )}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <Label className="text-xs">Passcode {inclAll ? '(required)' : '(optional)'}</Label>
+          <Input value={passcode} onChange={e => setPasscode(e.target.value)} placeholder="e.g. 5812view"
+            autoComplete="off" data-testid="share-passcode-input" />
+        </div>
+        <div>
+          <Label className="text-xs">Link expires</Label>
+          <Select value={expiry} onValueChange={setExpiry}>
+            <SelectTrigger className="h-9" data-testid="share-expiry"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="never">Never</SelectItem>
+              <SelectItem value="30">In 30 days</SelectItem>
+              <SelectItem value="90">In 90 days</SelectItem>
+              <SelectItem value="365">In a year</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div>
         <Label className="text-xs">Campuses (leave empty = all my campuses)</Label>
@@ -1240,6 +1314,46 @@ function CustomShareForm({ locations, onCreate }) {
       </div>
       <Button type="submit" size="sm" disabled={busy} data-testid="share-create-btn">{busy ? 'Creating…' : 'Generate link'}</Button>
     </form>
+  );
+}
+
+// Private events: only the creator and the invited guests see the details.
+// Everyone else still gets an opaque "Busy" block, so the slot stays blocked.
+function PrivacyPicker({ idPrefix, value, staffUsers, onChange }) {
+  const isPrivate = value.visibility === 'private';
+  const ids = value.invitee_ids || [];
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const matches = (staffUsers || []).filter(u => !needle || (u.name || '').toLowerCase().includes(needle));
+  const toggle = (id) => onChange({ invitee_ids: ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id] });
+  return (
+    <div className="space-y-2 rounded-lg border p-3" data-testid={`${idPrefix}-privacy-block`}>
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" checked={isPrivate} data-testid={`${idPrefix}-is-private`}
+          onChange={e => onChange({ visibility: e.target.checked ? 'private' : 'internal', invitee_ids: e.target.checked ? ids : [] })} />
+        <Lock size={13} /> Private — only the guests below see the details
+      </label>
+      {isPrivate && (
+        <>
+          <p className="text-[11px] text-muted-foreground">Everyone else sees a grey “Busy” block on this slot, so nobody books over you.</p>
+          <Input className="h-8" placeholder="Search staff to invite…" value={q}
+            onChange={e => setQ(e.target.value)} data-testid={`${idPrefix}-guest-search`} />
+          <div className="max-h-32 overflow-y-auto rounded border p-2 space-y-1">
+            {matches.slice(0, 40).map(u => (
+              <label key={u.id} className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={ids.includes(u.id)} onChange={() => toggle(u.id)}
+                  data-testid={`${idPrefix}-guest-${u.id}`} />
+                <span className="truncate">{u.name}</span>
+              </label>
+            ))}
+            {!matches.length && <p className="text-xs text-muted-foreground">No staff match that.</p>}
+          </div>
+          <p className="text-[11px] text-muted-foreground" data-testid={`${idPrefix}-guest-count`}>
+            {ids.length} guest{ids.length === 1 ? '' : 's'} invited
+          </p>
+        </>
+      )}
+    </div>
   );
 }
 
