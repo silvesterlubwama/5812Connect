@@ -289,6 +289,9 @@ export default function HRPage() {
   const [lineItem, setLineItem] = useState({ name: '', type: 'allowance', amount: '', is_percentage: false });
   const [saving, setSaving] = useState(false);
   const isAdmin = ['admin', 'system_admin'].includes(user?.role);
+  // Pay figures are HR/finance only — without the right, there is no reveal at all.
+  const canViewPay = !!user?.can_view_pay;
+  const payVisible = canViewPay && showAmounts;
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -558,10 +561,12 @@ export default function HRPage() {
         {/* SALARIES TAB */}
         <TabsContent value="salaries" className="mt-4">
           <div className="flex justify-end gap-2 mb-3">
-            <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowAmounts(v => !v)}
-              data-testid="hr-amounts-toggle" title={showAmounts ? 'Hide pay amounts' : 'Show pay amounts'}>
-              {showAmounts ? <EyeOff size={14} /> : <Eye size={14} />} {showAmounts ? 'Hide pay' : 'Show pay'}
-            </Button>
+            {canViewPay && (
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowAmounts(v => !v)}
+                data-testid="hr-amounts-toggle" title={showAmounts ? 'Hide pay amounts' : 'Show pay amounts'}>
+                {showAmounts ? <EyeOff size={14} /> : <Eye size={14} />} {showAmounts ? 'Hide pay' : 'Show pay'}
+              </Button>
+            )}
             <Button size="sm" className="gap-1.5" onClick={() => setShowSalary(true)} data-testid="add-salary-btn"><Plus size={14} /> Add Salary</Button>
           </div>
           {salaries.length === 0 ? <p className="text-sm text-muted-foreground text-center py-12">No salary records yet.</p> : (
@@ -574,7 +579,7 @@ export default function HRPage() {
                       <p className="text-xs text-muted-foreground">{s.staff_role} · {s.department} · {s.pay_frequency}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm font-bold" data-testid={`salary-amount-${s.id}`}>{showAmounts ? `${s.currency} ${(s.base_salary || 0).toLocaleString()}` : '•••••'}</p>
+                      <p className="text-sm font-bold" data-testid={`salary-amount-${s.id}`}>{payVisible ? `${s.currency} ${(s.base_salary || 0).toLocaleString()}` : '•••••'}</p>
                       <p className="text-[10px] text-muted-foreground">{(s.line_items || []).length} line items</p>
                     </div>
                     <div className="flex items-center gap-1">
@@ -669,10 +674,22 @@ export default function HRPage() {
                   }
                 } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
               }}><CheckCircle size={14} /> Run Payday Now</Button>
-              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowAmounts(v => !v)}
-                data-testid="hr-amounts-toggle-payslips" title={showAmounts ? 'Hide pay amounts' : 'Show pay amounts'}>
-                {showAmounts ? <EyeOff size={14} /> : <Eye size={14} />} {showAmounts ? 'Hide pay' : 'Show pay'}
-              </Button>
+              {canViewPay && (
+                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowAmounts(v => !v)}
+                  data-testid="hr-amounts-toggle-payslips" title={showAmounts ? 'Hide pay amounts' : 'Show pay amounts'}>
+                  {showAmounts ? <EyeOff size={14} /> : <Eye size={14} />} {showAmounts ? 'Hide pay' : 'Show pay'}
+                </Button>
+              )}
+              <Button size="sm" variant="outline" className="gap-1.5" data-testid="recompute-statutory-btn"
+                title="Re-apply the campus statutory lines to every draft payslip"
+                onClick={async () => {
+                  if (!window.confirm('Re-apply the campus statutory lines to all DRAFT payslips? Approved and paid payslips are left alone.')) return;
+                  try {
+                    const r = await api.post('/hr/payslips/recompute-statutory', {});
+                    toast.success(`${r.data.updated} of ${r.data.drafts} drafts updated`);
+                    load();
+                  } catch (e) { toast.error(e.response?.data?.detail || 'Recompute failed'); }
+                }}><RefreshCw size={14} /> Recompute Statutory</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowRemittance(true)} data-testid="remittance-btn"><FileText size={14} /> Statutory Remittance</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowManualPayslip(true)} data-testid="manual-payslip-btn"><FileText size={14} /> Manual Payslip</Button>
               <Button size="sm" className="gap-1.5" onClick={() => setShowPayslipGen(true)} data-testid="generate-payslips-btn"><Plus size={14} /> Generate Payslips</Button>
@@ -698,11 +715,11 @@ export default function HRPage() {
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="text-right">
-                        <p className="text-sm font-bold text-green-600" data-testid={`payslip-net-${p.id}`}>{showAmounts ? `${p.currency} ${(p.net_salary || 0).toLocaleString()}` : '•••••'}</p>
-                        <p className="text-[10px] text-muted-foreground">Gross: {showAmounts ? (p.gross_salary || 0).toLocaleString() : '•••••'}</p>
+                        <p className="text-sm font-bold text-green-600" data-testid={`payslip-net-${p.id}`}>{payVisible ? `${p.currency} ${(p.net_salary || 0).toLocaleString()}` : '•••••'}</p>
+                        <p className="text-[10px] text-muted-foreground">Gross: {payVisible ? (p.gross_salary || 0).toLocaleString() : '•••••'}</p>
                         {(p.employer_contributions || 0) > 0 && (
                           <p className="text-[10px] text-muted-foreground" data-testid={`payslip-employer-${p.id}`}>
-                            {showAmounts
+                            {payVisible
                               ? `Employer: +${(p.employer_contributions || 0).toLocaleString()} · Cost: ${(p.total_cost || 0).toLocaleString()}`
                               : 'Employer: ••••• · Cost: •••••'}
                           </p>
@@ -1705,7 +1722,7 @@ export default function HRPage() {
                 onChange={next => setSettingsForm({ ...settingsForm, compliance_lines: next })}
               />
               <p className="text-[10px] text-muted-foreground">
-                These apply automatically to every payslip in this campus. A single employee's rate can be changed (or switched off) on their pay settings.
+                Lines set to "everyone" apply automatically to every payslip in this campus; "only staff I switch it on for" lines stay off until you enable them per person. A single employee's rate can be changed (or switched off) on their pay settings.
               </p>
 
               {/* Compliance options dropdown */}
@@ -1773,15 +1790,24 @@ export default function HRPage() {
                 <div className="space-y-0.5">
                   {Object.entries(h.changes || {}).map(([field, v]) => {
                     const isMoney = field === 'base_salary';
+                    // Statutory toggles are stored as `statutory:<line_key>` so the
+                    // timeline can say who switched which line on or off.
+                    const isStatutory = field.startsWith('statutory:');
+                    const label = isStatutory
+                      ? field.slice(10).replace(/_/g, ' ')
+                      : field.replace(/_/g, ' ');
                     const fmtV = (x) => {
                       if (x == null) return '—';
                       if (Array.isArray(x)) return `${x.length} item(s)`;
+                      // Pre-iter388 rows logged the whole overrides dict as one blob.
+                      if (typeof x === 'object') return `${Object.keys(x).length} override(s)`;
                       if (isMoney) return Number(x).toLocaleString();
                       return String(x);
                     };
                     return (
                       <div key={field} className="flex items-baseline gap-2">
-                        <span className="capitalize text-muted-foreground min-w-[6.5rem]">{field.replace(/_/g, ' ')}:</span>
+                        {isStatutory && <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">statutory</Badge>}
+                        <span className="capitalize text-muted-foreground min-w-[6.5rem]">{label}:</span>
                         <span className="line-through opacity-60">{fmtV(v.from)}</span>
                         <span className="text-muted-foreground">→</span>
                         <span className="font-semibold">{fmtV(v.to)}</span>
@@ -1946,7 +1972,9 @@ function ComplianceOptionsPicker({ country, onPick }) {
       <div className="flex flex-wrap gap-1.5">
         {options.map((o, i) => (
           <Button key={i} type="button" size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => onPick(o)} data-testid={`compliance-opt-${i}`}>
-            + {o.name} {o.amount}{o.is_percentage ? '%' : ''}
+            + {o.name} {(o.bands || []).length
+              ? `(${o.bands.length} ${o.band_mode === 'bracket_amount' ? 'brackets' : 'bands'})`
+              : `${o.amount}${o.is_percentage ? '%' : ''}`}
           </Button>
         ))}
       </div>

@@ -4,6 +4,8 @@ import { Switch } from '../ui/switch';
 
 const key = (name) => (name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 const LABEL = {
   deduction: 'deducted from pay',
   allowance: 'added to pay',
@@ -27,7 +29,10 @@ export const StatutoryOverrides = ({ lines = [], value = {}, onChange, currency 
       {lines.map((l, i) => {
         const k = l.key || key(l.name);
         const ov = value[k] || {};
-        const enabled = ov.enabled !== false;
+        const optIn = (l.applies_to || 'everyone') === 'opt_in';
+        // Opt-in lines are off until somebody switches them on for this person;
+        // everyone-lines are on unless explicitly switched off.
+        const enabled = optIn ? ov.enabled === true : ov.enabled !== false;
         const pct = ov.is_percentage !== undefined ? ov.is_percentage : !!l.is_percentage;
         const amount = ov.amount !== undefined && ov.amount !== null ? ov.amount : (l.amount ?? 0);
         const usesBands = !!(l.bands || []).length && ov.amount === undefined;
@@ -37,7 +42,13 @@ export const StatutoryOverrides = ({ lines = [], value = {}, onChange, currency 
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="font-medium">{l.name}</p>
-                <p className="text-[10px] text-muted-foreground">{LABEL[l.type] || l.type}{l.mode === 'add_to_pay' ? ' · paid with salary' : ''}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {LABEL[l.type] || l.type}{l.mode === 'add_to_pay' ? ' · paid with salary' : ''}
+                  {optIn ? ' · only if switched on' : ''}
+                  {(l.active_months || []).length
+                    ? ` · ${(l.active_months || []).map(m => MONTHS[m - 1]).join(' ')} only`
+                    : ''}
+                </p>
               </div>
               <Switch checked={enabled} onCheckedChange={v => set(k, { enabled: v })}
                 data-testid={`statutory-toggle-${k}`} />
@@ -46,7 +57,9 @@ export const StatutoryOverrides = ({ lines = [], value = {}, onChange, currency 
               <div className="flex items-center gap-2">
                 {usesBands ? (
                   <span className="text-[11px] text-muted-foreground flex-1">
-                    Progressive bands from HR Settings. Type a rate to use a flat one for this person.
+                    {(l.band_mode || 'progressive') === 'bracket_amount'
+                      ? 'Fixed amount per earnings bracket, from HR Settings. Type a figure to use a flat one for this person.'
+                      : 'Progressive bands from HR Settings. Type a rate to use a flat one for this person.'}
                   </span>
                 ) : (
                   <span className="text-[11px] text-muted-foreground flex-1">
@@ -62,6 +75,33 @@ export const StatutoryOverrides = ({ lines = [], value = {}, onChange, currency 
                   <input type="checkbox" checked={pct} onChange={e => set(k, { is_percentage: e.target.checked })}
                     data-testid={`statutory-pct-${k}`} /> %
                 </label>
+              </div>
+            )}
+            {enabled && l.type === 'deduction' && (
+              <div className="rounded-md bg-muted/50 p-2 space-y-1.5">
+                <label className="flex items-center gap-2 text-[11px] cursor-pointer">
+                  <input type="checkbox" checked={!!ov.employer_pays}
+                    onChange={e => set(k, { employer_pays: e.target.checked || undefined })}
+                    data-testid={`statutory-employer-pays-${k}`} />
+                  <span>Employer covers this for their first collection cycle</span>
+                </label>
+                {ov.employer_pays && (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground flex-1">Share the employer covers</span>
+                      <Input className="h-7 w-20 text-xs" type="number" min="1" max="100"
+                        value={ov.employer_share ?? 100}
+                        onChange={e => set(k, { employer_share: Math.max(1, Math.min(100, parseFloat(e.target.value) || 100)) })}
+                        data-testid={`statutory-employer-share-${k}`} />
+                      <span className="text-[10px] text-muted-foreground">%</span>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      {ov.employer_pays_cycle
+                        ? `Already used on the ${ov.employer_pays_cycle.split(':')[0]} cycle — later cycles come off their pay.`
+                        : 'Posts as an employer cost on the first cycle they are paid in, then reverts to the employee. Not added to gross, so it stays outside PAYE.'}
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </div>

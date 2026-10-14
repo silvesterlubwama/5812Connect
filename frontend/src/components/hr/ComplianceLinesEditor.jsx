@@ -7,11 +7,13 @@ import { Plus, Trash2, Layers } from 'lucide-react';
 
 // Campus-wide statutory lines. These apply to EVERY payslip in the campus;
 // an employee can override the rate or opt out on their own pay settings.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 export const ComplianceLinesEditor = ({ lines = [], onChange }) => {
   const patch = (i, next) => onChange(lines.map((l, j) => (j === i ? { ...l, ...next } : l)));
   const remove = (i) => onChange(lines.filter((_, j) => j !== i));
 
-  const addBand = (i) => patch(i, { bands: [...(lines[i].bands || []), { up_to: null, rate: 0 }] });
+  const addBand = (i) => patch(i, { bands: [...(lines[i].bands || []), { up_to: null, rate: 0, amount: 0 }] });
   const patchBand = (i, bi, next) => patch(i, {
     bands: (lines[i].bands || []).map((b, j) => (j === bi ? { ...b, ...next } : b)),
   });
@@ -85,27 +87,90 @@ export const ComplianceLinesEditor = ({ lines = [], onChange }) => {
                   onChange={e => patch(i, { liability_account_code: e.target.value })}
                   data-testid={`compliance-liability-acct-${i}`} />
               </div>
+              <div className="col-span-2">
+                <Label className="text-[10px]">Applies to</Label>
+                <Select value={cl.applies_to || 'everyone'} onValueChange={v => patch(i, { applies_to: v })}>
+                  <SelectTrigger className="h-8 text-xs" data-testid={`compliance-applies-${i}`}><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="everyone">Everyone in this campus</SelectItem>
+                    <SelectItem value="opt_in">Only staff I switch it on for</SelectItem>
+                  </SelectContent>
+                </Select>
+                {(cl.applies_to || 'everyone') === 'opt_in' && (
+                  <p className="text-[10px] text-amber-600 mt-1" data-testid={`compliance-applies-hint-${i}`}>
+                    Off for everybody until you switch it on in that person's pay settings.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-[10px]">Only collect in these months</Label>
+              <div className="flex flex-wrap gap-1 mt-1" data-testid={`compliance-months-${i}`}>
+                {MONTHS.map((m, mi) => {
+                  const num = mi + 1;
+                  const on = (cl.active_months || []).includes(num);
+                  return (
+                    <button key={num} type="button" data-testid={`compliance-month-${i}-${num}`}
+                      onClick={() => patch(i, {
+                        active_months: on
+                          ? (cl.active_months || []).filter(x => x !== num)
+                          : [...(cl.active_months || []), num].sort((a, b) => a - b),
+                      })}
+                      className={`px-1.5 py-0.5 rounded text-[10px] border transition-colors ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:border-primary/50'}`}>
+                      {m}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                {(cl.active_months || []).length
+                  ? 'Skipped on payslips for any other month — somebody who joins outside the window misses that collection.'
+                  : 'Nothing selected = collected every month.'}
+              </p>
             </div>
 
             <div className="space-y-1.5">
               {(cl.bands || []).length === 0 ? (
                 <Button type="button" size="sm" variant="ghost" className="h-7 text-[11px] gap-1"
                   onClick={() => addBand(i)} data-testid={`compliance-add-bands-${i}`}>
-                  <Layers size={12} /> Use progressive bands (PAYE)
+                  <Layers size={12} /> Use earnings bands
                 </Button>
               ) : (
                 <div className="rounded-md border border-dashed p-2 space-y-1.5">
-                  <p className="text-[10px] text-muted-foreground">Each slice of pay is taxed at its own rate. Leave the top band's limit blank for "and above".</p>
+                  <Select value={cl.band_mode || 'progressive'} onValueChange={v => patch(i, { band_mode: v })}>
+                    <SelectTrigger className="h-7 text-[11px]" data-testid={`compliance-band-mode-${i}`}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="progressive">Progressive % per slice (PAYE)</SelectItem>
+                      <SelectItem value="bracket_amount">Fixed amount per earnings bracket</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">
+                    {(cl.band_mode || 'progressive') === 'bracket_amount'
+                      ? 'Earn up to a band\u2019s limit and you pay that band\u2019s flat amount — only one band ever applies. Leave the last limit blank for "and above".'
+                      : 'Each slice of pay is taxed at its own rate. Leave the top band\u2019s limit blank for "and above".'}
+                  </p>
                   {(cl.bands || []).map((b, bi) => (
                     <div key={bi} className="flex items-center gap-2 text-[11px]">
                       <span className="text-muted-foreground w-10">up to</span>
                       <Input className="h-7 text-xs w-28" type="number" value={b.up_to ?? ''} placeholder="and above"
                         onChange={e => patchBand(i, bi, { up_to: e.target.value === '' ? null : parseFloat(e.target.value) })}
                         data-testid={`compliance-band-upto-${i}-${bi}`} />
-                      <Input className="h-7 text-xs w-20" type="number" step="0.1" value={b.rate ?? 0}
-                        onChange={e => patchBand(i, bi, { rate: parseFloat(e.target.value) || 0 })}
-                        data-testid={`compliance-band-rate-${i}-${bi}`} />
-                      <span className="text-muted-foreground">%</span>
+                      {(cl.band_mode || 'progressive') === 'bracket_amount' ? (
+                        <>
+                          <span className="text-muted-foreground">pay</span>
+                          <Input className="h-7 text-xs w-24" type="number" step="0.01" value={b.amount ?? 0}
+                            onChange={e => patchBand(i, bi, { amount: parseFloat(e.target.value) || 0 })}
+                            data-testid={`compliance-band-amount-${i}-${bi}`} />
+                        </>
+                      ) : (
+                        <>
+                          <Input className="h-7 text-xs w-20" type="number" step="0.1" value={b.rate ?? 0}
+                            onChange={e => patchBand(i, bi, { rate: parseFloat(e.target.value) || 0 })}
+                            data-testid={`compliance-band-rate-${i}-${bi}`} />
+                          <span className="text-muted-foreground">%</span>
+                        </>
+                      )}
                       <button type="button" className="text-destructive" onClick={() => removeBand(i, bi)}>×</button>
                     </div>
                   ))}

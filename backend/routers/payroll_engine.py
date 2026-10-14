@@ -14,14 +14,20 @@ Line shape (hr_settings.compliance_lines):
       mode: "add_to_pay" | "employer_cost",   # employer_contribution only
       is_percentage: bool,
       amount: float,                 # rate (%) or fixed amount
-      bands?: [{up_to: float|None, rate: float}],  # progressive (PAYE)
+      applies_to?: "everyone" | "opt_in",   # default "everyone"
+      active_months?: [int],         # 1-12; empty/absent = every month (LST = Jul-Oct)
+      band_mode?: "progressive" | "bracket_amount",   # default "progressive"
+      bands?: [{up_to: float|None, rate: float, amount: float}],
       account_code?: str,            # expense account (employer side)
       liability_account_code?: str,  # what is owed to the authority
       notes?: str,
     }
 
 Per-employee override (hr_salaries.statutory_overrides):
-    { "<key>": {enabled: bool, amount: float, is_percentage: bool} }
+    { "<key>": {enabled: bool, amount: float, is_percentage: bool,
+                employer_pays: bool,        # employer covers it for the first cycle
+                employer_share: float,      # % the employer covers, default 100
+                employer_pays_cycle: str}}  # stamped once used, locks it to one cycle
 """
 from typing import Optional
 import re
@@ -70,13 +76,82 @@ def _from_bands(gross: float, bands: list) -> tuple:
     return round(total, 2), " + ".join(parts)
 
 
+def _from_bracket(gross: float, bands: list) -> tuple:
+    """Fixed-amount brackets: earn up to a band's limit and you pay that band's
+    flat amount. Unlike PAYE this is a lookup — exactly one band ever applies.
+    A band with a blank limit is the "and above" catch-all; without one, pay
+    above the top bracket attracts nothing."""
+    ordered = sorted(bands, key=lambda b: (b.get("up_to") in (None, ""), float(b.get("up_to") or 0)))
+    for b in ordered:
+        cap = b.get("up_to")
+        amount = round(float(b.get("amount") or 0), 2)
+        if cap in (None, ""):
+            return amount, "top bracket"
+        if gross <= float(cap):
+            return amount, f"bracket up to {float(cap):,.0f}"
+    return 0.0, "above every bracket"
+
+
+def months_of(line: dict) -> list:
+    """Months a line is collected in. Empty means every month. Payroll is run
+    per calendar month, so a month list is as fine-grained as a date range can
+    ever be here."""
+    raw = line.get("active_months") or []
+    return sorted({int(m) for m in raw if str(m).strip().isdigit() and 1 <= int(m) <= 12})
+
+
+def in_collection_window(line: dict, period: Optional[str]) -> bool:
+    months = months_of(line)
+    if not months or not period:
+        return True
+    try:
+        return int(str(period)[5:7]) in months
+    except (ValueError, IndexError):
+        return True
+
+
+def _window_start(months: list) -> Optional[int]:
+    """First month of the collection run. Found by rotating to the month that
+    follows the biggest gap, so a window that wraps the year end (Nov-Feb)
+    reports November rather than January."""
+    if not months:
+        return None
+    best_gap, start = -1, months[0]
+    for i, m in enumerate(months):
+        gap = (m - months[i - 1]) % 12
+        if gap > best_gap:
+            best_gap, start = gap, m
+    return start
+
+
+def cycle_label(line: dict, period: Optional[str]) -> str:
+    """Identifies one collection run, so "the employer covers the first cycle"
+    means every instalment in that run and nothing after it. A window that wraps
+    the year end (e.g. Nov-Feb) is labelled by the year it started in."""
+    if not period:
+        return ""
+    year, month = int(str(period)[:4]), int(str(period)[5:7])
+    start = _window_start(months_of(line))
+    if start and month < start:
+        # Jan-Feb 2027 belongs to the cycle that opened in Nov 2026.
+        year -= 1
+    return f"{year}:{line_key(line)}"
+
+
 def _resolve(line: dict, override: Optional[dict]) -> Optional[dict]:
     """Apply an employee's override on top of the campus line. Returns None when
-    the employee is opted out."""
-    merged = dict(line)
+    the line doesn't apply to this person — either they're opted out, or the
+    line is opt-in and nobody switched it on for them."""
+    opt_in = (line.get("applies_to") or "everyone") == "opt_in"
     if override:
         if override.get("enabled") is False:
             return None
+        if opt_in and override.get("enabled") is not True:
+            return None
+    elif opt_in:
+        return None
+    merged = dict(line)
+    if override:
         if override.get("amount") is not None:
             merged["amount"] = override["amount"]
             merged["bands"] = None          # a flat override replaces the bands
@@ -89,6 +164,8 @@ def _resolve(line: dict, override: Optional[dict]) -> Optional[dict]:
 def _calc(line: dict, gross: float) -> tuple:
     bands = line.get("bands")
     if bands:
+        if (line.get("band_mode") or "progressive") == "bracket_amount":
+            return _from_bracket(gross, bands)
         return _from_bands(gross, bands)
     amount = float(line.get("amount") or 0)
     if line.get("is_percentage"):
@@ -96,8 +173,30 @@ def _calc(line: dict, gross: float) -> tuple:
     return round(amount, 2), "fixed"
 
 
-def apply_statutory_lines(compliance_lines: list, salary: dict, gross: float) -> dict:
+def _employer_cover(line: dict, override: Optional[dict], period: Optional[str]) -> float:
+    """How much of a deduction the employer picks up for this person, as a
+    percentage. The gesture only covers their FIRST collection cycle: once a
+    payslip has used it the cycle is stamped on the override, and anything in a
+    later cycle goes back to the employee."""
+    ov = override or {}
+    if not ov.get("employer_pays"):
+        return 0.0
+    stamped = ov.get("employer_pays_cycle")
+    if stamped and stamped != cycle_label(line, period):
+        return 0.0
+    share = ov.get("employer_share")
+    share = 100.0 if share is None else float(share)
+    return max(0.0, min(100.0, share))
+
+
+def apply_statutory_lines(compliance_lines: list, salary: dict, gross: float,
+                          period: Optional[str] = None) -> dict:
     """Turn the campus compliance lines into payslip line items for one person.
+
+    `period` is the payslip's YYYY-MM. It decides whether a line that only runs
+    in certain months (LST: Jul-Oct) applies at all, and which collection cycle
+    an employer-covered first instalment belongs to. Somebody who joins outside
+    the window simply misses that collection.
 
     Returns
     -------
@@ -107,14 +206,18 @@ def apply_statutory_lines(compliance_lines: list, salary: dict, gross: float) ->
       pay_additions: float,        # employer contribution paid WITH the salary
       employer_cost: float,        # employer contribution NOT paid to staff
       withheld_liability: float,   # employee deductions owed to an authority
+      cycle_stamps: {key: cycle},  # first-cycle locks the caller should persist
     }
     """
     overrides = (salary or {}).get("statutory_overrides") or {}
     out = {"items": [], "employee_deductions": 0.0, "pay_additions": 0.0,
-           "employer_cost": 0.0, "withheld_liability": 0.0}
+           "employer_cost": 0.0, "withheld_liability": 0.0, "cycle_stamps": {}}
     for raw in (compliance_lines or []):
         key = line_key(raw)
-        line = _resolve(raw, overrides.get(key))
+        if not in_collection_window(raw, period):
+            continue
+        override = overrides.get(key)
+        line = _resolve(raw, override)
         if line is None:
             continue
         amount, detail = _calc(line, gross)
@@ -134,6 +237,7 @@ def apply_statutory_lines(compliance_lines: list, salary: dict, gross: float) ->
         }
         if line.get("bands"):
             item["bands"] = line["bands"]
+            item["band_mode"] = line.get("band_mode") or "progressive"
         if ltype == EMPLOYER_TYPE:
             mode = (line.get("mode") or "employer_cost").lower()
             item.update({"type": EMPLOYER_TYPE, "scope": "employer", "mode": mode,
@@ -143,9 +247,31 @@ def apply_statutory_lines(compliance_lines: list, salary: dict, gross: float) ->
             else:
                 out["employer_cost"] += amount
         elif ltype == "deduction":
-            item.update({"type": "deduction", "scope": "employee"})
-            out["employee_deductions"] += amount
-            out["withheld_liability"] += amount
+            covered = _employer_cover(raw, override, period)
+            employer_part = round(amount * covered / 100.0, 2) if covered else 0.0
+            employee_part = round(amount - employer_part, 2)
+            if employer_part:
+                # The authority is still owed the full amount — the employer just
+                # pays this slice instead of the employee, so it lands on the same
+                # liability account as an employer cost. It is NOT added to gross,
+                # so it stays outside PAYE.
+                out["items"].append({**item, "type": EMPLOYER_TYPE, "scope": "employer",
+                                     "mode": "employer_cost", "calculated_amount": employer_part,
+                                     "covered_for_employee": True,
+                                     "account_code": raw.get("account_code") or DEFAULT_EMPLOYER_EXPENSE_CODE,
+                                     "details": f"{detail} · employer covers {covered:g}% (first cycle)"})
+                out["employer_cost"] += employer_part
+                out["withheld_liability"] += employer_part
+                stamp = cycle_label(raw, period)
+                if stamp and not (override or {}).get("employer_pays_cycle"):
+                    out["cycle_stamps"][key] = stamp
+            if employee_part <= 0:
+                continue
+            item.update({"type": "deduction", "scope": "employee", "calculated_amount": employee_part})
+            if employer_part:
+                item["details"] = f"{detail} · employee pays {100 - covered:g}%"
+            out["employee_deductions"] += employee_part
+            out["withheld_liability"] += employee_part
         else:
             item.update({"type": "allowance", "scope": "employee"})
             out["pay_additions"] += amount

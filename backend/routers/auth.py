@@ -1,7 +1,7 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pin_security import pin_digest, pin_query, pin_matches
-from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit
+from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit, can_view_pay
 from models import UserRegister, UserLogin
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -230,6 +230,8 @@ async def login(data: UserLogin, request: Request) -> dict:
 @router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
     user_out = {k: v for k, v in current_user.items() if k not in ("password_hash", "_id")}
+    # Computed capability flags the UI needs up front (no extra round-trip).
+    user_out["can_view_pay"] = can_view_pay(current_user)
     # Enrich with location name for campus display
     if user_out.get("location_id"):
         loc = await db.locations.find_one({"id": user_out["location_id"]}, {"_id": 0, "name": 1})

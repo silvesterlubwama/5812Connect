@@ -276,6 +276,24 @@ def has_finance_access(user: dict) -> bool:
     return has_module_access(user, "finance")
 
 
+def can_view_pay(user: dict) -> bool:
+    """Who may see OTHER people's pay figures. Salaries, payslip amounts and
+    employer costs are restricted to HR and finance — a Manager or Coordinator
+    without either grant only ever sees their own payslip. Director+ passes
+    through PRIVILEGED_ROLES inside has_module_access."""
+    return has_module_access(user, "hr") or has_module_access(user, "finance")
+
+
+async def require_pay_view(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency: 403 unless the caller may see other people's pay."""
+    if not can_view_pay(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Pay information is restricted to HR and finance.",
+        )
+    return current_user
+
+
 async def require_finance_view(current_user: dict = Depends(get_current_user)) -> dict:
     """Dependency: 403 unless user has finance view access."""
     if not has_finance_access(current_user):

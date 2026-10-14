@@ -1,6 +1,6 @@
 """HR Module: contracts, salaries, payslips, document requests, per-campus settings"""
 from fastapi import APIRouter, Depends, HTTPException, Query
-from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level, require_hr_view
+from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level, require_hr_view, can_view_pay, require_pay_view
 from datetime import datetime, timezone, date as dt_date, timedelta as td
 from typing import Optional, List, Tuple
 import uuid
@@ -421,11 +421,16 @@ require_hr = require_hr_view
 #  Regular staff: filter to own `staff_id` only.
 #  Returns a Mongo query dict to be merged into base query.
 # ============================================================
-def _hr_scope(current_user: dict, user_field: str = "staff_id", loc_field: str = "location_id") -> dict:
+def _hr_scope(current_user: dict, user_field: str = "staff_id", loc_field: str = "location_id",
+              pay_sensitive: bool = False) -> dict:
     role = (current_user.get("role") or "").lower()
     if role in {"admin", "system_admin"}:
         return {}
-    if role in {"hr", "director", "executive director", "regional director", "manager"}:
+    # Pay figures are campus-wide only for HR and finance (iter388). Everything
+    # else — timesheets, leave — keeps the wider manager scope.
+    campus_wide = (can_view_pay(current_user) if pay_sensitive
+                   else role in {"hr", "director", "executive director", "regional director", "manager"})
+    if campus_wide:
         loc_ids = current_user.get("location_ids") or []
         if not loc_ids and current_user.get("active_campus_id"):
             loc_ids = [current_user["active_campus_id"]]
@@ -553,9 +558,32 @@ COMPLIANCE_OPTIONS = {
          "is_percentage": True, "amount": 10,
          "account_code": "5002", "liability_account_code": "2200",
          "notes": "10% paid by the organisation on top of salary — employer cost, not deducted from staff."},
-        {"name": "LST (Local Service Tax)", "type": "deduction", "is_percentage": False, "amount": 5000,
-         "liability_account_code": "2200",
-         "notes": "Local Service Tax — annual, varies by income band UGX 5k-100k."},
+        {"name": "LST (Local Service Tax) — annual", "type": "deduction", "is_percentage": False, "amount": 0,
+         "liability_account_code": "2200", "band_mode": "bracket_amount",
+         "active_months": [7],
+         # Local Governments (Amendment) (No. 2) Act 2008 schedule for persons in
+         # gainful employment — a flat yearly figure per monthly-income bracket,
+         # not a percentage and not progressive.
+         "bands": [{"up_to": 100000, "amount": 0}, {"up_to": 200000, "amount": 5000},
+                   {"up_to": 300000, "amount": 10000}, {"up_to": 400000, "amount": 20000},
+                   {"up_to": 500000, "amount": 30000}, {"up_to": 600000, "amount": 40000},
+                   {"up_to": 700000, "amount": 60000}, {"up_to": 800000, "amount": 70000},
+                   {"up_to": 900000, "amount": 80000}, {"up_to": 1000000, "amount": 90000},
+                   {"up_to": None, "amount": 100000}],
+         "notes": "Full YEAR's LST taken in one go, in July only. Switch to the instalment version if you spread it."},
+        {"name": "LST (Local Service Tax) — monthly instalment", "type": "deduction",
+         "is_percentage": False, "amount": 0,
+         "liability_account_code": "2200", "band_mode": "bracket_amount",
+         "active_months": [7, 8, 9, 10],
+         # Common practice is four equal instalments across Jul-Oct, so each
+         # band is a quarter of the annual figure.
+         "bands": [{"up_to": 100000, "amount": 0}, {"up_to": 200000, "amount": 1250},
+                   {"up_to": 300000, "amount": 2500}, {"up_to": 400000, "amount": 5000},
+                   {"up_to": 500000, "amount": 7500}, {"up_to": 600000, "amount": 10000},
+                   {"up_to": 700000, "amount": 15000}, {"up_to": 800000, "amount": 17500},
+                   {"up_to": 900000, "amount": 20000}, {"up_to": 1000000, "amount": 22500},
+                   {"up_to": None, "amount": 25000}],
+         "notes": "A quarter of the annual LST, for the four instalments due Jul-Oct. Remit to the local government by 31 Oct."},
         {"name": "Medical / health cover (employer)", "type": "employer_contribution",
          "mode": "employer_cost", "is_percentage": False, "amount": 0,
          "account_code": "5003", "liability_account_code": "2200",
@@ -656,7 +684,7 @@ async def list_compliance_country_options(current_user: dict = Depends(require_h
 # ========== SALARY MANAGEMENT ==========
 
 @router.get("/salaries")
-async def list_salaries(location_id: Optional[str] = None, current_user: dict = Depends(require_hr)):
+async def list_salaries(location_id: Optional[str] = None, current_user: dict = Depends(require_pay_view)):
     query = {}
     if location_id:
         query["location_id"] = location_id
@@ -758,6 +786,11 @@ async def update_salary(salary_id: str, data: dict, current_user: dict = Depends
     for k, v in update.items():
         if k in {"updated_at"}:
             continue
+        if k == "statutory_overrides":
+            # Diff line by line so the timeline reads "NSSF Employer: off → on"
+            # rather than one opaque blob of JSON.
+            changes.update(_diff_statutory_overrides(existing.get(k) or {}, v or {}))
+            continue
         if existing.get(k) != v:
             changes[k] = {"from": existing.get(k), "to": v}
     await db.hr_salaries.update_one({"id": salary_id}, {"$set": update})
@@ -779,8 +812,38 @@ async def update_salary(salary_id: str, data: dict, current_user: dict = Depends
     return await db.hr_salaries.find_one({"id": salary_id}, {"_id": 0})
 
 
+def _describe_override(ov: dict) -> str:
+    """Human-readable state of one statutory line for a single employee."""
+    if not ov:
+        return "campus default"
+    bits = []
+    if ov.get("enabled") is True:
+        bits.append("on")
+    elif ov.get("enabled") is False:
+        bits.append("off")
+    amount = ov.get("amount")
+    if ov.get("employer_pays"):
+        bits.append(f"employer covers {ov.get('employer_share', 100)}% of the first cycle")
+    if amount is not None:
+        bits.append(f"{amount}%" if ov.get("is_percentage") else f"{amount}")
+    return ", ".join(bits) or "campus default"
+
+
+def _diff_statutory_overrides(before: dict, after: dict) -> dict:
+    """Per-line diff of an employee's statutory overrides, keyed
+    `statutory:<line_key>` so the salary history shows who switched which
+    statutory line on or off, and when."""
+    out = {}
+    for key in sorted(set(before or {}) | set(after or {})):
+        was, now = (before or {}).get(key) or {}, (after or {}).get(key) or {}
+        if was == now:
+            continue
+        out[f"statutory:{key}"] = {"from": _describe_override(was), "to": _describe_override(now)}
+    return out
+
+
 @router.get("/salaries/history")
-async def list_salary_history(staff_id: Optional[str] = None, salary_id: Optional[str] = None, limit: int = 200, current_user: dict = Depends(require_hr)):
+async def list_salary_history(staff_id: Optional[str] = None, salary_id: Optional[str] = None, limit: int = 200, current_user: dict = Depends(require_pay_view)):
     """Salary-change audit timeline. Filter by staff_id or salary_id."""
     query = {}
     if staff_id:
@@ -805,9 +868,9 @@ async def delete_salary(salary_id: str, current_user: dict = Depends(require_dir
 
 @router.get("/payslips")
 async def list_payslips(staff_id: Optional[str] = None, period: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    """List payslips scoped by role (iter214):
-    - Regular staff → only their own payslips
-    - Director/HR/Manager → payslips at their assigned location_ids
+    """List payslips scoped by role (iter214, tightened iter388):
+    - Anyone without HR or finance access → only their own payslips
+    - HR / finance → payslips at their assigned location_ids
     - Admin → all"""
     query = {}
     if staff_id:
@@ -815,12 +878,12 @@ async def list_payslips(staff_id: Optional[str] = None, period: Optional[str] = 
     if period:
         query["period"] = period
     # Apply role scope
-    scope = _hr_scope(current_user, user_field="staff_id", loc_field="location_id")
+    scope = _hr_scope(current_user, user_field="staff_id", loc_field="location_id", pay_sensitive=True)
     query.update(scope)
-    # Retain campus filter for HR/director/manager only — admins see truly all
+    # Retain campus filter for HR/finance only — admins see truly all
     # (fixes iter214 minor note: admin was previously scoped to active_campus).
     role = (current_user.get("role") or "").lower()
-    if role in {"hr", "director", "executive director", "regional director", "manager"}:
+    if role not in {"admin", "system_admin"} and can_view_pay(current_user):
         campus = await get_campus_filter(current_user)
         if campus:
             query.update(campus)
@@ -1041,7 +1104,7 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
         sal_loc = sal.get("location_id") or location_id or ""
         if sal_loc not in compliance_cache:
             compliance_cache[sal_loc] = await compliance_lines_for(sal_loc)
-        stat = apply_statutory_lines(compliance_cache[sal_loc], sal, gross_for_pct)
+        stat = apply_statutory_lines(compliance_cache[sal_loc], sal, gross_for_pct, period=period)
         deductions += stat["employee_deductions"]
         allowances += stat["pay_additions"]
         net = base_gross + allowances - deductions
@@ -1185,7 +1248,8 @@ async def manual_payslip(data: dict, current_user: dict = Depends(require_direct
             "employer_cost": 0.0, "withheld_liability": 0.0}
     if not data.get("skip_statutory"):
         stat = apply_statutory_lines(await compliance_lines_for(loc_id),
-                                     {"statutory_overrides": data.get("statutory_overrides") or {}}, gross)
+                                     {"statutory_overrides": data.get("statutory_overrides") or {}}, gross,
+                                     period=period)
         line_items.extend(stat["items"])
         total_deductions += stat["employee_deductions"]
         total_allowances += stat["pay_additions"]
@@ -1519,7 +1583,14 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         sal_loc = sal.get("location_id") or location_id or ""
         if sal_loc not in compliance_cache:
             compliance_cache[sal_loc] = await compliance_lines_for(sal_loc)
-        stat = apply_statutory_lines(compliance_cache[sal_loc], sal, gross)
+        stat = apply_statutory_lines(compliance_cache[sal_loc], sal, gross, period=period)
+        # Lock an employer-covered instalment to this collection cycle, so the
+        # gesture lasts one cycle and then reverts to the employee.
+        for s_key, s_cycle in (stat.get("cycle_stamps") or {}).items():
+            await db.hr_salaries.update_one(
+                {"id": sal["id"]},
+                {"$set": {f"statutory_overrides.{s_key}.employer_pays_cycle": s_cycle}})
+            sal.setdefault("statutory_overrides", {}).setdefault(s_key, {})["employer_pays_cycle"] = s_cycle
         deductions += stat["employee_deductions"]
         allowances += stat["pay_additions"]
         items.extend(stat["items"])
@@ -1752,6 +1823,62 @@ async def delete_payslip(payslip_id: str, current_user: dict = Depends(require_d
     await db.hr_payslips.delete_one({"id": payslip_id})
     await _audit(current_user["id"], "delete", "payslip", payslip_id, {"period": p.get("period"), "staff_id": p.get("staff_id")})
     return {"deleted": True, "id": payslip_id}
+
+
+@router.post("/payslips/recompute-statutory")
+async def recompute_statutory_lines(data: dict, current_user: dict = Depends(require_director)):
+    """Re-apply the campus compliance lines to DRAFT payslips.
+
+    Needed whenever an employee is switched on/off a statutory line, or a line
+    is changed from "everyone" to opt-in — the drafts already in flight would
+    otherwise keep the old deduction. Approved and paid payslips are never
+    touched; regenerate those through the normal flow instead.
+    """
+    q: dict = {"status": "draft"}
+    if data.get("period"):
+        q["period"] = data["period"]
+    drafts = await db.hr_payslips.find(q, {"_id": 0}).to_list(2000)
+    compliance_cache: dict = {}
+    changed, unchanged = 0, 0
+    for ps in drafts:
+        sal = await db.hr_salaries.find_one({"id": ps.get("salary_id")}, {"_id": 0}) or {}
+        loc = sal.get("location_id") or ps.get("location_id") or ""
+        if loc not in compliance_cache:
+            compliance_cache[loc] = await compliance_lines_for(loc)
+        items = ps.get("line_items") or []
+        # Peel the previous statutory rows off, keeping the salary's own ones.
+        old_ded = sum(float(li.get("calculated_amount") or li.get("amount") or 0) for li in items
+                      if li.get("source") == "statutory" and (li.get("type") or "") == "deduction")
+        old_add = sum(float(li.get("calculated_amount") or li.get("amount") or 0) for li in items
+                      if li.get("source") == "statutory"
+                      and ((li.get("type") == "allowance")
+                           or (li.get("type") == EMPLOYER_TYPE and (li.get("mode") or "employer_cost") == "add_to_pay")))
+        kept = [li for li in items if li.get("source") != "statutory"]
+        gross = float(ps.get("gross_salary") or 0)
+        stat = apply_statutory_lines(compliance_cache[loc], sal, gross, period=ps.get("period"))
+        deductions = round(float(ps.get("deductions") or 0) - old_ded + stat["employee_deductions"], 2)
+        allowances = round(float(ps.get("allowances") or 0) - old_add + stat["pay_additions"], 2)
+        update = {
+            "line_items": kept + stat["items"],
+            "deductions": deductions,
+            "allowances": allowances,
+            "net_salary": round(gross + allowances - deductions, 2),
+            "employer_contributions": stat["employer_cost"],
+            "statutory_withheld": stat["withheld_liability"],
+            "total_cost": round(gross + allowances + stat["employer_cost"], 2),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_by": current_user["id"],
+        }
+        if (round(float(ps.get("employer_contributions") or 0), 2) == update["employer_contributions"]
+                and round(float(ps.get("deductions") or 0), 2) == deductions
+                and round(float(ps.get("allowances") or 0), 2) == allowances):
+            unchanged += 1
+            continue
+        await db.hr_payslips.update_one({"id": ps["id"]}, {"$set": update})
+        changed += 1
+    await _audit(current_user["id"], "update", "payslips", data.get("period") or "all-drafts",
+                 {"recomputed": changed})
+    return {"drafts": len(drafts), "updated": changed, "unchanged": unchanged}
 
 
 @router.put("/payslips/{payslip_id}")

@@ -2171,3 +2171,157 @@ Caddy-style etag — those are the mtimes baked into the `connect-frontend` Dock
   main/master, so if `:latest` is still July they need a successful Actions run first.
 - Separately: the apex `5812uganda.org` still has NO DNS record — needs a second public
   hostname on the tunnel pointing at the same service.
+
+## iter387 — 2026-06 · Statutory lines: per-line opt-in + fixed-amount brackets
+
+**Reported:** "payslips auto issue employer contributions even when the parameter is not
+set on the employee."
+
+**Investigation:** no maths bug. `payroll_engine._resolve` treated "no entry in
+`hr_salaries.statutory_overrides`" as *apply the campus line*; only an explicit
+`{enabled: false}` switched it off. `hr_settings` for `loc_419f5d5e` carried
+*NSSF Employer 10% · employer_cost*, and 8 of 10 salary records had
+`statutory_overrides: null`, so everybody got the 10%. The per-employee Switch also
+rendered as already-ON (`ov.enabled !== false`), which made it look configured.
+Sub-campuses inherited it through `compliance_lines_for`. Verified the opt-out itself
+worked: `{enabled: false}` → 0.
+
+**Fix (user chose per-line control):**
+- `compliance_lines[].applies_to: "everyone" | "opt_in"` (absent = "everyone", so existing
+  campus data behaves exactly as before). `_resolve` returns None for an opt-in line unless
+  the employee has `{enabled: true}` — a rate alone is not consent.
+- `ComplianceLinesEditor.jsx`: "Applies to" select per line + amber hint on opt-in.
+- `StatutoryOverrides.jsx`: the employee Switch now defaults OFF for opt-in lines
+  (`optIn ? ov.enabled === true : ov.enabled !== false`) and the row is labelled
+  "only if switched on".
+
+**Fix 2 — fixed-amount earnings brackets** (user: "deductions based on a rate instead of a
+percentage, i.e. earn up to X and your deduction is Y"):
+- `compliance_lines[].band_mode: "progressive" | "bracket_amount"` (absent = progressive).
+- `_from_bracket()` is a lookup, NOT progressive: bands are sorted, the first whose `up_to`
+  >= gross wins and contributes its flat `amount`. A band with a blank limit is the "and
+  above" catch-all; without one, pay above the top bracket attracts nothing.
+- Band editor renders `pay <amount>` instead of `<rate> %` in bracket mode;
+  `addBand` now seeds `{up_to, rate, amount}`.
+
+**Fix 3 — recompute drafts** `POST /api/hr/payslips/recompute-statutory` (director+, body
+`{period?}`). Peels `source == "statutory"` rows off DRAFT payslips, re-runs
+`apply_statutory_lines`, and adjusts deductions/allowances by the delta so unpaid-leave
+proration survives. Approved/paid payslips untouched. Wired to a "Recompute Statutory"
+button on the Payslips tab (`recompute-statutory-btn`).
+
+**Data migration run against the preview DB:**
+- All `employer_contribution` lines → `applies_to: "opt_in"`; all others → `"everyone"`
+  (1 settings doc).
+- Cleared the one explicit `nssf_employer` enable (Christopher Ssekito) — user said nobody
+  should have it on for now.
+- Recompute: `{drafts: 19, updated: 15, unchanged: 4}`. Every draft now shows
+  `employer_contributions: 0`. PAYE/NSSF-employee deductions verified intact — gross
+  1,000,000 → net 748,000 (PAYE 202,000 + NSSF 50,000), and Christopher's 7% NSSF override
+  → net 728,000.
+
+Tests: `tests/test_iter387_statutory_optin_and_brackets.py` 9/9. Re-ran iter381, iter382,
+iter215, iter385 → 26 passed. Frontend verified by Playwright: "Applies to" select flips to
+opt-in with the hint, PAYE band editor switches to 5 `pay` amount inputs and 0 rate inputs,
+no overflow at 1920.
+
+**Pre-existing stale tests (NOT caused by this work)** — `test_iter206`, `test_iter210`,
+`test_iter211` fail against endpoints that no longer exist: `/api/financial/donations` and
+friends were removed in iter246 ("iter246 dropped the old financial/accounting/statements
+routers", server.py:523), and iter211 marks a payslip paid with a single approval, which
+iter382's dual-approval rule now rejects. They need rewriting or deleting; they do not
+indicate a live regression.
+
+## iter388 — 2026-06 · Pay visibility by role, statutory audit trail, Uganda LST presets
+
+**1. Role-based pay visibility**
+- `deps.py`: `can_view_pay(user)` = `has_module_access(user,"hr") or has_module_access(user,"finance")`
+  (Director+ auto-passes via PRIVILEGED_ROLES), plus the `require_pay_view` dependency.
+- `GET /hr/salaries` and `GET /hr/salaries/history` moved from `require_hr` to
+  `require_pay_view` — finance gains access, everyone else gets 403.
+- `_hr_scope(..., pay_sensitive=True)`: campus-wide scope is now decided by `can_view_pay`
+  rather than a hardcoded role set, so a plain **Manager or Coordinator without an HR or
+  finance grant sees only their own payslip**. Timesheets and leave keep the old wider
+  manager scope (pay_sensitive defaults False) so approvals still work.
+- `GET /auth/me` returns a computed `can_view_pay` flag; `HRPage.jsx` derives
+  `payVisible = canViewPay && showAmounts` and hides the Show/Hide pay toggle entirely when
+  the right is absent, so there is no reveal path at all.
+
+**2. Statutory toggle audit trail**
+- `hr.py` `_describe_override()` + `_diff_statutory_overrides()`: `PUT /hr/salaries/{id}`
+  now diffs `statutory_overrides` line by line into `changes["statutory:<line_key>"]` with
+  readable states ("campus default", "on", "off", "on, 7%") instead of logging one opaque
+  dict. Flows through the existing `hr_salary_history` doc, so who/when/why
+  (`changed_by_name`, `changed_at`, `reason`) were already captured.
+- `HRPage.jsx` Salary Change History dialog: `statutory:` keys render with a small
+  "statutory" badge and the line name; `fmtV` summarises legacy object blobs as
+  "N override(s)" instead of `[object Object]`.
+
+**3. Uganda Local Service Tax presets**
+- `COMPLIANCE_OPTIONS["Uganda"]`: the old flat "LST 5000" entry replaced by two
+  `band_mode: "bracket_amount"` presets with 11 brackets each —
+  *LST — annual* (0 / 5k / 10k / 20k / 30k / 40k / 60k / 70k / 80k / 90k / 100k, per the
+  Local Governments (Amendment) (No. 2) Act 2008 schedule for persons in gainful
+  employment) and *LST — monthly instalment* (exactly a quarter of each, for the four
+  instalments due Jul–Oct).
+- `ComplianceOptionsPicker` shows "(11 brackets)" instead of a meaningless "0" for
+  band-based presets.
+
+**Data housekeeping on the preview DB**
+- Reverted the demo enrolment: no salary has an `nssf_employer` override, total employer
+  contributions across all drafts = 0.
+- Deleted accumulated test fixtures that were polluting the real HR list: 31 payslips,
+  7 salaries, 8 salary-history rows and 4 users named `TEST_iter*` / `Iter<n> *`
+  (7 of the 14 "staff salaries" on screen were test rows from earlier iterations).
+
+Tests: `tests/test_iter388_pay_visibility_and_lst.py` 7/7 (incl. a Coordinator proving 403
+on salaries and own-payslips-only, and the same user regaining access after
+`PUT /admin/module-access/users/{id}` grants `hr`). Re-ran iter381, iter382, iter215,
+iter387 → 28 passed. Browser: toggle hidden/shown correctly, amounts masked on load and
+revealed on click at both 1920 and 390 px, history dialog shows
+"statutory | Nssf Employer: campus default → on", both LST presets listed.
+
+## iter389 — 2026-06 · LST collection window + employer-covered first instalment
+
+**1. Collection window per compliance line**
+- `compliance_lines[].active_months: [int]` (1-12; absent/empty = every month).
+  `payroll_engine.months_of()` / `in_collection_window()` skip the line entirely on a
+  payslip outside the window. Day-precise date ranges were considered and rejected: a
+  payslip belongs to a whole month, so months are as fine-grained as it can get.
+- `apply_statutory_lines(..., period="YYYY-MM")` — the period is now threaded through all
+  four call sites in hr.py (preview 1103, manual one-off 1246, bulk generate 1581,
+  recompute-statutory 1846). **Omitting `period` keeps the old behaviour** (window ignored)
+  so nothing silently loses a deduction.
+- LST presets ship pre-windowed: *annual* → `[7]` (July only — a full year's amount
+  collected four times would have been a nasty bug), *monthly instalment* → `[7,8,9,10]`.
+- `ComplianceLinesEditor.jsx`: 12 month chips, "Only collect in these months".
+  `StatutoryOverrides.jsx` shows "· Jul Aug Sep Oct only" under the line name.
+
+**2. A late joiner simply misses the collection** — per the user's decision, there is no
+per-person month override and no catch-up. Out of window = no deduction.
+
+**3. Employer covers the employee's first instalment**
+- Per-employee override gains `employer_pays: bool`, `employer_share: float` (default 100),
+  and `employer_pays_cycle: str` (stamped once used).
+- `_employer_cover()` returns the share only while the payslip is inside the stamped cycle.
+  The deduction then splits: the employer slice becomes an `employer_contribution` item
+  (`covered_for_employee: true`, `mode: employer_cost`) and the employee pays the rest.
+  **Both slices still credit the same liability account**, so the authority is owed the
+  full amount and remittance totals stay whole.
+- NOT added to gross, so PAYE is unaffected (explicitly tested).
+- `cycle_label()` identifies one collection run; `_window_start()` rotates to the month
+  after the biggest gap so a window wrapping the year end (Nov-Feb) labels Jan-2027 as the
+  cycle that opened in Nov-2026. Bulk generate persists `cycle_stamps` onto
+  `hr_salaries.statutory_overrides.<key>.employer_pays_cycle`, which is what makes the
+  gesture last exactly one cycle and then revert.
+- `_describe_override()` now mentions "employer covers N% of the first cycle" so the switch
+  shows up in the salary audit trail.
+
+Tests: `tests/test_iter389_lst_window_and_employer_cover.py` 10/10. Suite re-run with
+iter381/382/387/388/215 → 38 passed. Browser: the instalment preset lands with Jul·Aug·Sep·Oct
+lit and band mode "Fixed amount per earnings bracket"; the salary dialog shows
+"Employer covers this for their first collection cycle" with the share input, and the line
+subtitle reads "deducted from pay · Jul Aug Sep Oct only". No overflow at 1920.
+
+**Housekeeping** — removed another 4 payslips / 1 salary / 4 history rows / 1 user left
+behind by test runs. Preview DB: 7 real salaries, 60 payslips, employer contributions 0.

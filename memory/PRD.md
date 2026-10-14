@@ -2276,3 +2276,30 @@ See `/app/memory/test_credentials.md`.
    default, one Show pay / Hide pay toggle reveals them. (Done.)
 6. **Apex domain** — user wants `5812uganda.org` (not just `www`) served via the tunnel.
    Needs a second public hostname + its DNS record in Cloudflare. (User action.)
+
+## iter387 (2026-06) — requirements added
+7. **Employer contributions must not apply unless set on the employee.** Resolved with a
+   per-line "Applies to: everyone / only staff I switch it on for" setting; employer
+   contribution lines migrated to opt-in and the October drafts recomputed. (Done.)
+8. **Deductions that are a fixed amount per earnings bracket** (earn up to X → deduct Y),
+   as opposed to a percentage. Added as `band_mode: "bracket_amount"`. (Done.)
+
+### Still open
+- Rotate/retire the default passwords (`Admin@5812`, `Admin@1234`, `Test@5812!`).
+- `www.5812uganda.org` DNS record is set to DNS-only; it must be Proxied (orange cloud) for
+  the `*.cfargotunnel.com` CNAME to resolve. Apex `5812uganda.org` still has no record.
+- Stale tests iter206 / iter210 / iter211 reference endpoints removed in iter246.
+
+## iter388 (2026-06) — requirements added
+9.  **Role-based pay visibility** — pay figures limited to HR and finance roles. (Done.)
+10. **Audit tracking for statutory toggles** — who switched which statutory line on/off for
+    an employee, and when. (Done, surfaced in the Salary Change History dialog.)
+11. **One-click Uganda LST bracket preset.** (Done — annual + monthly-instalment variants.)
+
+## iter389 (2026-06) — requirements added
+12. **LST collected only in its window (Jul-Oct), automatically.** (Done — `active_months`
+    per compliance line, month chips in the editor.)
+13. **Somebody joining outside the window misses that collection** — explicitly no
+    catch-up, per user decision. (Done.)
+14. **Employer may cover an employee's first LST cycle**, all of it or a share, reverting to
+    the employee afterwards; not a taxable benefit. (Done.)
