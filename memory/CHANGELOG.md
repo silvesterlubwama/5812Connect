@@ -2325,3 +2325,117 @@ subtitle reads "deducted from pay · Jul Aug Sep Oct only". No overflow at 1920.
 
 **Housekeeping** — removed another 4 payslips / 1 salary / 4 history rows / 1 user left
 behind by test runs. Preview DB: 7 real salaries, 60 payslips, employer contributions 0.
+
+## iter390 — 2026-06 · Lesson planner run sheet: dropped fields + stale print
+
+**Reported:** "The print page for lesson planner seems to be filtering out some information
+or if previously generated, it doesn't update with new information."
+
+**Cause 1 — stale sheet.** The PDF is built server-side from the SAVED plan, but the form
+keeps edits in local React state until you press Save. Edit → click "Run sheet PDF" → you
+get the version from before your edits. Nothing was cached server-side (`_run_sheet_pdf` has
+always regenerated), but the GET also carried no cache headers, so a browser or CDN could
+hand back the previous download for the unchanged URL.
+- `LessonPlanningPage.jsx`: `runSheet()` and `emailRunSheet()` now `await savePlan()` first
+  and bail if the save fails — emailing leaders a stale run sheet is worse than printing
+  one. `savePlan()` returns the saved doc so callers can check. A `?t=<now>` param defeats
+  any client cache.
+- `lesson_planning.py:run_sheet_pdf` adds `Cache-Control: no-store, must-revalidate`.
+- `add_library_item` is idempotent (dedupes by name, line 152), so the extra save does not
+  duplicate songs or games.
+- `update_plan` uses `$set` of `_plan_body`, so `purchase_order_number` and the
+  `run_sheet_sent_*` log survive the auto-save.
+
+**Cause 2 — fields silently absent from `_run_sheet_html`.** Entered and stored, never
+printed: `snacks[].cost`, `materials[].cost`, `games[].duration_min`, `topic_focus`,
+`notes_after`, `purchase_order_number`, and a slot's `kind` when it also had a title.
+All now rendered, plus a new **Budget total** line (snacks + kit, broken down) so the run
+sheet and the purchase order agree. `_money()` formats with thousands separators and
+tolerates blank/non-numeric costs. The offering target is formatted the same way.
+
+**Cause 3 — a finished outreach could not be reopened at all.** `outreach_events` excluded
+`completed/closed/done` regardless of `upcoming_only`, and `list_plans` built its query
+straight from `get_campus_filter`, so a plan whose event had no campus (`location_id: ""`)
+fell outside every filter and vanished — the same class of bug as the earlier calendar
+"events with no campus disappear" issue.
+- `upcoming_only=False` now only hides `cancelled/canceled/archived`, and sorts newest
+  first when looking back (61 rows oldest-first was useless).
+- `list_plans` mirrors `outreach_events`: `$or` of allowed campuses **or** a blank one.
+- `LessonPlanningPage.jsx`: "Show past outreaches" toggle (`lp-show-past`) on the events
+  tab, wired to `upcoming_only`. Without this the new `notes_after` block on the run sheet
+  would have been unreachable — it is by definition filled in after the event.
+
+Tests: `tests/test_iter390_run_sheet_fields.py` 9/9. End-to-end in the browser: typed a
+topic, verse, a snack at 90,000, kit at 25,000 and after-notes, then clicked **Run sheet PDF
+without pressing Save** — the downloaded PDF contained every value plus "Budget 115,000",
+and the toasts confirmed "Plan saved" then "Run sheet downloaded". Past toggle takes the
+list from 10 to 61 events. Regression: iter385/387/388/389 → 29 passed.
+
+**Note on preview data:** `lesson_plans` holds one orphaned seed plan
+(`plan_6e87880db4`) whose event `evt_0e82468c` no longer exists, so it has nothing to
+reopen from the events tab. Harmless, but it is why the planner looked empty while a plan
+existed in the DB.
+
+## iter391 — 2026-06 · Story print spacing + shared products across stores
+
+**1. Run sheet story block ran words together** — textarea text contains `\n`, and HTML
+collapses it, so a three-paragraph story main point printed as one blob.
+- New `.wrap { white-space: pre-wrap; word-break: break-word; }` applied to every block of
+  leader-typed prose: story `main_point`, each discussion question, slot `notes`, and
+  `notes_after`. Also `line-height: 1.5` on the body, `margin: 3px 0` on paragraphs, 12px
+  between blocks and a hairline under each section heading.
+- `&#160;` before the slot's kind tag (WeasyPrint was dropping the inter-tag space, giving
+  "Welcome· welcome").
+- Verified by rendering a real PDF: `"ninety-nine.He"` no longer appears anywhere.
+
+**2. Shared products (`routers/product_scope.py`, NEW)**
+User's choices: stock per store, both an "all stores" tick and a named-store picker, price
+shared by default with per-store override, blank-store products treated as universal,
+"Marketplace" menu label kept.
+- Product doc gains `is_universal`, `store_ids[]`, `store_stock{loc: qty}`,
+  `store_prices{loc: price}`. A product is "shared" when `is_universal` or `store_ids` is
+  non-empty; **anything else behaves exactly as before** (single `location_id`, `stock`,
+  `price`), so no migration was needed.
+- Pure helpers: `available_at`, `availability_query`, `stock_at`, `price_at`, `stock_field`
+  (the Mongo path to `$inc` — `stock` vs `store_stock.<loc>`), `resolve_for_store`,
+  `stores_for`, `locations_from_campus_filter`.
+- `GET /products?location_id=` resolves each row to that store's own stock and price, so
+  the POS grid, receipts and the public shop carry on reading plain `stock`/`price`.
+- `create_sale`, the undo/void restore, the delete restore and the public-shop reservation
+  release all decrement/restore the SELLING store's column only (proved by test: selling 2
+  at store A leaves store B's 9 untouched).
+- `stock-movement` requires `location_id` for a shared product (400 otherwise) rather than
+  guessing which branch received the goods.
+- `reorder-alerts` raises one alert per short store. `stores_for` only reports stores that
+  actually hold a count (plus the home store) — alerting for all 13 campuses was noise.
+- Public shop offers the chain total and `_fulfilling_store()` routes each line to the
+  branch that can fill it, so an online buyer isn't refused because one branch is empty.
+- **Variants cannot be shared** (400 with a plain-English reason): per-store-per-variant
+  stock is a second dimension that barcode labels, reorder rules and void restores don't
+  understand, and a silently wrong number is worse than a refusal.
+- Flipping an existing product to shared seeds `store_stock` from its current `stock` at
+  its home store, so nothing looks like it evaporated.
+
+**3. Two bugs found on the way**
+- `get_campus_filter` returns `{"$or": [{location_id...}, {location_ids...}]}`. My first
+  `allowed` extraction only understood the flat form, so it came back empty and
+  `GET /products` returned **zero products**. `locations_from_campus_filter()` now handles
+  the `$or`, `$in` and bare-string shapes. (This is why the Marketplace looked empty.)
+- A product saved with no store fell outside every campus filter and vanished from the
+  list, while the client-side filter was written expecting "no store = everywhere". Blank
+  now means available everywhere, matching the user's choice.
+
+**4. Frontend** `ProductsPage.jsx`: `SharedStoresEditor` (all-stores tick, store chips,
+per-store stock + price grid), `isShared`/`storeStock`/`storePrice` helpers used by the POS
+grid, the cart price and the product cards, a "shared" badge, and the store filter now
+matches universal and named-store products.
+
+Tests: `tests/test_iter391_shared_products.py` 10/10, `test_iter390` 10/10. Browser: editor
+renders both states at 1920 and 390 px with no overflow.
+
+**Housekeeping** — deleted 10 leftover `TEST_Iter*` campuses (they were cluttering the new
+store picker; nothing referenced them except one empty test journal, which was left
+untouched so the ledger is unchanged). 3 real campuses remain.
+
+**Note:** iter385's tests return 429 if the whole suite is run back to back — that is the
+login rate limiter, not a regression. Re-run that file on its own.

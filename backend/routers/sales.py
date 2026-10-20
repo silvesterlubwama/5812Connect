@@ -6,7 +6,16 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 import uuid
 
+from routers.product_scope import stock_field
+
 router = APIRouter(prefix="/api", tags=["sales"])
+
+
+async def _stock_field_for(product_id: str, store_id: str) -> str:
+    """Which stock column a sale touches. A shared product counts its on-hand
+    per store, so selling at one store must not move another store's number."""
+    prod = await db.products.find_one({"id": product_id}, {"_id": 0, "is_universal": 1, "store_ids": 1})
+    return stock_field(prod or {}, store_id)
 
 
 def _can_edit_sale(user: dict, sale: dict) -> bool:
@@ -141,20 +150,24 @@ async def create_sale(data: SaleCreate, current_user: dict = Depends(get_current
         from routers.chart_accounts import invalidate_balance_cache
         invalidate_balance_cache([doc["deposit_to_account_id"]])
     # Stock decrement: variant stock by qty AND main stock by qty * units_per_pack
+    # A shared product is counted per store, so decrement THIS store's column.
+    sale_store = doc.get("location_id") or ""
     for item in data.items:
         if item.get("product_id"):
             qty = item.get("qty", 1)
             units_per_pack = int(item.get("units_per_pack", 1) or 1)
             base_units = qty * max(1, units_per_pack)
+            prod = await db.products.find_one({"id": item["product_id"]}, {"_id": 0, "is_universal": 1, "store_ids": 1})
+            field = stock_field(prod or {}, sale_store)
             if item.get("variant_id"):
                 await db.products.update_one(
                     {"id": item["product_id"], "variants.id": item["variant_id"]},
-                    {"$inc": {"variants.$.stock": -qty, "stock": -base_units}}
+                    {"$inc": {"variants.$.stock": -qty, field: -base_units}}
                 )
             else:
                 await db.products.update_one(
                     {"id": item["product_id"]},
-                    {"$inc": {"stock": -base_units}}
+                    {"$inc": {field: -base_units}}
                 )
 
     # iter-marketplace-resource + iter-marketplace-tickets:
@@ -585,13 +598,15 @@ async def undo_sale(sale_id: str, current_user: dict = Depends(get_current_user)
             qty = item.get("qty", 1)
             units_per_pack = int(item.get("units_per_pack", 1) or 1)
             base_units = qty * max(1, units_per_pack)
+            restore_field = await _stock_field_for(item["product_id"], sale.get("location_id") or "")
             if item.get("variant_id"):
                 await db.products.update_one(
                     {"id": item["product_id"], "variants.id": item["variant_id"]},
-                    {"$inc": {"variants.$.stock": qty, "stock": base_units}}
+                    {"$inc": {"variants.$.stock": qty, restore_field: base_units}}
                 )
             else:
-                await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": base_units}})
+                await db.products.update_one({"id": item["product_id"]},
+                                             {"$inc": {restore_field: base_units}})
     # Reverse customer accounts totals
     if sale.get("customer_id"):
         await db.customer_accounts.update_one(
@@ -1004,7 +1019,9 @@ async def delete_sale(sale_id: str, current_user: dict = Depends(get_current_use
     # Restore stock for sold items
     for item in (sale.get("items") or []):
         if item.get("product_id"):
-            await db.products.update_one({"id": item["product_id"]}, {"$inc": {"stock": item.get("qty", 1)}})
+            restore_field = await _stock_field_for(item["product_id"], sale.get("location_id") or "")
+            await db.products.update_one({"id": item["product_id"]},
+                                         {"$inc": {restore_field: item.get("qty", 1)}})
     await _audit(current_user["id"], "delete", "sale", sale_id)
     return {"message": "Sale entry deleted, stock restored"}
 

@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
 
+from routers.product_scope import (
+    availability_query, resolve_for_store, is_shared, stock_at, stock_field, stores_for,
+    locations_from_campus_filter,
+)
+
 router = APIRouter(prefix="/api", tags=["products"], dependencies=[Depends(require_sales_view)])
 
 
@@ -96,6 +101,13 @@ class ProductCreate(BaseModel):
     sell_online: bool = False
     # iter320: public shop gallery — ordered list of image URLs, first is the cover.
     images: List[str] = []
+    # iter391 shared products: one catalogue entry several stores can sell.
+    # `is_universal` = every store; `store_ids` = named stores. Stock is then
+    # counted per store in `store_stock`, and a store may override the price.
+    is_universal: bool = False
+    store_ids: Optional[List[str]] = None
+    store_stock: Optional[dict] = None
+    store_prices: Optional[dict] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
@@ -110,26 +122,72 @@ class ProductUpdate(BaseModel):
     event_id: Optional[str] = None
     sell_online: Optional[bool] = None
     images: Optional[List[str]] = None
+    is_universal: Optional[bool] = None
+    store_ids: Optional[List[str]] = None
+    store_stock: Optional[dict] = None
+    store_prices: Optional[dict] = None
 
 # ========== PRODUCTS ==========
 
+def _guard_shared(product: dict) -> None:
+    """Variants add a second stock dimension that nothing downstream handles,
+    so a product cannot be both shared and variant-based."""
+    if is_shared(product) and product.get("has_variants"):
+        raise HTTPException(
+            status_code=400,
+            detail="A product with variants can't be shared across stores yet — keep it to one store, or drop the variants.",
+        )
+
+
+def _seed_store_stock(product: dict) -> None:
+    """First time a product becomes shared, move its single on-hand count into
+    its home store so nothing looks like it evaporated."""
+    if not is_shared(product):
+        return
+    per_store = dict(product.get("store_stock") or {})
+    if not per_store:
+        home = product.get("location_id") or ""
+        if home:
+            per_store[home] = int(product.get("stock") or 0)
+    product["store_stock"] = per_store
+
+
 @router.get("/products")
-async def list_products(current_user: dict = Depends(get_current_user)):
-    query = {**await get_campus_filter(current_user)}
-    return await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+async def list_products(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Products this user may see.
+
+    `location_id` narrows to one store and resolves each row to that store's own
+    stock and price, so the POS grid keeps reading plain `stock` and `price`.
+    Shared products appear for every store they serve, and a product saved with
+    no store at all is treated as available everywhere (it used to fall outside
+    every campus filter and disappear).
+    """
+    campus = await get_campus_filter(current_user)
+    allowed = locations_from_campus_filter(campus)
+    query = availability_query(allowed, location_id or "")
+    rows = await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(500)
+    return [resolve_for_store(p, location_id or "") for p in rows]
 
 @router.post("/products")
 async def create_product(data: ProductCreate, current_user: dict = Depends(get_current_user)):
     doc = {"id": f"prod_{str(uuid.uuid4())[:8]}", **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
     doc["location_id"] = default_creation_location(current_user, doc.get("location_id"))
+    _guard_shared(doc)
+    _seed_store_stock(doc)
     await db.products.insert_one(doc); doc.pop("_id", None); return doc
 
 @router.put("/products/{product_id}")
 async def update_product(product_id: str, data: ProductUpdate, current_user: dict = Depends(get_current_user)):
     update_data = {k: v for k, v in data.model_dump().items() if v is not None}
+    existing = await db.products.find_one({"id": product_id}, {"_id": 0}) or {}
+    _guard_shared({**existing, **update_data})
     # If product has variants, main stock is derived from variant totals
     if update_data.get("has_variants") and update_data.get("variants"):
         update_data["stock"] = sum(int(v.get("stock", 0) or 0) for v in update_data["variants"])
+    if "is_universal" in update_data or "store_ids" in update_data:
+        merged = {**existing, **update_data}
+        _seed_store_stock(merged)
+        update_data["store_stock"] = merged.get("store_stock") or {}
     await db.products.update_one({"id": product_id}, {"$set": update_data})
     return await db.products.find_one({"id": product_id}, {"_id": 0})
 
@@ -305,11 +363,18 @@ async def record_stock_movement(product_id: str, data: dict, current_user: dict 
         new_total = sum(int(v.get("stock", 0) or 0) for v in (product.get("variants") or []))
         await db.products.update_one({"id": product_id}, {"$set": {"stock": new_total}})
     else:
-        before = int(product.get("stock", 0) or 0)
+        store_id = (data.get("location_id") or "").strip()
+        if is_shared(product) and not store_id:
+            raise HTTPException(
+                status_code=400,
+                detail="This product is shared across stores — say which store the stock moved at (location_id).",
+            )
+        field = stock_field(product, store_id)
+        before = stock_at(product, store_id)
         after = before + delta
         if after < 0:
             raise HTTPException(status_code=400, detail=f"Insufficient stock ({before} on hand)")
-        await db.products.update_one({"id": product_id}, {"$set": {"stock": after}})
+        await db.products.update_one({"id": product_id}, {"$set": {field: after}})
     movement = {
         "id": f"sm_{uuid.uuid4().hex[:10]}",
         "product_id": product_id,
@@ -321,7 +386,7 @@ async def record_stock_movement(product_id: str, data: dict, current_user: dict 
         "reason": reason,
         "notes": (data.get("notes") or "")[:500],
         "reference": (data.get("reference") or "")[:120],
-        "location_id": product.get("location_id"),
+        "location_id": (data.get("location_id") or "").strip() or product.get("location_id"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
         "created_by_name": current_user.get("name", ""),
@@ -352,8 +417,11 @@ async def list_all_stock_movements(reason: Optional[str] = None, limit: int = 20
 async def reorder_alerts(current_user: dict = Depends(get_current_user)):
     """Products at or below their `reorder_level` (Odoo-style reorder rule)."""
     campus = await get_campus_filter(current_user)
-    query = {**campus} if campus else {}
-    all_products = await db.products.find(query, {"_id": 0}).to_list(2000)
+    allowed = locations_from_campus_filter(campus)
+    all_products = await db.products.find(availability_query(allowed), {"_id": 0}).to_list(2000)
+    all_locations = allowed or [
+        loc["id"] for loc in await db.locations.find({}, {"_id": 0, "id": 1}).to_list(200)
+    ]
     alerts = []
     for p in all_products:
         reorder = int(p.get("reorder_level") or 0)
@@ -371,6 +439,21 @@ async def reorder_alerts(current_user: dict = Depends(get_current_user)):
                     "low_variants": [{"variant_id": v["id"], "name": v.get("name"), "stock": v.get("stock", 0)} for v in low_variants],
                 })
         else:
+            # A shared product can be short at one store and fine at another,
+            # so report the shortfall store by store.
+            if is_shared(p):
+                for store in stores_for(p, all_locations):
+                    on_hand = stock_at(p, store)
+                    if on_hand <= reorder:
+                        alerts.append({
+                            "product_id": p["id"],
+                            "product_name": p.get("name"),
+                            "reorder_level": reorder,
+                            "stock": on_hand,
+                            "location_id": store,
+                            "shared": True,
+                        })
+                continue
             stock = int(p.get("stock", 0) or 0)
             if stock <= reorder:
                 alerts.append({

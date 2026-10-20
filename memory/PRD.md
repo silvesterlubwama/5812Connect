@@ -2303,3 +2303,16 @@ See `/app/memory/test_credentials.md`.
     catch-up, per user decision. (Done.)
 14. **Employer may cover an employee's first LST cycle**, all of it or a share, reverting to
     the employee afterwards; not a taxable benefit. (Done.)
+
+## iter390 (2026-06) — bug fixed
+15. **Lesson planner run sheet dropped entered fields and printed a pre-edit version.**
+    Fixed: print/email now save first, no-store headers, costs + budget total + focus +
+    after-notes + PO number printed, and finished outreaches can be reopened via a
+    "Show past outreaches" toggle. (Done.)
+
+## iter391 (2026-06) — fixed + added
+16. **Lesson planner story print ran words together.** Fixed (pre-wrap on typed prose).
+17. **Shared products across stores** — "Available at all stores" or named stores, stock
+    counted per store, shared price with per-store override. (Done. Variants excluded.)
+    Product editor lives at Finance → **Marketplace** (`/sales`) → Products tab; the user
+    chose to keep that menu label.

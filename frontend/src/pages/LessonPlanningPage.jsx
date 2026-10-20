@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { SearchSelect, guardPickerEscape } from '../components/SearchSelect';
 import { toast } from 'sonner';
-import { Plus, Trash2, Copy, Printer, ShoppingCart, Calendar, Music, Gamepad2, Cookie, BookOpen, Mail, Bookmark, Pencil } from 'lucide-react';
+import { Plus, Trash2, Copy, Printer, ShoppingCart, Calendar, Music, Gamepad2, Cookie, BookOpen, Mail, Bookmark, Pencil, History } from 'lucide-react';
 
 const API = '/lesson-planning';
 const SLOT_KINDS = ['welcome', 'worship', 'story', 'games', 'snacks', 'offering', 'other'];
@@ -39,13 +39,16 @@ export default function LessonPlanningPage() {
   const [startFor, setStartFor] = useState(null);    // "blank or from a template?" dialog
   const [emailing, setEmailing] = useState(false);
   const [tab, setTab] = useState('events');
+  // Past outreaches are hidden by default, but you still need to reopen one to
+  // print its run sheet or write up the "after the event" notes.
+  const [showPast, setShowPast] = useState(false);
   const [searchParams] = useSearchParams();
   const deepLinked = useRef(false);
 
   const load = useCallback(async () => {
     try {
       const [ev, th, sg, gm, ms, tp] = await Promise.all([
-        api.get(`${API}/outreach-events`),
+        api.get(`${API}/outreach-events`, { params: { upcoming_only: !showPast } }),
         api.get(`${API}/themes`),
         api.get(`${API}/library/songs`),
         api.get(`${API}/library/games`),
@@ -64,7 +67,7 @@ export default function LessonPlanningPage() {
       const list = r.data?.users || r.data || [];
       setPeople(Array.isArray(list) ? list : []);
     } catch { /* volunteers can still be typed in free */ }
-  }, []);
+  }, [showPast]);
   useEffect(() => { load(); }, [load]);
 
   const openPlan = async (ev, templateId = '') => {
@@ -107,7 +110,11 @@ export default function LessonPlanningPage() {
       setPlan(r.data);
       toast.success('Plan saved');
       load();
-    } catch (e) { toast.error(e?.response?.data?.detail || 'Save failed'); }
+      return r.data;
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Save failed');
+      return null;
+    }
   };
 
   const set = (k, v) => setPlan(p => ({ ...p, [k]: v }));
@@ -116,8 +123,12 @@ export default function LessonPlanningPage() {
   const dropFrom = (k, i) => setPlan(p => ({ ...p, [k]: (p[k] || []).filter((_, j) => j !== i) }));
 
   const runSheet = async () => {
+    // The PDF is built from the SAVED plan, so commit what's on screen first —
+    // otherwise you print the version from before your latest edits.
+    if (!await savePlan()) return;
     try {
-      const res = await api.get(`${API}/plans/${plan.id}/run-sheet.pdf`, { responseType: 'blob' });
+      const res = await api.get(`${API}/plans/${plan.id}/run-sheet.pdf`,
+        { responseType: 'blob', params: { t: Date.now() } });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'application/pdf' }));
       const a = document.createElement('a');
       a.href = url;
@@ -129,6 +140,8 @@ export default function LessonPlanningPage() {
   };
 
   const emailRunSheet = async () => {
+    // Same here — emailing leaders a stale run sheet is worse than printing one.
+    if (!await savePlan()) return;
     setEmailing(true);
     try {
       const r = await api.post(`${API}/plans/${plan.id}/email-run-sheet`, {});
@@ -204,6 +217,12 @@ export default function LessonPlanningPage() {
 
         {/* ── outreach events ── */}
         <TabsContent value="events" className="space-y-2">
+          <div className="flex justify-end">
+            <Button size="sm" variant={showPast ? 'default' : 'outline'} className="gap-1.5"
+              onClick={() => setShowPast(v => !v)} data-testid="lp-show-past">
+              <History size={13} />{showPast ? 'Showing past outreaches' : 'Show past outreaches'}
+            </Button>
+          </div>
           {events.length === 0 && (
             <Card><CardContent className="py-12 text-center text-sm text-muted-foreground" data-testid="lp-no-events">
               No outreach events yet. Create one in Events with an outreach type, then plan it here.

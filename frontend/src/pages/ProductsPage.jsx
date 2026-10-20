@@ -28,7 +28,7 @@ import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import { CrossCampusMoveDialog } from '../components/CrossCampusMoveDialog';
-import { ArrowRightLeft } from 'lucide-react';
+import { ArrowRightLeft, Store } from 'lucide-react';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
 import { authApi, cashDropsApi, shiftsApi } from '../services/api';
@@ -51,7 +51,80 @@ const stockLabel = (stock, reorder) => {
   return `${stock} in stock`;
 };
 
-const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false, images: [] };
+const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false, images: [], is_universal: false, store_ids: [], store_stock: {}, store_prices: {} };
+
+// A shared product is one catalogue entry several stores sell. Name, SKU and
+// the base price travel with it; stock is counted per store, and a store may
+// charge its own price.
+const isShared = (p) => !!(p?.is_universal || (p?.store_ids || []).length);
+const storeStock = (p, storeId) => (isShared(p)
+  ? Number((p.store_stock || {})[storeId] || 0)
+  : Number(p?.stock || 0));
+const storePrice = (p, storeId) => {
+  const override = (p?.store_prices || {})[storeId];
+  return override === undefined || override === null || override === ''
+    ? Number(p?.price || 0)
+    : Number(override);
+};
+
+const SharedStoresEditor = ({ form, locations, onChange }) => {
+  const universal = !!form.is_universal;
+  const picked = form.store_ids || [];
+  const servedStores = universal ? locations.map(l => l.id) : picked;
+  const blocked = !!form.has_variants;
+  const toggleStore = (id) => onChange({
+    store_ids: picked.includes(id) ? picked.filter(x => x !== id) : [...picked, id],
+  });
+  const setCell = (group, id, value) => onChange({ [group]: { ...(form[group] || {}), [id]: value } });
+  return (
+    <div className="rounded-lg border p-3 space-y-2" data-testid="shared-stores-editor">
+      <Label className="text-xs">Sold at</Label>
+      {blocked ? (
+        <p className="text-[11px] text-amber-600" data-testid="shared-blocked-note">
+          Products with variants stay with one store for now — each variant would need its own count per store.
+        </p>
+      ) : (
+        <>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={universal} data-testid="product-universal"
+              onChange={e => onChange({ is_universal: e.target.checked, store_ids: e.target.checked ? [] : picked })} />
+            Available at all stores
+          </label>
+          {!universal && (
+            <div className="flex flex-wrap gap-1">
+              {locations.map(l => (
+                <button key={l.id} type="button" data-testid={`product-store-${l.id}`}
+                  onClick={() => toggleStore(l.id)}
+                  className={`px-2 py-0.5 rounded text-[11px] border transition-colors ${picked.includes(l.id) ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:border-primary/50'}`}>
+                  {l.name}
+                </button>
+              ))}
+            </div>
+          )}
+          {servedStores.length > 0 && (
+            <div className="space-y-1 pt-1">
+              <p className="text-[10px] text-muted-foreground">Each store counts its own stock. Leave a price blank to use the main price.</p>
+              {servedStores.map(id => (
+                <div key={id} className="flex items-center gap-2">
+                  <span className="text-[11px] flex-1 truncate">{locations.find(l => l.id === id)?.name || id}</span>
+                  <Input className="h-7 w-20 text-xs" type="number" placeholder="stock"
+                    value={(form.store_stock || {})[id] ?? ''} data-testid={`product-store-stock-${id}`}
+                    onChange={e => setCell('store_stock', id, e.target.value === '' ? '' : parseInt(e.target.value, 10) || 0)} />
+                  <Input className="h-7 w-24 text-xs" type="number" placeholder="price"
+                    value={(form.store_prices || {})[id] ?? ''} data-testid={`product-store-price-${id}`}
+                    onChange={e => setCell('store_prices', id, e.target.value === '' ? '' : parseFloat(e.target.value) || 0)} />
+                </div>
+              ))}
+            </div>
+          )}
+          {!universal && picked.length === 0 && (
+            <p className="text-[11px] text-muted-foreground">Nothing ticked — this product stays with its own store above.</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
 
 export default function ProductsPage() {
   const { user } = useAuth();
@@ -223,7 +296,11 @@ export default function ProductsPage() {
 
   const filteredProducts = products.filter(p => {
     const matchSearch = p.name?.toLowerCase().includes(productSearch.toLowerCase());
-    const matchLoc = locationFilter === 'all' || p.location_id === locationFilter || !p.location_id;
+    const matchLoc = locationFilter === 'all'
+      || p.location_id === locationFilter
+      || !p.location_id
+      || !!p.is_universal
+      || (p.store_ids || []).includes(locationFilter);
     return matchSearch && matchLoc;
   });
 
@@ -237,7 +314,7 @@ export default function ProductsPage() {
 
   // Cart operations
   const addToCart = async (product, variant = null) => {
-    let effectivePrice = variant?.price ?? product.price;
+    let effectivePrice = variant?.price ?? storePrice(product, saleLocationId);
     let priceSource = 'base';
     // Apply customer pricelist if a registered customer is selected
     if (selectedCustomerId) {
@@ -249,7 +326,7 @@ export default function ProductsPage() {
         }
       } catch { /* fall back to base price */ }
     }
-    const effectiveStock = variant ? (variant.stock || 0) : (product.stock || 0);
+    const effectiveStock = variant ? (variant.stock || 0) : storeStock(product, saleLocationId);
     if (effectiveStock <= 0) { toast.error(`${product.name}${variant ? ` (${variant.name})` : ''} is out of stock`); return; }
     const key = variant ? `${product.id}:${variant.id}` : product.id;
     setCart(prev => {
@@ -577,7 +654,7 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online, images: p.images || [] });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online, images: p.images || [], is_universal: !!p.is_universal, store_ids: p.store_ids || [], store_stock: p.store_stock || {}, store_prices: p.store_prices || {} });
     setShowProductModal(true);
   };
 
@@ -585,6 +662,13 @@ export default function ProductsPage() {
     e.preventDefault(); setSaving(true);
     try {
       const data = { ...productForm, price: parseFloat(productForm.price), stock: parseInt(productForm.stock), reorder_level: parseInt(productForm.reorder_level) || 5 };
+      // Blank cells mean "no override" / "nothing here yet" — don't send them.
+      data.store_stock = Object.fromEntries(
+        Object.entries(productForm.store_stock || {}).filter(([, v]) => v !== '' && v !== null)
+          .map(([k, v]) => [k, parseInt(v, 10) || 0]));
+      data.store_prices = Object.fromEntries(
+        Object.entries(productForm.store_prices || {}).filter(([, v]) => v !== '' && v !== null)
+          .map(([k, v]) => [k, parseFloat(v) || 0]));
       if (editingProduct) {
         const res = await productsApi.update(editingProduct.id, data);
         setProducts(prev => prev.map(p => p.id === editingProduct.id ? res.data : p));
@@ -830,19 +914,21 @@ export default function ProductsPage() {
                         } else {
                           addToCart(p);
                         }
-                      }} disabled={(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock) === 0}
-                        className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock) === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}>
+                      }} disabled={(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : storeStock(p, saleLocationId)) === 0}
+                        className={`text-left p-4 rounded-xl border-2 transition-all hover:shadow-soft-lg active:scale-[0.98] ${(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : storeStock(p, saleLocationId)) === 0 ? 'opacity-50 cursor-not-allowed border-border bg-secondary/30' : 'cursor-pointer border-border hover:border-primary bg-card hover:bg-primary/5'}`}>
                         <div className="flex items-start justify-between mb-2">
                           <div className="p-2 rounded-lg bg-secondary"><Package size={16} className="text-muted-foreground" /></div>
-                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock, p.reorder_level)}`}>{stockLabel(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : p.stock, p.reorder_level)}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : storeStock(p, saleLocationId), p.reorder_level)}`}>{stockLabel(p.has_variants ? (p.variants || []).reduce((s, v) => s + (v.stock || 0), 0) : storeStock(p, saleLocationId), p.reorder_level)}</span>
                         </div>
                         <p className="font-semibold text-sm leading-tight">{p.name}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           {p.category && <span className="text-xs text-muted-foreground">{p.category}</span>}
                           {p.has_variants && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">{(p.variants || []).length} variants</span>}
-                          {p.location_id && <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground"><MapPin size={8} className="inline mr-0.5" />{locName(p.location_id)}</span>}
+                          {isShared(p)
+                            ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary"><Store size={8} className="inline mr-0.5" />shared</span>
+                            : p.location_id && <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground"><MapPin size={8} className="inline mr-0.5" />{locName(p.location_id)}</span>}
                         </div>
-                        <p className="text-primary font-bold mt-2 text-sm">{p.has_variants && (p.variants || []).length > 0 ? `From ${fmt(Math.min(...(p.variants || []).map(v => v.price || Infinity)), p.currency || activeCurrency)}` : fmt(p.price, p.currency || activeCurrency)}</p>
+                        <p className="text-primary font-bold mt-2 text-sm">{p.has_variants && (p.variants || []).length > 0 ? `From ${fmt(Math.min(...(p.variants || []).map(v => v.price || Infinity)), p.currency || activeCurrency)}` : fmt(storePrice(p, saleLocationId), p.currency || activeCurrency)}</p>
                       </button>
                       </div>
                     ))}
@@ -1037,10 +1123,17 @@ export default function ProductsPage() {
                       </div>
                     </div>
                     {p.category && <p className="text-xs text-muted-foreground mb-1">{p.category}</p>}
-                    {p.location_id && <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><MapPin size={9} />{locName(p.location_id)}</p>}
-                    <p className="text-primary font-bold text-sm">{fmt(p.price, p.currency || 'UGX')}</p>
+                    {isShared(p)
+                      ? <p className="text-[10px] text-primary mb-1 flex items-center gap-1" data-testid={`product-shared-${p.id}`}><Store size={9} />{p.is_universal ? 'All stores' : `${(p.store_ids || []).length} stores`}</p>
+                      : p.location_id && <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><MapPin size={9} />{locName(p.location_id)}</p>}
+                    <p className="text-primary font-bold text-sm">{fmt(locationFilter !== 'all' ? storePrice(p, locationFilter) : p.price, p.currency || 'UGX')}</p>
                     <div className="mt-2">
-                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(p.stock, p.reorder_level)}`}>{stockLabel(p.stock, p.reorder_level)}</span>
+                      {(() => {
+                        // With one store picked, show that store's own count;
+                        // on "all stores" a shared product shows the chain total.
+                        const shown = locationFilter !== 'all' ? storeStock(p, locationFilter) : (p.stock || 0);
+                        return <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${stockColor(shown, p.reorder_level)}`} data-testid={`product-stock-${p.id}`}>{stockLabel(shown, p.reorder_level)}</span>;
+                      })()}
                     </div>
                     {p.sku && <p className="text-xs text-muted-foreground mt-1.5 font-mono">SKU: {p.sku}</p>}
                   </CardContent>
@@ -1239,6 +1332,11 @@ export default function ProductsPage() {
             <div className="space-y-2"><Label>SKU</Label>
               <Input placeholder="Product SKU (optional)" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
             </div>
+            <SharedStoresEditor
+              form={productForm}
+              locations={locations}
+              onChange={patch => setProductForm(f => ({ ...f, ...patch }))}
+            />
             <ProductGalleryEditor
               productId={editingProduct?.id}
               images={productForm.images || []}

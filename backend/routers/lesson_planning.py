@@ -187,13 +187,17 @@ async def outreach_events(
 ):
     """Outreach events with whether a plan exists — the planner's home list.
 
-    Past and cancelled events are left out: a planner only ever works on what
-    is still ahead. `upcoming_only=False` is kept for reports that genuinely
-    want the history.
+    Upcoming only by default: a planner normally works on what is still ahead.
+    `upcoming_only=False` looks back too, so a finished outreach can be reopened
+    to print its run sheet or write up what to do differently next time.
     """
     allowed = _allowed_locations(await _scope(current_user))
     DEAD_STATUSES = ["cancelled", "canceled", "completed", "closed", "done", "archived"]
-    query = {"type": {"$in": list(OUTREACH_TYPES)}, "status": {"$nin": DEAD_STATUSES}}
+    # Looking back deliberately: an outreach that has been run is marked
+    # completed, and you still need its run sheet and its "after the event"
+    # notes. Only genuinely dead events stay hidden.
+    statuses = DEAD_STATUSES if upcoming_only else ["cancelled", "canceled", "archived"]
+    query = {"type": {"$in": list(OUTREACH_TYPES)}, "status": {"$nin": statuses}}
     if allowed:
         query["$or"] = [{"location_id": {"$in": list(allowed)}}, {"location_id": {"$in": ["", None]}}]
     if upcoming_only:
@@ -201,7 +205,7 @@ async def outreach_events(
     rows = await db.events.find(query, {
         "_id": 0, "id": 1, "title": 1, "name": 1, "date": 1, "time": 1, "end_time": 1,
         "location": 1, "location_id": 1, "type": 1,
-    }).sort("date", 1).to_list(200)
+    }).sort("date", 1 if upcoming_only else -1).to_list(200)
     out = []
     for e in rows:
         plan = await db.lesson_plans.find_one({"event_id": e["id"]}, {"_id": 0, "id": 1, "status": 1, "topic_title": 1})
@@ -261,7 +265,13 @@ async def list_plans(
     current_user: dict = Depends(require_planner),
 ):
     scope = await _scope(current_user)
-    query = dict(scope)
+    query = {}
+    allowed = _allowed_locations(scope)
+    if allowed:
+        # A plan whose event has no campus set must still be visible, exactly as
+        # the outreach-events list treats them — otherwise it vanishes entirely.
+        query["$or"] = [{"location_id": {"$in": list(allowed)}},
+                        {"location_id": {"$in": ["", None]}}]
     if event_id:
         query["event_id"] = event_id
     elif not include_past:
@@ -566,15 +576,26 @@ def _esc(v):
     return html_escape(str(v if v is not None else ""))
 
 
+def _money(v):
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return ""
+    return f"{n:,.0f}" if n == int(n) else f"{n:,.2f}"
+
+
 def _run_sheet_html(plan):
     rows = ""
     for s in plan.get("slots") or []:
-        note = f"<div class='meta'>{_esc(s.get('notes'))}</div>" if s.get("notes") else ""
+        note = f"<div class='meta wrap'>{_esc(s.get('notes'))}</div>" if s.get("notes") else ""
+        kind = s.get("kind")
+        title = s.get("title") or kind
+        kind_tag = f"<span class='meta'>&#160;· {_esc(kind)}</span>" if kind and s.get("title") else ""
         rows += (
             "<tr>"
             f"<td class='t'>{_esc(s.get('start'))}</td>"
             f"<td class='t'>{_esc(s.get('duration_min') or '')} min</td>"
-            f"<td><strong>{_esc(s.get('title') or s.get('kind'))}</strong>{note}</td>"
+            f"<td><strong>{_esc(title)}</strong>{kind_tag}{note}</td>"
             f"<td>{_esc(s.get('leader_name') or '—')}</td>"
             "</tr>"
         )
@@ -593,42 +614,73 @@ def _run_sheet_html(plan):
     games = "".join(
         li(_esc(g.get("name"))
            + (f" ({_esc(g.get('age_range'))})" if g.get("age_range") else "")
+           + (f" · {_esc(g.get('duration_min'))} min" if g.get("duration_min") else "")
            + (f" · kit: {_esc(g.get('kit'))}" if g.get("kit") else ""))
         for g in plan.get("games") or [] if g.get("name"))
     snacks = "".join(
         li(f"{_esc(s.get('item'))} × {_esc(s.get('servings') or '?')}"
-           + (f" — {_esc(s.get('who'))}" if s.get("who") else ""))
+           + (f" — {_esc(s.get('who'))}" if s.get("who") else "")
+           + (f" · {_money(s.get('cost'))}" if _money(s.get("cost")) else ""))
         for s in plan.get("snacks") or [] if s.get("item"))
-    materials = "".join(li(_esc(m.get("item"))) for m in plan.get("materials") or [] if m.get("item"))
+    materials = "".join(
+        li(_esc(m.get("item")) + (f" · {_money(m.get('cost'))}" if _money(m.get("cost")) else ""))
+        for m in plan.get("materials") or [] if m.get("item"))
+
+    # Running total of everything that has to be bought, so the run sheet and
+    # the purchase order agree.
+    def _sum(rows_, field="cost"):
+        total = 0.0
+        for r in rows_ or []:
+            try:
+                total += float(r.get(field) or 0)
+            except (TypeError, ValueError):
+                continue
+        return total
+    budget = _sum(plan.get("snacks")) + _sum(plan.get("materials"))
+    if budget:
+        snack_total, kit_total = _sum(plan.get("snacks")), _sum(plan.get("materials"))
+        parts = []
+        if snack_total:
+            parts.append(f"snacks {_money(snack_total)}")
+        if kit_total:
+            parts.append(f"kit {_money(kit_total)}")
+        materials += (f"<li class='total'><strong>Budget {_money(budget)}</strong>"
+                      f"<span class='meta'> ({' · '.join(parts)})</span></li>")
 
     story = plan.get("story") or {}
     story_html = ""
     if story.get("title") or story.get("passage") or story.get("main_point"):
-        qs = "".join(li(_esc(q)) for q in (story.get("questions") or []) if str(q).strip())
+        qs = "".join(li(f"<span class='wrap'>{_esc(q)}</span>") for q in (story.get("questions") or []) if str(q).strip())
         passage = f" · {_esc(story.get('passage'))}" if story.get("passage") else ""
-        point = f"<p>{_esc(story.get('main_point'))}</p>" if story.get("main_point") else ""
+        point = f"<p class='wrap'>{_esc(story.get('main_point'))}</p>" if story.get("main_point") else ""
         story_html = (f"<p class='lead'>{_esc(story.get('title') or '')}{passage}</p>"
                       f"{point}{f'<ul>{qs}</ul>' if qs else ''}")
 
     offering = plan.get("offering") or {}
     extras = ""
     if offering.get("planned"):
-        target = f" · target {_esc(offering.get('target'))}" if offering.get("target") else ""
+        target = f" · target {_money(offering.get('target')) or _esc(offering.get('target'))}" if offering.get("target") else ""
         extras += f"<p><strong>Offering:</strong> {_esc(offering.get('purpose') or 'collection')}{target}</p>"
     if plan.get("take_home"):
         extras += f"<p><strong>Take home:</strong> {_esc(plan['take_home'])}</p>"
     if plan.get("attendance_target"):
         extras += f"<p><strong>Attendance target:</strong> {_esc(plan['attendance_target'])}</p>"
+    if plan.get("topic_focus"):
+        extras += f"<p><strong>Focus:</strong> {_esc(plan['topic_focus'])}</p>"
+    notes_after = (f"<p class='wrap'>{_esc(plan['notes_after'])}</p>" if plan.get("notes_after") else "")
 
     theme_bit = f" · Theme: {_esc(plan.get('theme_name'))}" if plan.get("theme_name") else ""
     topic_bit = f" · Topic: {_esc(plan.get('topic_title'))}" if plan.get("topic_title") else ""
     verse_bit = (f'<div class="verse">Memory verse — {_esc(plan.get("memory_verse"))}</div>'
                  if plan.get("memory_verse") else "")
     status_bit = f"· {_esc(plan.get('status') or 'draft').upper()}"
+    po_bit = (f" · order {_esc(plan.get('purchase_order_number'))}"
+              if plan.get("purchase_order_number") else "")
 
     return f"""<html><head><meta charset="utf-8"><style>
       @page {{ size: A4; margin: 14mm 14mm 12mm; }}
-      body {{ font-family: Helvetica, Arial, sans-serif; color: #1e293b; font-size: 11px; }}
+      body {{ font-family: Helvetica, Arial, sans-serif; color: #1e293b; font-size: 11px;
+              line-height: 1.5; }}
       .bar {{ background: #1a1a2e; color: #fbbf24; padding: 8px 12px; font-weight: 700;
               letter-spacing: 1px; font-size: 12px; }}
       h1 {{ font-size: 18px; margin: 12px 0 2px; }}
@@ -643,12 +695,19 @@ def _run_sheet_html(plan):
       .meta {{ color: #64748b; font-size: 10px; }}
       .empty {{ text-align: center; color: #94a3b8; }}
       .cols {{ margin-top: 10px; }}
-      .block {{ margin-bottom: 10px; page-break-inside: avoid; }}
+      .block {{ margin-bottom: 12px; page-break-inside: avoid; }}
       .block h3 {{ font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
-                   color: #64748b; margin: 0 0 3px; }}
+                   color: #64748b; margin: 0 0 4px; padding-bottom: 2px;
+                   border-bottom: 1px solid #e2e8f0; }}
       ul {{ margin: 0; padding-left: 16px; }}
-      p {{ margin: 2px 0; }}
+      li {{ margin-bottom: 2px; }}
+      p {{ margin: 3px 0; }}
+      /* Anything a leader typed into a textarea keeps its own line breaks —
+         without this the paragraphs ran into one another in the PDF. */
+      .wrap {{ white-space: pre-wrap; word-break: break-word; }}
       .lead {{ font-weight: 600; }}
+      li.total {{ list-style: none; margin-left: -16px; margin-top: 3px;
+                  border-top: 1px solid #e2e8f0; padding-top: 3px; }}
       .foot {{ margin-top: 14px; border-top: 1px solid #e2e8f0; padding-top: 6px;
                color: #94a3b8; font-size: 9px; }}
     </style></head><body>
@@ -665,9 +724,10 @@ def _run_sheet_html(plan):
         {block('Snacks & drinks', f'<ul>{snacks}</ul>' if snacks else '')}
         {block('Materials & kit', f'<ul>{materials}</ul>' if materials else '')}
         {block('Also on the day', extras)}
+        {block('After the event', notes_after)}
       </div>
       <div class="foot">Run sheet generated {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M')} UTC
-        {status_bit}</div>
+        {status_bit}{po_bit}</div>
     </body></html>"""
 
 
@@ -691,6 +751,9 @@ async def run_sheet_pdf(plan_id: str, current_user: dict = Depends(require_plann
     pdf = await _run_sheet_pdf(plan)
     return Response(content=pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{_run_sheet_filename(plan)}"',
+        # The URL never changes, so without this a browser or CDN happily hands
+        # back the copy it fetched before the plan was edited.
+        "Cache-Control": "no-store, must-revalidate",
     })
 
 

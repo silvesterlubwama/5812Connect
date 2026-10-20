@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 import os
 
 from deps import db, logger
+from routers.product_scope import stock_at, price_at, is_shared, stores_for, stock_field
 
 router = APIRouter(prefix="/api/public", tags=["public-shop"])
 
@@ -27,6 +28,21 @@ ORDER_ALERT_EMAIL = os.environ.get("ORDER_ALERT_EMAIL", "")
 
 MAX_LINE_QTY = 50
 MAX_LINES = 20
+
+
+def _fulfilling_store(product: dict, qty: float) -> str:
+    """Which store fills an online line. Its home store if that can cover it,
+    otherwise the first store that holds enough — an online buyer shouldn't be
+    turned away because one branch happens to be empty."""
+    if not is_shared(product):
+        return product.get("location_id") or ""
+    home = product.get("location_id") or ""
+    if home and stock_at(product, home) >= qty:
+        return home
+    for store, on_hand in (product.get("store_stock") or {}).items():
+        if int(on_hand or 0) >= qty:
+            return store
+    return home or next(iter(stores_for(product, [])), "")
 
 
 async def _country_of_location(location_id: str) -> str:
@@ -58,12 +74,17 @@ async def public_products(country: Optional[str] = Query(None)):
         {"sell_online": True, "is_archived": {"$ne": True}},
         {"_id": 0, "id": 1, "name": 1, "description": 1, "price": 1, "currency": 1,
          "stock": 1, "image_url": 1, "images": 1, "category": 1, "location_id": 1,
-         "track_stock": 1},
+         "track_stock": 1, "is_universal": 1, "store_ids": 1, "store_stock": 1},
     ).sort("name", 1).to_list(200)
 
     out = []
     country_cache: dict = {}
     for p in products:
+        # A shared product's on-hand lives per store, so the shop offers the
+        # whole chain's total rather than a field that no longer exists.
+        p["stock"] = stock_at(p, "")
+        for gone in ("is_universal", "store_ids", "store_stock"):
+            p.pop(gone, None)
         if p.get("track_stock") is not False and float(p.get("stock") or 0) <= 0:
             continue  # sold out
         loc = p.get("location_id") or ""
@@ -128,11 +149,16 @@ async def public_create_order(data: dict, request: Request):
         prod = products.get(pid)
         if not prod or not prod.get("sell_online"):
             raise HTTPException(status_code=400, detail="One of those items is no longer available online")
-        if prod.get("track_stock") is not False and float(prod.get("stock") or 0) < qty:
-            raise HTTPException(status_code=409, detail=f"Only {int(prod.get('stock') or 0)} × {prod.get('name')} left")
-        price = float(prod.get("price") or 0)
+        # Shared products: pick the store that can actually fill this line, so
+        # the order is fulfilled (and decremented) somewhere real.
+        fill_store = _fulfilling_store(prod, qty)
+        on_hand = stock_at(prod, fill_store) if is_shared(prod) else float(prod.get("stock") or 0)
+        if prod.get("track_stock") is not False and float(on_hand) < qty:
+            available = int(stock_at(prod, "")) if is_shared(prod) else int(prod.get("stock") or 0)
+            raise HTTPException(status_code=409, detail=f"Only {available} × {prod.get('name')} left")
+        price = price_at(prod, fill_store)
         total += price * qty
-        location_id = location_id or (prod.get("location_id") or "")
+        location_id = location_id or fill_store or (prod.get("location_id") or "")
         currency = currency or (prod.get("currency") or "")
         sale_items.append({
             "product_id": pid, "name": prod.get("name"), "price": price,
@@ -247,13 +273,15 @@ async def _release_order(sale: dict):
                 continue
             qty = int(item.get("qty") or 1)
             base_units = qty * max(1, int(item.get("units_per_pack") or 1))
+            prod = await db.products.find_one({"id": pid}, {"_id": 0, "is_universal": 1, "store_ids": 1})
+            field = stock_field(prod or {}, sale.get("location_id") or "")
             if item.get("variant_id"):
                 await db.products.update_one(
                     {"id": pid, "variants.id": item["variant_id"]},
-                    {"$inc": {"variants.$.stock": qty, "stock": base_units}},
+                    {"$inc": {"variants.$.stock": qty, field: base_units}},
                 )
             else:
-                await db.products.update_one({"id": pid}, {"$inc": {"stock": base_units}})
+                await db.products.update_one({"id": pid}, {"$inc": {field: base_units}})
     except Exception as ex:
         logger.warning(f"failed to release order {sale.get('id')}: {ex}")
 
