@@ -85,12 +85,18 @@ Default admin: `admin@5812uganda.org` / `Admin@5812` — **rotate this in Settin
 
 ---
 
+> **Updating an existing box and wiring Cloudflare addresses: see
+> [OPERATIONS.md](./OPERATIONS.md)** — step by step, including the one-time
+> `SECRET_KEY` line every pre-October-2026 install needs before it will start.
+
 ## Adding remote access (Cloudflare Tunnel)
 
 1. Sign in at <https://one.dash.cloudflare.com> → Networks → Tunnels → Create a tunnel.
 2. Choose **Cloudflared**, name it e.g. `5812-uganda-field-office`.
 3. Copy the **token** Cloudflare shows.
 4. Under *Public Hostnames* add `<your-subdomain>.5812-global.org` → service `http://caddy:80`.
+   Add one hostname per organisation (`personal.5812uganda.org`, `new.lubwamas.org`, …) and then
+   assign it in the app under **Organisations → Address**.
 5. On the appliance:
 
 ```bash

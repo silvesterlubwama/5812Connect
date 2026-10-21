@@ -40,6 +40,10 @@ services:
     environment:
       MONGO_URL: mongodb://mongo:27017
       DB_NAME: ${DB_NAME:-connect}
+      # The API signs every login with SECRET_KEY and refuses to start without
+      # it. Older installs only have JWT_SECRET, so fall back to that value —
+      # same secret, so existing sessions and PIN digests keep working.
+      SECRET_KEY: ${SECRET_KEY:-${JWT_SECRET:-}}
       JWT_SECRET: ${JWT_SECRET}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SENDER_EMAIL: ${SENDER_EMAIL:-}

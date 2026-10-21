@@ -12,7 +12,7 @@
 # What it does:
 #   1. Installs Docker Engine + docker compose plugin (skipped if present).
 #   2. Drops the appliance into /opt/connect (configurable).
-#   3. Generates fresh JWT_SECRET and NFC_SECRET_KEY into .env (preserved on re-run).
+#   3. Generates fresh SECRET_KEY/JWT_SECRET and NFC_SECRET_KEY into .env (preserved on re-run).
 #   4. Pulls the latest images from GHCR.
 #   5. Brings the stack up + waits for /healthz.
 #   6. Prints the LAN IP + URL.
@@ -94,6 +94,7 @@ if [ ! -f .env ]; then
 # ─────────────────────────────────────────────────────────────────
 
 # Required — random secrets baked in at install time
+SECRET_KEY=$JWT
 JWT_SECRET=$JWT
 NFC_SECRET_KEY=$NFC
 
@@ -131,6 +132,15 @@ EOF
     chmod 600 .env
 else
     log ".env already exists — leaving it alone."
+    # The API gained a hard requirement on SECRET_KEY (it used to fall back to a
+    # public placeholder). Reuse this box's existing JWT_SECRET so nobody is
+    # logged out, and only add the line if it is genuinely missing.
+    if ! grep -q '^SECRET_KEY=' .env; then
+        EXISTING_JWT=$(grep '^JWT_SECRET=' .env | head -1 | cut -d= -f2-)
+        [ -n "$EXISTING_JWT" ] || EXISTING_JWT=$(openssl rand -hex 48)
+        printf '\nSECRET_KEY=%s\n' "$EXISTING_JWT" >> .env
+        log "Added SECRET_KEY to the existing .env (reused this box's JWT_SECRET)."
+    fi
 fi
 
 # ── 4. Pull + start ──────────────────────────────────────────────
