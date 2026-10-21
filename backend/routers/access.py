@@ -278,12 +278,15 @@ async def request_guest_visit(data: dict, current_user: dict = Depends(get_curre
     # Real-time WS broadcast to online managers
     try:
         from routers.websocket import manager as ws_manager
+        from org_context import get_current_org
+        # Scoped to this organisation: a guest's name and visit location must
+        # not be pushed to another tenant's managers.
         await ws_manager.broadcast({
             "type": "notification",
             "title": f"Guest visit request: {doc.get('guest_name', '')}",
             "body": f"At {loc.get('name') if loc else location_id} on {when}",
             "link": "/access",
-        })
+        }, organization_id=get_current_org())
     except Exception:
         pass
     return doc

@@ -12,7 +12,8 @@ import os
 import uuid
 from datetime import date, datetime, timedelta, timezone
 
-from deps import db, logger
+from deps import db, logger, active_org_ids
+from org_context import org_as
 
 # Daily auto-backup tracker (module-level so the scheduler can mark it idempotently)
 _last_auto_backup_date = None
@@ -43,79 +44,85 @@ async def _run_due_date_reminder_scheduler():
     """Hourly background task: notify assignees when their task is due tomorrow or today.
     Also fires a daily birthday/anniversary check at ~08:00 local UTC."""
     await asyncio.sleep(30)  # short initial delay to let startup finish
-    last_birthday_check_date = None
+    # Tracked per organisation: each tenant's daily 08:00 pass must fire even
+    # though they share one scheduler tick.
+    last_birthday_check_date = {}
     while True:
         try:
-            tomorrow = (date.today() + timedelta(days=1)).isoformat()
-            today_str = date.today().isoformat()
+            # No request to infer scope from: give each organisation its own pass.
+            for _oid in await active_org_ids():
+                with org_as(_oid):
+                    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+                    today_str = date.today().isoformat()
 
-            # Tasks due tomorrow
-            due_tasks = await db.tasks.find({
-                "due_date": tomorrow,
-                "is_archived": {"$ne": True},
-                "status": {"$ne": "done"},
-                "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_str}}],
-            }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
+                    # Tasks due tomorrow
+                    due_tasks = await db.tasks.find({
+                        "due_date": tomorrow,
+                        "is_archived": {"$ne": True},
+                        "status": {"$ne": "done"},
+                        "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_str}}],
+                    }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
 
-            for task in due_tasks:
-                assignees = list(task.get("assignees") or [])
-                if task.get("assignee") and task["assignee"] not in assignees:
-                    assignees.append(task["assignee"])
-                for uid in assignees:
-                    await _send_push_to_user(uid, "Task Due Tomorrow", f'"{task["title"]}" is due tomorrow', f"/tasks?task={task['id']}")
+                    for task in due_tasks:
+                        assignees = list(task.get("assignees") or [])
+                        if task.get("assignee") and task["assignee"] not in assignees:
+                            assignees.append(task["assignee"])
+                        for uid in assignees:
+                            await _send_push_to_user(uid, "Task Due Tomorrow", f'"{task["title"]}" is due tomorrow', f"/tasks?task={task['id']}")
 
-            # Tasks due today
-            today_tasks = await db.tasks.find({
-                "due_date": today_str,
-                "is_archived": {"$ne": True},
-                "status": {"$ne": "done"},
-                "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_str}}],
-            }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
+                    # Tasks due today
+                    today_tasks = await db.tasks.find({
+                        "due_date": today_str,
+                        "is_archived": {"$ne": True},
+                        "status": {"$ne": "done"},
+                        "$or": [{"snooze_until": {"$exists": False}}, {"snooze_until": {"$lte": today_str}}],
+                    }, {"_id": 0, "id": 1, "title": 1, "assignees": 1, "assignee": 1, "board_id": 1}).to_list(200)
 
-            for task in today_tasks:
-                assignees = list(task.get("assignees") or [])
-                if task.get("assignee") and task["assignee"] not in assignees:
-                    assignees.append(task["assignee"])
-                for uid in assignees:
-                    await _send_push_to_user(uid, "Task Due Today", f'"{task["title"]}" is due today!', f"/tasks?task={task['id']}")
+                    for task in today_tasks:
+                        assignees = list(task.get("assignees") or [])
+                        if task.get("assignee") and task["assignee"] not in assignees:
+                            assignees.append(task["assignee"])
+                        for uid in assignees:
+                            await _send_push_to_user(uid, "Task Due Today", f'"{task["title"]}" is due today!', f"/tasks?task={task['id']}")
 
-            total = len(due_tasks) + len(today_tasks)
-            if total:
-                logger.info(f"Sent due-date reminders for {total} tasks ({len(today_tasks)} today, {len(due_tasks)} tomorrow)")
+                    total = len(due_tasks) + len(today_tasks)
+                    if total:
+                        logger.info(f"Sent due-date reminders for {total} tasks ({len(today_tasks)} today, {len(due_tasks)} tomorrow)")
 
-            # Daily birthday & anniversary check (once per day, during 08:00-09:00 UTC hour)
-            now = datetime.now(timezone.utc)
-            if last_birthday_check_date != date.today() and now.hour == 8:
-                await _fire_birthday_anniversary_notifications()
-                await _fire_scheduled_customer_statements()
-                await _fire_overdue_payment_reminders()
-                await _fire_overdue_task_emails()
-                await _fire_overdue_task_director_digest()
-                await _fire_payday_payslip_generation()
-                # Phase A: recurring journal entries / bills
-                try:
-                    from routers.bank import fire_due_recurring_entries
-                    await fire_due_recurring_entries()
-                except Exception as e:
-                    logger.error(f"fire_due_recurring_entries: {e}")
-                # iter369: refresh children's inherited restricted-location
-                # access — revokes what the parent no longer has and flags
-                # the ones who have turned 18.
-                try:
-                    from routers.access_children import sync_all_children
-                    res = await sync_all_children()
-                    logger.info(f"child access re-check: {res['refreshed']} refreshed, "
-                                f"{len(res['revoked'])} revoked, {len(res['aged_out'])} aged out")
-                except Exception as e:
-                    logger.error(f"child access re-check: {e}")
-                last_birthday_check_date = date.today()
+                    # Daily birthday & anniversary check (once per day, during 08:00-09:00 UTC hour)
+                    now = datetime.now(timezone.utc)
+                    if last_birthday_check_date.get(_oid) != date.today() and now.hour == 8:
+                        await _fire_birthday_anniversary_notifications()
+                        await _fire_scheduled_customer_statements()
+                        await _fire_overdue_payment_reminders()
+                        await _fire_overdue_task_emails()
+                        await _fire_overdue_task_director_digest()
+                        await _fire_payday_payslip_generation()
+                        # Phase A: recurring journal entries / bills
+                        try:
+                            from routers.bank import fire_due_recurring_entries
+                            await fire_due_recurring_entries()
+                        except Exception as e:
+                            logger.error(f"fire_due_recurring_entries: {e}")
+                        # iter369: refresh children's inherited restricted-location
+                        # access — revokes what the parent no longer has and flags
+                        # the ones who have turned 18.
+                        try:
+                            from routers.access_children import sync_all_children
+                            res = await sync_all_children()
+                            logger.info(f"child access re-check: {res['refreshed']} refreshed, "
+                                        f"{len(res['revoked'])} revoked, {len(res['aged_out'])} aged out")
+                        except Exception as e:
+                            logger.error(f"child access re-check: {e}")
+                        last_birthday_check_date[_oid] = date.today()
 
-            # Daily AUTO-BACKUP — runs once per day during the midnight UTC hour.
-            # Writes to /app/backend/backups/, prunes anything older than 30 days.
-            global _last_auto_backup_date
-            if _last_auto_backup_date != date.today() and now.hour == 0:
-                await _fire_auto_backup()
-                _last_auto_backup_date = date.today()
+                    # Daily AUTO-BACKUP — dumps the whole database, so it stays
+                    # platform-level: the date guard means it fires on the first
+                    # organisation's pass and is skipped for the rest.
+                    global _last_auto_backup_date
+                    if _last_auto_backup_date != date.today() and now.hour == 0:
+                        await _fire_auto_backup()
+                        _last_auto_backup_date = date.today()
         except Exception as e:
             logger.error(f"Due-date scheduler error: {e}")
         await asyncio.sleep(3600)  # Run every hour
@@ -764,22 +771,25 @@ async def _run_flight_status_refresh_loop():
     await asyncio.sleep(60)  # let startup + seeding finish first
     while True:
         try:
-            from routers.shipments_pkg.airport import _refresh_flight_status_for
-            cursor = db.shipments.find({
-                "mode": "airport",
-                "$or": [
-                    {"status": "shipped"},
-                    {"flights.status": {"$in": ["departed", "in_air", "boarding"]}},
-                ],
-            }, {"_id": 0})
-            total = 0
-            async for s in cursor:
-                try:
-                    total += await _refresh_flight_status_for(s)
-                except Exception as ex:
-                    logger.warning(f"Flight refresh error for {s.get('id')}: {ex}")
-            if total:
-                logger.info(f"Flight status refresh cycle: updated {total} flights")
+            # No request to infer scope from: give each organisation its own pass.
+            for _oid in await active_org_ids():
+                with org_as(_oid):
+                    from routers.shipments_pkg.airport import _refresh_flight_status_for
+                    cursor = db.shipments.find({
+                        "mode": "airport",
+                        "$or": [
+                            {"status": "shipped"},
+                            {"flights.status": {"$in": ["departed", "in_air", "boarding"]}},
+                        ],
+                    }, {"_id": 0})
+                    total = 0
+                    async for s in cursor:
+                        try:
+                            total += await _refresh_flight_status_for(s)
+                        except Exception as ex:
+                            logger.warning(f"Flight refresh error for {s.get('id')}: {ex}")
+                    if total:
+                        logger.info(f"Flight status refresh cycle: updated {total} flights")
         except Exception as ex:
             logger.warning(f"Flight refresh loop error: {ex}")
         await asyncio.sleep(15 * 60)  # 15 minutes

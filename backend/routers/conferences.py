@@ -9,7 +9,15 @@ from bson import ObjectId
 import uuid
 import secrets
 
-router = APIRouter(prefix="/api/conferences", tags=["conferences"])
+from deps import get_current_user
+
+router = APIRouter(prefix="/api/conferences", tags=["conferences"],
+    # iter393 — every route here reads or writes tenant data (staff extensions,
+    # contacts, conference rooms, presence). They previously required no auth at
+    # all, so an anonymous caller inherited the default organisation and could
+    # read another tenant's directory. Authentication now gates the whole router,
+    # which is also what pins the caller's organisation.
+    dependencies=[Depends(get_current_user)])
 
 def get_db():
     from deps import db

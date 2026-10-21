@@ -1,7 +1,7 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pin_security import pin_digest, pin_query, pin_matches
-from deps import db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit, can_view_pay
+from deps import SECRET_KEY, db, raw_db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit, can_view_pay, is_super_admin, org_for_hostname, org_bypass, set_current_org
 from models import UserRegister, UserLogin
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -144,6 +144,52 @@ async def visitor_register(data: dict) -> dict:
     return {"token": None, "user": user_out, "pin": pin, "member_id": member_id}
 
 
+async def _resolve_login_org(user: dict, host_org: dict):
+    """Decide which organisation this sign-in belongs to.
+
+    Returns (org_id, org, pending_response). When pending_response is not None
+    the caller should return it as-is — that is the super admin being asked
+    which organisation to enter, since they are never in more than one."""
+    if is_super_admin(user):
+        if host_org:
+            with org_bypass():
+                await raw_db.users.update_one(
+                    {"id": user["id"]}, {"$set": {"active_organization_id": host_org["id"]}}
+                )
+            return host_org["id"], host_org, None
+        with org_bypass():
+            orgs = await raw_db.organizations.find(
+                {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1}
+            ).sort("name", 1).to_list(500)
+        active = user.get("active_organization_id")
+        if not active or not any(o["id"] == active for o in orgs):
+            return None, None, {"requires_org_selection": True, "organizations": orgs}
+        with org_bypass():
+            org = await raw_db.organizations.find_one({"id": active}, {"_id": 0})
+        if org and org.get("status") == "suspended":
+            raise HTTPException(status_code=403, detail=f"{org.get('name')} is suspended")
+        return active, org or {}, None
+
+    org_id = user.get("organization_id")
+    if not org_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account is not attached to an organisation. Contact your administrator.",
+        )
+    if host_org and host_org["id"] != org_id:
+        raise HTTPException(status_code=403, detail="This account does not belong to this site")
+    with org_bypass():
+        org = await raw_db.organizations.find_one({"id": org_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=403, detail="Organisation not found")
+    if org.get("status") == "suspended":
+        raise HTTPException(
+            status_code=403,
+            detail=f"{org.get('name', 'This organisation')} is suspended. Contact the system owner.",
+        )
+    return org_id, org, None
+
+
 @router.post("/auth/login")
 async def login(data: UserLogin, request: Request) -> dict:
     # Brute-force throttle — mirrors the security_checkpoint pair tarpit pattern.
@@ -176,13 +222,35 @@ async def login(data: UserLogin, request: Request) -> dict:
             phone_variants.append('0' + identifier[-9:])  # +256700... → 0700...
     elif identifier.startswith('0') and len(identifier) >= 9:
         phone_variants.append('+256' + identifier[1:])  # 0700... → +256700...
-    user = await db.users.find_one({
+    # Pre-auth lookup: we cannot know the organisation until we know who this
+    # is, so this single query is deliberately cross-tenant. Everything after
+    # the password check runs pinned to one organisation.
+    host_org = await org_for_hostname(request)
+    identity_query = {
         "$or": [
             {"email": identifier_lower},
             {"phone": {"$in": phone_variants}},
             {"national_id": identifier},
         ]
-    })
+    }
+    # When the request arrives on an organisation's own hostname, only that
+    # organisation's accounts may sign in there — the same email at another
+    # tenant is a different person.
+    if host_org:
+        identity_query = {"$and": [identity_query, {"organization_id": host_org["id"]}]}
+    with org_bypass():
+        # Two organisations may legitimately hold the same email as two
+        # different people, so match on the password too rather than taking
+        # whichever row Mongo happens to return first — otherwise only one of
+        # them could ever sign in on a shared hostname.
+        candidates = await raw_db.users.find(identity_query).to_list(20)
+    user = None
+    for candidate in candidates:
+        if verify_password(data.password, candidate.get("password_hash", "")):
+            user = candidate
+            break
+    if user is None and candidates:
+        user = candidates[0]  # fall through to the normal failure path below
     now_iso = datetime.now(timezone.utc).isoformat()
 
     async def _record_failure():
@@ -207,6 +275,19 @@ async def login(data: UserLogin, request: Request) -> dict:
         totp = pyotp.TOTP(user.get("totp_secret", ""))
         if not totp.verify(data.totp_code):
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
+    # ---- organisation gate ----
+    org_id, org, pending = await _resolve_login_org(user, host_org)
+    if pending is not None:
+        # A super admin with no organisation chosen yet. Issue a token so they
+        # can reach the organisation picker — it unlocks nothing else, because
+        # every data route resolves scope from active_organization_id, which is
+        # still empty.
+        pending["token"] = await create_token_with_session(user["id"], request)
+        pending["user_id"] = user["id"]
+        pending["message"] = "Choose which organisation to enter"
+        return pending
+    set_current_org(org_id)
+
     # Always default to user's primary campus on login
     user_loc = user.get("location_id") or (user.get("location_ids") or [None])[0]
     if not user_loc:
@@ -219,6 +300,8 @@ async def login(data: UserLogin, request: Request) -> dict:
         user["active_campus_id"] = user_loc
     token = await create_token_with_session(user["id"], request)
     user_out = {k: v for k, v in user.items() if k not in ("password_hash", "_id")}
+    user_out["organization_id"] = org_id
+    user_out["organization_name"] = org.get("name", "")
     # Record success so a string of recent failures resets for this IP
     try:
         await db.login_attempts.insert_one({"ip": client_ip, "identifier": identifier_lower[:80], "at": now_iso, "ok": True, "user_id": user["id"]})
@@ -257,12 +340,19 @@ async def logout(request: Request, current_user: dict = Depends(get_current_user
             from jose import jwt
             import os
             token = auth.split(" ", 1)[1]
-            payload = jwt.decode(token, os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production'), algorithms=["HS256"], options={"verify_exp": False})
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
             jti = payload.get("jti")
             if jti:
                 await db.sessions.update_one({"jti": jti}, {"$set": {"revoked": True, "revoked_at": datetime.now(timezone.utc).isoformat()}})
     except Exception as e:
         logger.warning(f"Logout session revoke: {e}")
+    # Signing out leaves the organisation too, so the platform owner is asked
+    # which one to open next time instead of silently resuming the last.
+    if is_super_admin(current_user):
+        with org_bypass():
+            await raw_db.users.update_one(
+                {"id": current_user["id"]}, {"$set": {"active_organization_id": None}}
+            )
     return {"message": "Logged out successfully"}
 
 
@@ -276,7 +366,7 @@ async def list_sessions(request: Request, current_user: dict = Depends(get_curre
             from jose import jwt
             import os
             token = auth.split(" ", 1)[1]
-            payload = jwt.decode(token, os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production'), algorithms=["HS256"], options={"verify_exp": False})
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
             current_jti = payload.get("jti")
     except Exception:
         pass
@@ -314,7 +404,7 @@ async def revoke_other_sessions(request: Request, current_user: dict = Depends(g
             from jose import jwt
             import os
             token = auth.split(" ", 1)[1]
-            payload = jwt.decode(token, os.environ.get('SECRET_KEY', '5812global_secret_key_change_in_production'), algorithms=["HS256"], options={"verify_exp": False})
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
             current_jti = payload.get("jti")
     except Exception:
         pass

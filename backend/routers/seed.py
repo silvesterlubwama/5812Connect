@@ -1,15 +1,22 @@
-"""Seed endpoints — dev/setup data population. Extracted from server.py."""
-from fastapi import APIRouter
+"""Seed endpoints — dev/setup data population. Extracted from server.py.
+
+iter393 — these were completely unauthenticated. With organisations in place
+that meant anyone could POST /api/seed on a tenant's hostname (or with
+?org=<slug>) and have a known admin account inserted into that tenant: an
+anonymous takeover of any newly created organisation. They now require the
+platform owner, who is the only person who should ever be seeding data.
+"""
+from fastapi import APIRouter, Depends
 from datetime import datetime, timezone
 from pin_security import apply_pin_fields
-from deps import db, hash_password
+from deps import db, hash_password, require_super_admin
 import uuid
 
 router = APIRouter(prefix="/api", tags=["seed"])
 
 
 @router.post("/seed")
-async def seed_data():
+async def seed_data(current_user: dict = Depends(require_super_admin)):
     existing_admin = await db.users.find_one({"email": "admin@5812global.org"})
     if not existing_admin:
         admin = {
@@ -89,7 +96,7 @@ async def seed_data():
 
 
 @router.post("/seed-extended")
-async def seed_extended():
+async def seed_extended(current_user: dict = Depends(require_super_admin)):
     product_count = await db.products.count_documents({})
     if product_count == 0:
         products = [
@@ -139,7 +146,7 @@ async def seed_extended():
 
 
 @router.post("/seed-locations")
-async def seed_locations_and_notifications():
+async def seed_locations_and_notifications(current_user: dict = Depends(require_super_admin)):
     loc_count = await db.locations.count_documents({})
     if loc_count == 0:
         locations = [
@@ -162,7 +169,7 @@ async def seed_locations_and_notifications():
 
 
 @router.post("/seed-all")
-async def seed_all_data():
+async def seed_all_data(current_user: dict = Depends(require_super_admin)):
     seeded = []
     if await db.outreach_programs.count_documents({}) == 0:
         programs = [

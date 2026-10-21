@@ -1,5 +1,106 @@
 # CHANGELOG
 
+## 2026-10-21 — iter 394-395 (phase 2 security, organisation setup tools, own web address, branding, owner activity log)
+**Socket login check.** `/api/ws/{user_id}` used to accept the user id in the URL as
+its only credential. The handshake now requires a real login token
+(`?token=`, validated by the new `authenticate_socket()` in `deps.py`): no token, a
+forged token, another user's token or another organisation's token are all refused;
+the token — not the URL — decides whose connection it is. `WebSocketContext.js`
+sends it. Verified: 4 refusal cases, 2 accept cases.
+
+**Public calendar links are per organisation.** Every tenant's "global" feed signed
+to the same string, so one organisation's `.ics` link opened whichever organisation
+the hostname resolved to. Tokens now embed and return the organisation
+(`<org_id>.<signature>`) and the feed is served pinned to it. The random-token
+webcal and share links are now looked up across tenants and then pinned to the
+organisation that owns them, so they work from any address.
+
+**Own web address per organisation.** Hostnames can now be edited after creation
+(`EditOrgDialog`), and a signed-in user gets their own organisation's branding even
+on a shared address (`GET /admin/system-settings/public` honours an optional bearer
+token). Verified end-to-end: a request with `Host: new.lubwamas.org` returns
+Lubwamas branding, an unclaimed host returns the default organisation's.
+
+**Organisation setup tools.** `GET /organizations/{id}/people` (searchable) and
+`POST /organizations/transfer-person` move one login between organisations — only
+the account moves, their records stay with the organisation that owns them; the
+destination is checked for an email clash (case-insensitive), old sessions are
+revoked, campus assignments cleared.
+
+**Branding per organisation** (each tenant already had its own settings doc):
+logo upload to object storage (`POST /admin/system-settings/branding/logo`),
+accent colour, sign-in headline/subtitle/background, and a wording dictionary.
+`BrandingContext` applies the organisation's vocabulary to rendered text — so
+"Members" really does read "Residents" in headings, buttons and messages, plural
+and capitalisation included — while skipping emails, links, identifiers, code and
+anything marked `data-no-term`. Tab title and brand colours follow the organisation.
+
+**Owner activity log.** `GET /organizations/activity` merges the platform log
+(entering, creating, suspending, deleting an organisation) with every tenant's
+admin audit trail, newest first, each row tagged with its organisation, filterable
+per organisation and paged with real totals. Shown in the Organisations console.
+
+**Fixes from two adversarial passes (test report iteration_257):**
+- CRITICAL: SVG logo upload was stored XSS on the app's own origin. SVG is no longer
+  accepted, uploads are verified by magic bytes (not the browser's label), and
+  `/api/storage/*` now serves with a restrictive CSP + `nosniff`, forcing any
+  markup-ish type to download instead of render.
+- Cross-tenant branding leak: `_load_raw()` handed out the module-level default
+  dicts **by reference**, so the first organisation to set a key it had no value for
+  mutated the shared defaults and every other organisation inherited its branding.
+  Defaults are now deep-copied. Branding keys are whitelisted and wording entries
+  length-capped.
+- Activity log reported the page size as the total and left some rows untagged.
+- Organisation admins could see (not use) the "Organisations" nav link.
+- `public_calendar_location_json` entered an organisation context it never exited.
+- Term replacement corrupted emails/URLs/identifiers and missed in-place React
+  updates (now `characterData` aware, with ancestor-based skipping).
+
+**Data incident (see `/app/memory/DATA_SAFETY.md`).** A raw `delete_many` cleanup of
+test rows removed the two real admin accounts; both were restored with their
+original ids. Rule recorded: never bulk-delete from the live database.
+
+Tests: `test_iter395_ws_branding_owner_tools.py` 20/20, `test_iter394_hardening_retest.py`
+28/28, `test_iter393_org_isolation_hardening.py` 15/15, `test_iter392_org_isolation.py`
+10/10, calendar/branding regression suites 29/29.
+
+
+## 2026-10-21 — iter 393 (organisation isolation: closing everything outside the DB wall)
+Follow-up to iter392. The scoped-db wall held, but two adversarial passes (one
+independent testing agent run, one manual) found ways around it. All closed:
+- **CRITICAL — forgeable tokens**: `SECRET_KEY` was the shipped placeholder and was
+  also hardcoded as a fallback in `routers/auth.py` (3 sites). A forged `super_admin`
+  JWT would have opened every organisation. Rotated to a 64-byte random secret,
+  fallbacks removed, startup now fails without it. All old sessions invalidated.
+- **CRITICAL — platform-owner escalation**: `POST /api/admin/users/import` and
+  `POST /api/guests/{id}/move-to-staff` took `role` verbatim and could mint a
+  `super_admin`. Rather than patch each caller, `org_scoped_db.py` now rejects any
+  insert/update that writes `role: super_admin` into `users` — every request path goes
+  through the proxy, while `scripts/create_super_admin.py` (raw driver) still works.
+- **HIGH — cross-tenant realtime**: `ConnectionManager.send_to_user(s)` and
+  `broadcast()` are in-memory maps keyed by user id only, so chat/call signalling and
+  access-checkpoint events could reach a socket in another organisation. Connections
+  now record their organisation, every targeted send and broadcast takes an
+  `organization_id` and skips non-matching sockets, and `broadcast_presence` only
+  notifies same-org peers.
+- **HIGH — presence impersonation + state destruction**: presence/reaction/calling
+  routes trusted a `user_id` **query parameter** (set anyone's status, read anyone's).
+  They now use the authenticated caller's id and ignore the parameter;
+  `GET /presence/status/{id}` 404s for users outside the caller's organisation; and the
+  online-users sweep no longer evicts other tenants' presence entries (it checked
+  existence through the scoped db, so every foreign user looked deleted).
+- `PUT /api/admin/users/{id}` returned 500 for an id belonging to another organisation
+  (scoped read returned None and fell through) — now a clean 404.
+- Organisation import can no longer create a second default organisation
+  (`is_default` is stripped), and logout clears the active organisation so a super
+  admin never resumes inside a tenant they thought they had left.
+- `/organizations` is now behind a `SuperAdminRoute` guard on the frontend too
+  (verified: an org admin visiting it is bounced to `/dashboard`).
+- Tests: `tests/test_iter393_org_isolation_hardening.py` (15) +
+  `tests/test_iter392_org_isolation.py` (10) all pass. 29-suite regression comparison:
+  **102 failures at baseline, 102 after** — identical sets, no new breakage.
+
+
 ## 2026-09-09 — iter 344e (routing/filtering hardening + finance list refresh)
 - **CRITICAL FIX — Transfer missing location**: `TransferDialog` (in `FinancePage.jsx`) had no campus/sub-location picker but the backend `POST /api/finance/transfers` rejects payloads without `location_id`. Every transfer 400'd silently: users saw the "Post transfer" click, no toast (because we swallowed the error), no ledger row. Added Campus/sub-location control (prefilled from active campus) and sub-location resolution mirroring `QuickPostDialog`.
 - **FIX — Missing transactions post-deploy**: `JournalPanel` and `OverviewPanel` did not refetch when a JE was posted from anywhere else (split dialog, transfer dialog, JE edit, reversal, delete). Wired `dataEvents.emit('finance-changed', ...)` on every mutation and subscribed both panels — the ledger stays in sync across tabs without a page reload.

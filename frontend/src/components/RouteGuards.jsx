@@ -11,11 +11,12 @@ export function landingRouteFor(user) {
   if (KIOSK_ONLY_ROLES.has(user.role)) return '/security-checkpoint';
   return STAFF_ROLES.has(user.role) ? '/dashboard' : '/portal';
 }
-const ADMIN_ROLES = new Set(['admin', 'system_admin', 'Executive Director', 'Adviser']);
+const ADMIN_ROLES = new Set(['admin', 'system_admin', 'Executive Director', 'Adviser', 'super_admin']);
 // Roles that always land on the STAFF app — never bounced to the portal even
 // if `is_parent` happens to be true. Fixes iter343 regression where an
 // approved staff member was redirected to /portal by StaffRoute.
 const STAFF_ROLES = new Set([
+  'super_admin',
   'admin', 'system_admin', 'Executive Director', 'Adviser', 'Director',
   'Regional Director', 'Manager', 'Coordinator', 'Leader', 'Staff', 'HR',
   'Volunteer', 'volunteer',
@@ -47,6 +48,16 @@ export function StaffRoute({ children }) {
 /**
  * Route guard for admin-only pages.
  */
+// Only the platform owner may reach the organisation registry. The backend
+// already refuses everyone else; this stops an org admin from even seeing the
+// page shell and its Import / New organisation buttons.
+export function SuperAdminRoute({ children }) {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'super_admin') return <Navigate to="/dashboard" replace />;
+  return children;
+}
+
 export function AdminRoute({ children }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;

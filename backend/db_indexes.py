@@ -32,9 +32,17 @@ async def _ensure_people_indexes():
     # unique index treats every email-less account as `email: ""`, so the second
     # volunteer/kiosk-only user created without an email hit a duplicate-key
     # error (and the request hung instead of failing cleanly).
+    # iter392 — uniqueness is now PER ORGANISATION. Two tenants are separate
+    # businesses; the same person's address may legitimately exist in both, and
+    # a global unique index made the second tenant's signup fail.
     await _recreate_index(
-        db.users, "email_1", "email", unique=True,
+        db.users, "org_email_unique", [("organization_id", 1), ("email", 1)], unique=True,
         partialFilterExpression={"email": {"$gt": ""}})
+    try:
+        await db.users.drop_index("email_1")
+        logger.info("Dropped global users.email unique index (replaced by per-organisation index)")
+    except Exception:
+        pass  # already gone
     await db.users.create_index("id", unique=True)
     await db.users.create_index([("role", 1), ("status", 1)])
     await db.users.create_index([("location_id", 1), ("status", 1)])
@@ -230,7 +238,15 @@ async def _ensure_finance_indexes():
     await db.finance_journal_entries.create_index([("date", -1)])
 
     await db.finance_chart_of_accounts.create_index("id", unique=True)
-    await db.finance_chart_of_accounts.create_index("code", unique=True)
+    # iter392 — account codes are unique within an organisation, not globally:
+    # every tenant has its own "2200 Taxes Payable".
+    await _recreate_index(
+        db.finance_chart_of_accounts, "org_code_unique",
+        [("organization_id", 1), ("code", 1)], unique=True)
+    try:
+        await db.finance_chart_of_accounts.drop_index("code_1")
+    except Exception:
+        pass
     await db.finance_chart_of_accounts.create_index([("type", 1), ("active", 1)])
 
     await db.bank_accounts.create_index("id", unique=True)
@@ -271,14 +287,14 @@ async def _ensure_journal_idempotency_index():
     Reversal flips it to true, dropping the doc out of the constraint so a
     later replay with the same key can post again.
     """
-    await db.finance_journal_entries.create_index(
-        "idempotency_key",
+    await _recreate_index(
+        db.finance_journal_entries, "fje_idempotency_active",
+        [("organization_id", 1), ("idempotency_key", 1)],
         unique=True,
         partialFilterExpression={
             "idempotency_key": {"$exists": True, "$type": "string"},
             "reversed": {"$eq": False},
         },
-        name="fje_idempotency_active",
     )
 
 

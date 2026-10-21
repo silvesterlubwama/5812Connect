@@ -1,6 +1,24 @@
 # ROADMAP — 58:12 Global Connect CRM
 
 ## P0 — none open
+- ~~Multi-organisation data isolation~~ → built in iter392, hardened in iter393.
+
+## Known, accepted, NOT yet fixed
+- ~~WebSocket handshake has no token check~~ → fixed in iter394 (token required, must
+  match the user and their organisation).
+- ~~Public calendar links not bound to an organisation~~ → fixed in iter394.
+- **`/api/calendar/webcal/*` and share links remain deliberately anonymous** (that is
+  what a calendar subscription URL is); the random token in the URL is the only secret,
+  and it now also names the organisation.
+- **Wording overrides apply to stored values too**: renaming "Campus" to "House" also
+  renames a location literally called "Main Campus" on screen. Wrap a value in an element
+  with `data-no-term` to exempt it.
+- **Organisation-level nav/wording is per tenant, but the sidebar catalogue in
+  `BrandingEditor.jsx` is a hand-maintained copy of `NAV_SECTIONS`** — new nav rows need
+  adding in both places.
+- Legacy test suite is noisy (102 pre-existing failures): tests insert directly into Mongo
+  without `organization_id`, assume a flat data model, and pollute each other. Use the
+  focused iter392/iter393 suites as the isolation evidence.
 - ~~Rate limiter global, not per user~~ → fixed in iter318 (per-user JWT
   buckets, real client IP for anonymous, tight per-IP bucket on auth routes).
 

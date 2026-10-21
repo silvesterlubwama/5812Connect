@@ -1,0 +1,789 @@
+"""Shared dependencies for all routers"""
+from motor.motor_asyncio import AsyncIOMotorClient
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+from pathlib import Path
+import os
+import uuid
+import logging
+
+from org_scoped_db import OrgScopedDatabase
+from org_context import (  # noqa: F401 — re-exported for routers
+    get_current_org,
+    set_current_org,
+    org_bypass,
+    org_as,
+    OrgScopeError,
+)
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+# MongoDB
+mongo_url = os.environ['MONGO_URL']
+try:
+    client = AsyncIOMotorClient(mongo_url)
+    raw_db = client[os.environ.get('DB_NAME', '5812global')]
+    # Every router imports `db` from here. Wrapping it means organisation
+    # isolation is enforced on all 3,000+ query sites without each one having
+    # to remember a filter. `raw_db` stays available for migrations and the
+    # handful of pre-auth lookups that legitimately cross tenants.
+    db = OrgScopedDatabase(raw_db)
+except Exception as e:
+    logging.error(f"MongoDB connection error: {e}")
+    client = None
+    raw_db = None
+    db = None
+
+# Auth
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    # Fail closed: a default signing key would let anyone mint admin tokens.
+    raise RuntimeError("SECRET_KEY is not set — add it to backend/.env before starting the API")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_HOURS = 24
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
+
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+
+def default_creation_location(user: dict, provided: str = None) -> str:
+    """Location to stamp on newly-created records.
+
+    Main-first policy (iter-main-loc): when a user has multiple assigned
+    campuses, records must land at their MAIN campus (`user.location_id`)
+    rather than scattering across whichever campus they've switched their
+    view to via the campus switcher. An explicit value from the caller
+    always wins. Falls back to `active_campus_id` only when main is unset.
+
+    Use everywhere backend code needs a default `location_id` for user-
+    created data (events, expenses, tasks, products, approvals, shifts,
+    HR records, etc.).
+    """
+    if provided:
+        return provided
+    return user.get("location_id") or user.get("active_campus_id") or ""
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return pwd_context.verify(plain, hashed)
+
+def create_token(user_id: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    jti = uuid.uuid4().hex
+    return jwt.encode({"sub": user_id, "exp": expire, "jti": jti}, SECRET_KEY, algorithm=ALGORITHM)
+
+
+async def create_token_with_session(user_id: str, request=None) -> str:
+    """Create a JWT with a jti AND persist a session record for the user.
+    Sessions power the 'active sessions / revoke other sessions' admin feature."""
+    expire = datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+    jti = uuid.uuid4().hex
+    token = jwt.encode({"sub": user_id, "exp": expire, "jti": jti}, SECRET_KEY, algorithm=ALGORITHM)
+    ua, ip = "", ""
+    try:
+        if request is not None:
+            ua = (request.headers.get("user-agent") or "")[:300]
+            ip = (request.headers.get("x-forwarded-for") or request.client.host if request.client else "") or ""
+            ip = ip.split(",")[0].strip()[:64]
+    except Exception:
+        pass
+    try:
+        await db.sessions.insert_one({
+            "jti": jti,
+            "user_id": user_id,
+            "user_agent": ua,
+            "ip": ip,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "expires_at": expire,
+            "revoked": False,
+        })
+    except Exception as e:
+        logger.warning(f"Session insert failed: {e}")
+    return token
+
+
+SUPER_ADMIN_ROLE = "super_admin"
+
+
+def is_super_admin(user: dict) -> bool:
+    """The only account type that may move between organisations — and even
+    then only one at a time, never a combined view."""
+    return (user.get("role") or "").lower() == SUPER_ADMIN_ROLE
+
+
+def active_org_for(user: dict):
+    """Which organisation this user is operating inside right now.
+
+    Ordinary users are permanently bound to their own organisation. A super
+    admin is bound to whichever one they have explicitly entered."""
+    if is_super_admin(user):
+        return user.get("active_organization_id")
+    return user.get("organization_id")
+
+
+async def active_org_ids() -> list:
+    """Every organisation a background job should process."""
+    with org_bypass():
+        rows = await raw_db.organizations.find(
+            {"status": "active"}, {"_id": 0, "id": 1}
+        ).to_list(500)
+    return [r["id"] for r in rows]
+
+
+async def run_for_every_org(fn, *args, **kwargs):
+    """Run a background job once per organisation, each pass isolated to that
+    tenant. Scheduled work has no request to infer scope from, so it must say
+    explicitly which tenant it is acting for — and one tenant's failure must
+    not stop the others."""
+    results = []
+    for oid in await active_org_ids():
+        with org_as(oid):
+            try:
+                results.append({"organization_id": oid, "result": await fn(*args, **kwargs)})
+            except Exception as e:
+                logger.error(f"{getattr(fn, '__name__', fn)} failed for org {oid}: {e}")
+                results.append({"organization_id": oid, "error": str(e)})
+    return results
+
+
+async def org_for_hostname(request) -> dict:
+    """Resolve an organisation from the request hostname.
+
+    This is what makes personal.5812uganda.org and new.lubwamas.org work off a
+    single deployment. Returns {} when the hostname isn't claimed by anyone
+    (the shared preview URL, localhost, direct IP), in which case the signed-in
+    user's own organisation decides."""
+    try:
+        host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    except Exception:
+        return {}
+    if not host:
+        return {}
+    with org_bypass():
+        return await raw_db.organizations.find_one({"hostnames": host}, {"_id": 0}) or {}
+
+
+async def require_super_admin(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Guard for the organisation registry. Deliberately does NOT use
+    get_current_user, because a super admin who hasn't entered an organisation
+    yet has no org context — and still needs to list and create them."""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    with org_bypass():
+        user = await raw_db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if not is_super_admin(user):
+        raise HTTPException(status_code=403, detail="Super admin only")
+    return user
+
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if not credentials:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        jti = payload.get("jti")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    # If this token has a jti, verify the session hasn't been revoked.
+    # Tokens without jti (legacy) are still accepted.
+    if jti:
+        try:
+            session = await db.sessions.find_one({"jti": jti}, {"_id": 0, "revoked": 1})
+            if session and session.get("revoked"):
+                raise HTTPException(status_code=401, detail="Session revoked")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # DB issue — don't block auth
+    # Resolve the organisation from the user record itself — the token only
+    # proves identity. Pinning it here (not just in middleware) means any code
+    # path that authenticates is scoped, including tests and websockets.
+    with org_bypass():
+        user = await raw_db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    org_id = active_org_for(user)
+    if not org_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account is not attached to an organisation. Contact your administrator.",
+        )
+    with org_bypass():
+        org = await raw_db.organizations.find_one({"id": org_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=403, detail="Organisation not found")
+    if org.get("status") == "suspended":
+        raise HTTPException(
+            status_code=403,
+            detail=f"{org.get('name', 'This organisation')} is suspended. Contact the system owner.",
+        )
+    set_current_org(org_id)
+    user["organization_id"] = org_id
+    user["organization_name"] = org.get("name", "")
+    return user
+
+
+def _decode_token(token: str) -> dict:
+    """Best-effort JWT decode used by middleware/guards that need the payload
+    without going through the full user-lookup. Returns {} if the token is
+    invalid so callers can fall through to normal request handling."""
+    try:
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM]) or {}
+    except JWTError:
+        return {}
+
+async def _audit(user_id: str, action: str, resource: str, resource_id: str = None, details: dict = None):
+    try:
+        # Snapshot the user's name at the time of the action so older audit log
+        # rows remain human-readable even if the user is later deleted/renamed.
+        user_name = ""
+        if user_id:
+            try:
+                u = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1})
+                user_name = (u or {}).get("name", "") or ""
+            except Exception:
+                user_name = ""
+        await db.audit_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "user_name": user_name,
+            "action": action,
+            "resource": resource,
+            "resource_id": resource_id,
+            "details": details or {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+
+# ---- RBAC HELPERS ----
+
+ROLE_LEVELS = {
+    "super_admin": 11,
+    "system_admin": 10, "admin": 10,
+    "Executive Director": 9, "Adviser": 8.5, "Director": 8,
+    "Manager": 7, "Leader": 6.5, "Coordinator": 6,
+    "Staff": 5, "Volunteer": 4,
+    # Security Contractor — private contractor who only mans the security checkpoint
+    # kiosk. Sits between Member and Volunteer so they can't reach any privileged data.
+    "Security Contractor": 3.5,
+    "Member": 3, "Parent": 2,
+    "Customer": 1, "Guest": 1,
+}
+
+# Roles that bypass campus isolation (see everything)
+SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director", "super_admin"}
+
+# Roles that get the campus switcher (global visibility + location switching)
+CAMPUS_SWITCHER_ROLES = {"admin", "system_admin", "executive director", "adviser", "super_admin"}
+
+def get_role_level(role: str) -> int:
+    """Get numeric role level — case-insensitive lookup"""
+    if not role:
+        return 0
+    # Try exact match first
+    level = ROLE_LEVELS.get(role)
+    if level is not None:
+        return level
+    # Try case-insensitive match
+    role_lower = role.lower()
+    for k, v in ROLE_LEVELS.items():
+        if k.lower() == role_lower:
+            return v
+    return 0
+
+
+def is_system_admin(user: dict) -> bool:
+    """Returns True if user role grants cross-campus (global) visibility.
+    Only admin, system_admin, and Executive Director have global access.
+
+    Note: this is campus-level only. Organisation isolation is enforced
+    separately by the scoped db proxy and cannot be bypassed by any role
+    except a super admin, and then only one organisation at a time."""
+    return (user.get("role") or "").lower() in SYSTEM_ADMIN_ROLES
+
+
+def has_campus_switcher(user: dict) -> bool:
+    """Returns True if user gets the campus location switcher (Admins, EDs, Advisers)."""
+    return (user.get("role") or "").lower() in CAMPUS_SWITCHER_ROLES
+
+
+# Roles that always have finance access (no explicit flag needed):
+FINANCE_PRIVILEGED_ROLES = {
+    "admin", "system_admin", "Executive Director", "Adviser",
+    "Director",
+    # The platform owner, while inside one organisation, works as its admin.
+    "super_admin",
+    # Managers are NOT automatically privileged any more — they must be granted explicitly.
+}
+
+# Per user request (iter 134): only Director+ get automatic access to gated modules.
+# Manager and below must be granted explicit, optionally time-limited access by an admin.
+PRIVILEGED_ROLES = FINANCE_PRIVILEGED_ROLES
+
+# Modules that follow the "appointment-only for non-Directors" access pattern.
+# Each module stores explicit grants on the user as: {module}_access (bool) + {module}_access_expires_at (iso str).
+GRANTABLE_MODULES = {
+    "finance": "Finance (Donations, Expenses, P&L, Balance Sheet)",
+    "hr": "HR & Payroll (Salaries, Payslips, Contracts, Leave, Attendance, Reimbursements)",
+    "sales": "Sales Portal / Marketplace / Products / POS",
+    "banking": "Banking (Bank accounts, Statements, Vendor bills, Recurring entries)",
+    "accounting": "Accounting (Chart of Accounts, Journals, Ledger, Reports)",
+    "social_work": "Social Work (Cases, Notes, Schools, Sponsor portal)",
+    "restricted": "Restricted-location data (shelters, sensitive sub-campuses)",
+}
+
+
+def _grant_active(user: dict, module: str) -> bool:
+    """Return True if the user has an active explicit grant for the module
+    (the boolean flag is set AND the grant hasn't expired yet)."""
+    if not user:
+        return False
+    if not user.get(f"{module}_access"):
+        return False
+    expires = user.get(f"{module}_access_expires_at")
+    if expires:
+        try:
+            from datetime import datetime as _dt
+            exp_dt = _dt.fromisoformat(str(expires).replace("Z", "+00:00"))
+            now = _dt.now(timezone.utc)
+            if exp_dt <= now:
+                return False  # Expired
+        except Exception:
+            pass
+    return True
+
+
+def has_module_access(user: dict, module: str) -> bool:
+    """Generic gate for any grantable module. Privileged roles (Director+) get
+    automatic access; everyone else needs an explicit, optionally time-limited grant."""
+    if not user:
+        return False
+    if module not in GRANTABLE_MODULES:
+        return False
+    role = (user.get("role") or "")
+    if role in PRIVILEGED_ROLES:
+        return True
+    # Special-case HR: members of HR role / department have implicit HR access too,
+    # to preserve the original HR workflow without admin grants.
+    if module == "hr":
+        if role in ("HR", "hr"):
+            return True
+        dept = (user.get("department") or "").lower()
+        depts = [d.lower() for d in (user.get("departments") or [])]
+        if "hr" in depts or "human resources" in depts or dept in ("hr", "human resources"):
+            return True
+    return _grant_active(user, module)
+
+
+def has_finance_access(user: dict) -> bool:
+    """Backwards-compatible alias kept for routers that import this directly."""
+    return has_module_access(user, "finance")
+
+
+def can_view_pay(user: dict) -> bool:
+    """Who may see OTHER people's pay figures. Salaries, payslip amounts and
+    employer costs are restricted to HR and finance — a Manager or Coordinator
+    without either grant only ever sees their own payslip. Director+ passes
+    through PRIVILEGED_ROLES inside has_module_access."""
+    return has_module_access(user, "hr") or has_module_access(user, "finance")
+
+
+async def require_pay_view(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency: 403 unless the caller may see other people's pay."""
+    if not can_view_pay(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Pay information is restricted to HR and finance.",
+        )
+    return current_user
+
+
+async def require_finance_view(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency: 403 unless user has finance view access."""
+    if not has_finance_access(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Finance data is restricted. Ask an administrator to grant you finance access.",
+        )
+    return current_user
+
+
+async def require_finance_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Dependency: 403 unless user is Director+ with finance access, OR has been
+    granted explicit finance access. Used for WRITES that create/modify financial records."""
+    if not has_finance_access(current_user):
+        raise HTTPException(status_code=403, detail="Finance access required")
+    role = current_user.get("role") or ""
+    # Director+ always allowed; Manager and below need the explicit grant (which they
+    # passed the has_finance_access() check with).
+    if role in {"Director", "Adviser", "Executive Director", "admin", "system_admin"}:
+        return current_user
+    if _grant_active(current_user, "finance"):
+        return current_user
+    raise HTTPException(
+        status_code=403,
+        detail="This action requires Director access or an explicit finance grant",
+    )
+
+
+def require_module_view(module: str):
+    """Factory: dependency that 403s unless the user has access to the named module."""
+    async def _dep(current_user: dict = Depends(get_current_user)) -> dict:
+        if not has_module_access(current_user, module):
+            raise HTTPException(
+                status_code=403,
+                detail=f"{GRANTABLE_MODULES.get(module, module)} is restricted. "
+                       f"Ask an administrator to grant you {module} access.",
+            )
+        return current_user
+    _dep.__name__ = f"require_{module}_view"
+    return _dep
+
+
+# Pre-built dependencies for the modules other than finance.
+require_hr_view = require_module_view("hr")
+require_sales_view = require_module_view("sales")
+require_banking_view = require_module_view("banking")
+require_accounting_view = require_module_view("accounting")
+require_social_work_view = require_module_view("social_work")
+require_restricted_view = require_module_view("restricted")
+
+
+async def campus_filter_or_unscoped(user: dict, field: str = "location_id") -> dict:
+    """`get_campus_filter` widened to include rows that carry NO campus.
+
+    A record with an empty `location_id` matches no campus at all, so it
+    silently disappears from every list — the "I saved it and it vanished"
+    class of bug (iter372: events, children and guests created before campus
+    stamping, or saved without picking a campus). An unscoped row belongs to
+    nobody in particular, so everybody who can see the collection sees it.
+    """
+    campus = await get_campus_filter(user, field)
+    if not campus:
+        return {}
+    clauses = list(campus.get("$or", [campus]))
+    clauses.append({field: {"$in": ["", None]}})
+    clauses.append({field: {"$exists": False}})
+    return {"$or": clauses}
+
+
+async def get_campus_filter(user: dict, field: str = "location_id") -> dict:
+    """Return a MongoDB query fragment that restricts results to the user's campus.
+    Only expands to actual sub-locations (rooms, buildings), NOT sibling campuses.
+    System admins/EDs get an empty dict unless they have active_campus_id set.
+    Restricted sub-locations are EXCLUDED for users not explicitly assigned to them."""
+    user_loc_ids = set(user.get("location_ids") or [])
+    if user.get("location_id"):
+        user_loc_ids.add(user.get("location_id"))
+    # The user's ACTUAL assignment, before any parent-walk. Used to bound what a
+    # pinned parent campus may expand to (iter352) — the parent-walk below adds
+    # the campus (and for a sub-location user, the region) which must never be
+    # treated as "assigned" for data-scoping purposes.
+    assigned_loc_ids = set(user_loc_ids)
+    # If user is tagged in a sub-location, they also belong to the parent campus.
+    # This ensures sub-location users have full campus-level access for features/settings.
+    if user_loc_ids:
+        parents = await db.locations.find(
+            {"id": {"$in": list(user_loc_ids)}, "parent_id": {"$exists": True, "$nin": [None, ""]}},
+            {"_id": 0, "parent_id": 1}
+        ).to_list(50)
+        for p in parents:
+            if p.get("parent_id"):
+                user_loc_ids.add(p["parent_id"])
+    _is_admin = is_system_admin(user)
+    # active_campus_id is honoured for:
+    #  - system admins / EDs / Advisers (can pin to any campus via switcher)
+    #  - Any user with multiple assigned campuses (they can narrow via the multi-campus switcher)
+    active = user.get("active_campus_id")
+    can_use_switcher = _is_admin or has_campus_switcher(user) or (
+        active and active in user_loc_ids
+    )
+    if can_use_switcher and active:
+        # Recursive descendant walk (any type). Viewing a parent campus should
+        # surface every descendant the user has permission on — a Uganda user
+        # sees Zimba Farm (sub-location), and a Global Central admin sees
+        # Uganda + Kenya + Haiti + Rescue + all of their descendants.
+        descendants = await expand_descendants([active], include_restricted_from=user_loc_ids, allow_all_restricted=_is_admin)
+        all_locs = list({active, *descendants})
+        # iter351 — a plain multi-campus user is allowed to PIN a parent campus
+        # (they inherit it from a sub-location assignment), but pinning it must
+        # not hand them sibling campuses they were never assigned to. Only the
+        # true switcher roles see a whole region.
+        if not (_is_admin or has_campus_switcher(user)):
+            # Bound the pin to what this person is actually assigned to:
+            # their own locations + everything under them + the id of their
+            # direct parent campus (so campus-level records stay visible).
+            # The parent's OTHER descendants — i.e. sibling campuses under a
+            # region — are deliberately excluded (iter352).
+            own_descendants = await expand_descendants(
+                list(assigned_loc_ids), include_restricted_from=user_loc_ids, allow_all_restricted=False
+            )
+            direct_parents = user_loc_ids - assigned_loc_ids
+            own_scope = set(assigned_loc_ids) | set(own_descendants) | direct_parents
+            all_locs = [loc for loc in all_locs if loc in own_scope] or list(assigned_loc_ids)
+        if len(all_locs) == 1:
+            return {"$or": [{field: all_locs[0]}, {"location_ids": all_locs[0]}]}
+        return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
+    if _is_admin:
+        return {}
+    locs = list(user_loc_ids)
+    if not locs:
+        return {}
+    # Recursive descendant walk (any type) — restricted sub-locs only if in user's location_ids
+    descendants = await expand_descendants(locs, include_restricted_from=user_loc_ids, allow_all_restricted=False)
+    all_locs = list({*locs, *descendants})
+    if len(all_locs) == 1:
+        return {"$or": [{field: all_locs[0]}, {"location_ids": all_locs[0]}]}
+    return {"$or": [{field: {"$in": all_locs}}, {"location_ids": {"$in": all_locs}}]}
+
+
+async def expand_descendants(root_ids: list, include_restricted_from: set = None,
+                             allow_all_restricted: bool = False, max_depth: int = 6) -> set:
+    """Walk the location tree from `root_ids` downward and return every
+    descendant id, regardless of `type`. This is the type-agnostic replacement
+    for the legacy `type == 'sub-location'` scan — a parent campus of type
+    `compass` (e.g. 58:12 Uganda) can have children of any type (campus,
+    sub-location, sublocation) and we want them all.
+
+    Args:
+        root_ids: Ids whose descendants we want (roots themselves are NOT
+                  included in the return value — caller adds them).
+        include_restricted_from: Users that ARE explicitly assigned to a
+                  restricted location still get to see it. Pass user_loc_ids.
+        allow_all_restricted: system_admin bypass — see everything.
+        max_depth: Safety cap on recursion in case of cyclic data.
+    """
+    if include_restricted_from is None:
+        include_restricted_from = set()
+    seen: set = set()
+    frontier = [r for r in root_ids if r]
+    for _ in range(max_depth):
+        if not frontier:
+            break
+        docs = await db.locations.find(
+            {"parent_id": {"$in": frontier}},
+            {"_id": 0, "id": 1, "is_restricted": 1}
+        ).to_list(1000)
+        # Sub-locations registered only in the finance-native `sublocations`
+        # collection (parent stored as `location_id`) are descendants too —
+        # without this, boards/tasks/events created at a non-campus
+        # sub-location were invisible to everyone.
+        docs += await db.sublocations.find(
+            {"location_id": {"$in": frontier}},
+            {"_id": 0, "id": 1, "is_restricted": 1}
+        ).to_list(1000)
+        next_frontier: list = []
+        for d in docs:
+            lid = d.get("id")
+            if not lid or lid in seen:
+                continue
+            if d.get("is_restricted") and not allow_all_restricted and lid not in include_restricted_from:
+                # Restricted branch — user cannot see it OR its children.
+                continue
+            seen.add(lid)
+            next_frontier.append(lid)
+        frontier = next_frontier
+    return seen
+
+
+async def generate_title(role: str, location_ids: list, department: str = None) -> str:
+    """Auto-generate a human-readable title like 'Director of 58:12 Uganda'."""
+    if not role:
+        return ""
+    loc_names = []
+    for lid in (location_ids or []):
+        loc = await db.locations.find_one({"id": lid}, {"_id": 0, "name": 1})
+        if loc:
+            loc_names.append(loc["name"])
+    dept_prefix = f"{department} " if department and department.lower() not in role.lower() else ""
+    role_str = f"{dept_prefix}{role}"
+    if not loc_names:
+        return role_str
+    if len(loc_names) == 1:
+        return f"{role_str} of {loc_names[0]}"
+    return f"{role_str} of {', '.join(loc_names[:-1])} & {loc_names[-1]}"
+
+
+async def resolve_parent_campus(location_id: str) -> str:
+    """If location_id is a sub-location, return its parent campus ID."""
+    if not location_id:
+        return location_id
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "type": 1, "parent_id": 1})
+    if loc and loc.get("type") == "sub-location" and loc.get("parent_id"):
+        return loc["parent_id"]
+    return location_id
+
+
+def require_role(min_level: int):
+    """Dependency factory: raises 403 if user role < min_level"""
+    async def checker(current_user: dict = Depends(get_current_user)):
+        level = get_role_level(current_user.get("role", ""))
+        if level < min_level:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return current_user
+    return checker
+
+
+# Convenience shortcuts
+require_admin = require_role(10)      # system_admin, admin
+require_director = require_role(8)    # Director+
+require_manager = require_role(7)     # Manager+
+require_coordinator = require_role(6) # Coordinator+
+require_staff = require_role(5)       # Staff+
+
+
+# ---- SHARED HELPERS ----
+
+from fastapi import HTTPException as _HTTPException
+
+
+def client_ip(request) -> str:
+    """The visitor's IP, not the ingress hop. `request.client.host` is the
+    Kubernetes/Cloudflare proxy, so any per-IP limit keyed on it is really a
+    single global bucket. Prefer the leftmost X-Forwarded-For entry."""
+    try:
+        xff = request.headers.get("x-forwarded-for") or ""
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+        real = request.headers.get("x-real-ip") or ""
+        if real:
+            return real.strip()
+        return (request.client.host if request.client else "") or "unknown"
+    except Exception:
+        return "unknown"
+
+
+async def enforce_public_rate_limit(request, action: str, limit: int, window_minutes: int = 10):
+    """Per-IP throttle for UNAUTHENTICATED endpoints (kiosk lookup/unlock/PIN
+    check-in, school-portal login). Hits live in `public_endpoint_hits` with a
+    TTL index, so an attacker can't turn a public convenience endpoint into an
+    enumeration or password-guessing oracle.
+
+    X-Forwarded-For is client-controlled, so the per-IP bucket alone can be
+    reset at will. We therefore ALSO keep a much larger per-socket (ingress
+    hop) bucket: rotating the header still can't buy unlimited attempts.
+    """
+    ip = client_ip(request)
+    try:
+        socket_ip = (request.client.host if request.client else "") or "unknown"
+    except Exception:
+        socket_ip = "unknown"
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(minutes=window_minutes)).isoformat()
+    try:
+        hits = await db.public_endpoint_hits.count_documents(
+            {"action": action, "ip": ip, "at": {"$gte": since}}
+        )
+        socket_hits = await db.public_endpoint_hits.count_documents(
+            {"action": action, "socket_ip": socket_ip, "at": {"$gte": since}}
+        )
+        await db.public_endpoint_hits.insert_one(
+            {"action": action, "ip": ip, "socket_ip": socket_ip,
+             "at": now.isoformat(), "created_at": now}
+        )
+    except Exception as e:  # never let the limiter take the endpoint down
+        logger.warning(f"public rate limit check failed for {action}: {e}")
+        return
+    # Header-spoof safety net: 12x the per-IP allowance for one real connection.
+    if hits >= limit or socket_hits >= limit * 12:
+        logger.warning(f"public rate limit hit: action={action} ip={ip} socket={socket_ip}")
+        raise _HTTPException(
+            status_code=429,
+            detail="Too many attempts from this device — please wait a few minutes and try again",
+        )
+
+
+def normalize_gender(value):
+    if value is None or value == "":
+        return None
+    gender = value.lower()
+    if gender not in ("male", "female"):
+        raise _HTTPException(status_code=400, detail="Gender must be male or female")
+    return gender
+
+
+async def resolve_department(location_id, department):
+    if not location_id:
+        return department
+    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "type": 1, "departments": 1})
+    if not loc:
+        return department
+    available = loc.get("departments") or []
+    if department:
+        if department in available:
+            return department
+        if loc.get("type") == "sub-location" and department == loc.get("name"):
+            return department
+        raise _HTTPException(status_code=400, detail="Department must match selected location")
+    if loc.get("type") == "sub-location":
+        return loc.get("name")
+    return department
+
+
+
+async def find_linked_member(user_id: str = "", email: str = "", projection: dict = None, name: str = ""):
+    """Find the `members` row that belongs to a user, in priority order.
+
+    Two hard rules, both learnt from live data corruption:
+      * A blank email is NEVER a match key — `{"email": ""}` matched the first
+        member row with no email on file, so the admin edit dialog opened on a
+        completely different person (and their campus).
+      * A `user_id` link is only trusted when the name or email agrees. Stale
+        links (e.g. a guest promoted to staff whose user was later renamed)
+        otherwise let one person's edits overwrite another person's profile.
+    """
+    import re as _re
+    proj = projection or {"_id": 0}
+    # the trust check needs identity fields regardless of the caller's projection
+    ident_proj = {"_id": 0, "id": 1, "name": 1, "email": 1}
+    e = (email or "").strip().lower()
+    n = (name or "").strip().lower()
+
+    def trusted(row: dict) -> bool:
+        if not n and not e:
+            return True
+        re_ = (row.get("email") or "").strip().lower()
+        rn = (row.get("name") or "").strip().lower()
+        if e and re_ and e == re_:
+            return True
+        if n and rn:
+            return n == rn
+        return True     # nothing comparable on file — trust the explicit link
+
+    queries = []
+    if user_id:
+        queries += [{"id": user_id}, {"user_id": user_id}]
+    if e:
+        queries.append({"email": {"$regex": f"^{_re.escape(e)}$", "$options": "i"}})
+    for q in queries:
+        ident = await db.members.find_one(q, ident_proj)
+        if not ident or not trusted(ident):
+            continue
+        return await db.members.find_one({"id": ident["id"]}, proj)
+    return None

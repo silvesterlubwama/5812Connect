@@ -13,7 +13,7 @@ import { landingRouteFor } from '../components/RouteGuards';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
-  const { login, setUser } = useAuth();
+  const { login, setUser, enterOrganization } = useAuth();
   const { branding } = useBranding();
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
@@ -23,6 +23,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [passkeyLoading, setPasskeyLoading] = useState(false);
+  const [orgChoices, setOrgChoices] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -31,11 +32,22 @@ export default function LoginPage() {
     try {
       const result = await login(identifier, password, totpCode || null);
       if (result.requires_2fa) { setNeeds2FA(true); toast.info('Enter your authenticator code'); setLoading(false); return; }
+      if (result.requires_org_selection) { setOrgChoices(result.organizations); setLoading(false); return; }
       navigate(landingRouteFor(result.user));
     } catch (err) {
       const detail = err.response?.data?.detail || err.message || 'Invalid credentials';
       if (detail.includes('pending')) toast.error('Account pending approval. Contact your administrator.');
       else toast.error(detail);
+    } finally { setLoading(false); }
+  };
+
+  const handleEnterOrg = async (org) => {
+    setLoading(true);
+    try {
+      const me = await enterOrganization(org.id);
+      navigate(landingRouteFor(me));
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Could not open that organisation');
     } finally { setLoading(false); }
   };
 
@@ -97,8 +109,21 @@ export default function LoginPage() {
     } finally { setPasskeyLoading(false); }
   };
 
+  // Each organisation styles its own sign-in page: a background image or colour,
+  // its own headline and supporting line.
+  const bg = (branding?.login_background || '').trim();
+  const bgStyle = bg
+    ? (/^https?:|^\/|^data:/.test(bg)
+        ? { backgroundImage: `url(${bg})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+        : { background: bg })
+    : undefined;
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-12">
+    <div
+      className="min-h-screen flex items-center justify-center bg-background px-4 py-12"
+      style={bgStyle}
+      data-testid="login-page"
+    >
       <div className="w-full max-w-md">
         <Card className="shadow-soft rounded-xl">
           <CardHeader className="text-center pb-4">
@@ -109,11 +134,34 @@ export default function LoginPage() {
               data-testid="login-logo"
               onError={(e) => { e.target.onerror = null; e.target.src = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=800&ssl=1'; }}
             />
-            <CardTitle className="text-2xl font-semibold font-heading" data-testid="login-app-name">{branding?.app_name || '58:12 Global Connect'}</CardTitle>
-            <CardDescription>{branding?.tagline || 'Sign in to access the management system'}</CardDescription>
+            <CardTitle className="text-2xl font-semibold font-heading" data-testid="login-app-name">{branding?.login_headline || branding?.app_name || '58:12 Global Connect'}</CardTitle>
+            <CardDescription data-testid="login-subtitle">{branding?.login_subtitle || branding?.tagline || 'Sign in to access the management system'}</CardDescription>
           </CardHeader>
 
           <CardContent className="space-y-4">
+            {orgChoices ? (
+              <div className="space-y-3" data-testid="org-picker">
+                <p className="text-sm text-muted-foreground">
+                  You oversee more than one organisation. Open one at a time — nothing is shared between them.
+                </p>
+                {orgChoices.map(org => (
+                  <button
+                    key={org.id}
+                    type="button"
+                    disabled={loading || org.status === 'suspended'}
+                    onClick={() => handleEnterOrg(org)}
+                    data-testid={`org-choice-${org.slug}`}
+                    className="w-full text-left px-4 py-3 rounded-lg border border-border hover:border-primary hover:bg-accent/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="block font-medium">{org.name}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {org.status === 'suspended' ? 'Suspended' : org.slug}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+            <>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="identifier">Email, Phone, or ID Number</Label>
@@ -206,6 +254,8 @@ export default function LoginPage() {
                 </Button>
               </Link>
             </div>
+            </>
+            )}
           </CardContent>
         </Card>
         <p className="text-center text-xs text-muted-foreground mt-6">{branding?.app_name || '58:12 Global'}</p>

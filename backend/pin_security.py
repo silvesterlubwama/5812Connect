@@ -28,6 +28,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from org_context import org_bypass
 from deps import db, logger
 
 load_dotenv()
@@ -96,22 +97,25 @@ async def migrate_plaintext_pins() -> dict:
     nothing left to find."""
     moved = {"users": 0, "members": 0, "guest_pins": 0}
     try:
-        for coll_name, field in (("users", "pin"), ("members", "pin"), ("users", "guest_pin")):
-            coll = db[coll_name]
-            cursor = coll.find(
-                {field: {"$nin": [None, ""]}},
-                {"_id": 0, "id": 1, field: 1},
-            )
-            key = "guest_pins" if field == "guest_pin" else coll_name
-            async for doc in cursor:
-                digest = pin_digest(doc.get(field) or "")
-                if not digest:
-                    continue
-                await coll.update_one(
-                    {"id": doc["id"]},
-                    {"$set": {PIN_FIELDS[field]: digest}, "$unset": {field: ""}},
+        # Runs at boot with no request context. Plaintext PINs are a security
+        # defect in any tenant, so this sweep deliberately covers all of them.
+        with org_bypass():
+            for coll_name, field in (("users", "pin"), ("members", "pin"), ("users", "guest_pin")):
+                coll = db[coll_name]
+                cursor = coll.find(
+                    {field: {"$nin": [None, ""]}},
+                    {"_id": 0, "id": 1, field: 1},
                 )
-                moved[key] += 1
+                key = "guest_pins" if field == "guest_pin" else coll_name
+                async for doc in cursor:
+                    digest = pin_digest(doc.get(field) or "")
+                    if not digest:
+                        continue
+                    await coll.update_one(
+                        {"id": doc["id"]},
+                        {"$set": {PIN_FIELDS[field]: digest}, "$unset": {field: ""}},
+                    )
+                    moved[key] += 1
         if any(moved.values()):
             logger.info(f"PIN migration: hashed and removed plaintext PINs {moved}")
     except Exception as e:

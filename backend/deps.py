@@ -11,6 +11,15 @@ import os
 import uuid
 import logging
 
+from org_scoped_db import OrgScopedDatabase
+from org_context import (  # noqa: F401 — re-exported for routers
+    get_current_org,
+    set_current_org,
+    org_bypass,
+    org_as,
+    OrgScopeError,
+)
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -18,10 +27,16 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 try:
     client = AsyncIOMotorClient(mongo_url)
-    db = client[os.environ.get('DB_NAME', '5812global')]
+    raw_db = client[os.environ.get('DB_NAME', '5812global')]
+    # Every router imports `db` from here. Wrapping it means organisation
+    # isolation is enforced on all 3,000+ query sites without each one having
+    # to remember a filter. `raw_db` stays available for migrations and the
+    # handful of pre-auth lookups that legitimately cross tenants.
+    db = OrgScopedDatabase(raw_db)
 except Exception as e:
     logging.error(f"MongoDB connection error: {e}")
     client = None
+    raw_db = None
     db = None
 
 # Auth
@@ -96,6 +111,89 @@ async def create_token_with_session(user_id: str, request=None) -> str:
     return token
 
 
+SUPER_ADMIN_ROLE = "super_admin"
+
+
+def is_super_admin(user: dict) -> bool:
+    """The only account type that may move between organisations — and even
+    then only one at a time, never a combined view."""
+    return (user.get("role") or "").lower() == SUPER_ADMIN_ROLE
+
+
+def active_org_for(user: dict):
+    """Which organisation this user is operating inside right now.
+
+    Ordinary users are permanently bound to their own organisation. A super
+    admin is bound to whichever one they have explicitly entered."""
+    if is_super_admin(user):
+        return user.get("active_organization_id")
+    return user.get("organization_id")
+
+
+async def active_org_ids() -> list:
+    """Every organisation a background job should process."""
+    with org_bypass():
+        rows = await raw_db.organizations.find(
+            {"status": "active"}, {"_id": 0, "id": 1}
+        ).to_list(500)
+    return [r["id"] for r in rows]
+
+
+async def run_for_every_org(fn, *args, **kwargs):
+    """Run a background job once per organisation, each pass isolated to that
+    tenant. Scheduled work has no request to infer scope from, so it must say
+    explicitly which tenant it is acting for — and one tenant's failure must
+    not stop the others."""
+    results = []
+    for oid in await active_org_ids():
+        with org_as(oid):
+            try:
+                results.append({"organization_id": oid, "result": await fn(*args, **kwargs)})
+            except Exception as e:
+                logger.error(f"{getattr(fn, '__name__', fn)} failed for org {oid}: {e}")
+                results.append({"organization_id": oid, "error": str(e)})
+    return results
+
+
+async def org_for_hostname(request) -> dict:
+    """Resolve an organisation from the request hostname.
+
+    This is what makes personal.5812uganda.org and new.lubwamas.org work off a
+    single deployment. Returns {} when the hostname isn't claimed by anyone
+    (the shared preview URL, localhost, direct IP), in which case the signed-in
+    user's own organisation decides."""
+    try:
+        host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    except Exception:
+        return {}
+    if not host:
+        return {}
+    with org_bypass():
+        return await raw_db.organizations.find_one({"hostnames": host}, {"_id": 0}) or {}
+
+
+async def require_super_admin(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Guard for the organisation registry. Deliberately does NOT use
+    get_current_user, because a super admin who hasn't entered an organisation
+    yet has no org context — and still needs to list and create them."""
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    with org_bypass():
+        user = await raw_db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if not is_super_admin(user):
+        raise HTTPException(status_code=403, detail="Super admin only")
+    return user
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -118,9 +216,76 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             raise
         except Exception:
             pass  # DB issue — don't block auth
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    # Resolve the organisation from the user record itself — the token only
+    # proves identity. Pinning it here (not just in middleware) means any code
+    # path that authenticates is scoped, including tests and websockets.
+    with org_bypass():
+        user = await raw_db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+
+    org_id = active_org_for(user)
+    if not org_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account is not attached to an organisation. Contact your administrator.",
+        )
+    with org_bypass():
+        org = await raw_db.organizations.find_one({"id": org_id}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=403, detail="Organisation not found")
+    if org.get("status") == "suspended":
+        raise HTTPException(
+            status_code=403,
+            detail=f"{org.get('name', 'This organisation')} is suspended. Contact the system owner.",
+        )
+    set_current_org(org_id)
+    user["organization_id"] = org_id
+    user["organization_name"] = org.get("name", "")
+    return user
+
+
+async def authenticate_socket(token: str, claimed_user_id: str = None) -> dict:
+    """Validate a token presented on a WebSocket handshake.
+
+    A browser cannot set an Authorization header on a WebSocket, so the token
+    arrives as a query parameter. Returns the user dict (with organisation
+    resolved) or None — callers close the socket rather than raise, since there
+    is no HTTP response to put a 401 in. Never trust a user id from the URL:
+    the token decides who this connection belongs to.
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    user_id = payload.get("sub")
+    if not user_id:
+        return None
+    if claimed_user_id and claimed_user_id != user_id:
+        return None
+    jti = payload.get("jti")
+    if jti:
+        try:
+            with org_bypass():
+                session = await raw_db.sessions.find_one({"jti": jti}, {"_id": 0, "revoked": 1})
+            if session and session.get("revoked"):
+                return None
+        except Exception:
+            pass
+    with org_bypass():
+        user = await raw_db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user or (user.get("status") or "active") != "active":
+        return None
+    org_id = active_org_for(user)
+    if not org_id:
+        return None
+    with org_bypass():
+        org = await raw_db.organizations.find_one({"id": org_id}, {"_id": 0, "status": 1})
+    if not org or org.get("status") == "suspended":
+        return None
+    user["organization_id"] = org_id
     return user
 
 
@@ -161,6 +326,7 @@ async def _audit(user_id: str, action: str, resource: str, resource_id: str = No
 # ---- RBAC HELPERS ----
 
 ROLE_LEVELS = {
+    "super_admin": 11,
     "system_admin": 10, "admin": 10,
     "Executive Director": 9, "Adviser": 8.5, "Director": 8,
     "Manager": 7, "Leader": 6.5, "Coordinator": 6,
@@ -173,10 +339,10 @@ ROLE_LEVELS = {
 }
 
 # Roles that bypass campus isolation (see everything)
-SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director"}
+SYSTEM_ADMIN_ROLES = {"admin", "system_admin", "executive director", "super_admin"}
 
 # Roles that get the campus switcher (global visibility + location switching)
-CAMPUS_SWITCHER_ROLES = {"admin", "system_admin", "executive director", "adviser"}
+CAMPUS_SWITCHER_ROLES = {"admin", "system_admin", "executive director", "adviser", "super_admin"}
 
 def get_role_level(role: str) -> int:
     """Get numeric role level — case-insensitive lookup"""
@@ -196,7 +362,11 @@ def get_role_level(role: str) -> int:
 
 def is_system_admin(user: dict) -> bool:
     """Returns True if user role grants cross-campus (global) visibility.
-    Only admin, system_admin, and Executive Director have global access."""
+    Only admin, system_admin, and Executive Director have global access.
+
+    Note: this is campus-level only. Organisation isolation is enforced
+    separately by the scoped db proxy and cannot be bypassed by any role
+    except a super admin, and then only one organisation at a time."""
     return (user.get("role") or "").lower() in SYSTEM_ADMIN_ROLES
 
 
@@ -209,6 +379,8 @@ def has_campus_switcher(user: dict) -> bool:
 FINANCE_PRIVILEGED_ROLES = {
     "admin", "system_admin", "Executive Director", "Adviser",
     "Director",
+    # The platform owner, while inside one organisation, works as its admin.
+    "super_admin",
     # Managers are NOT automatically privileged any more — they must be granted explicitly.
 }
 

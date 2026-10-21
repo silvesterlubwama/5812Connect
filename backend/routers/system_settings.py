@@ -10,8 +10,12 @@ else); the read endpoints mask the API key bodies — only the last 4 chars + le
 are returned so an admin can confirm what's set without exposing the secret. The
 operator must re-enter the full key to change it.
 """
-from fastapi import APIRouter, Depends, HTTPException, Response
-from deps import db, require_admin, _audit, logger
+from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File, Request
+from deps import db, require_admin, _audit, logger, authenticate_socket
+from org_context import set_current_org
+from upload_helper import save_upload
+from copy import deepcopy
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 import re
@@ -94,6 +98,14 @@ _DEFAULTS = {
         "primary_color": "",        # e.g. "#10b981" — empty = keep theme default
         "nav_overrides": {},        # { "/path": {label?, hidden?, order?} }
         "section_overrides": {},    # { "Operations": {label?, hidden?, order?} }
+        # iter394 — per-organisation white-labelling. Each tenant has its own
+        # system_settings doc (the db proxy scopes it), so these are already
+        # separate per organisation; they just had nowhere to be set.
+        "accent_color": "",         # secondary/CTA colour, empty = derive from primary
+        "login_headline": "",       # big line on the sign-in card
+        "login_subtitle": "",       # supporting line under it
+        "login_background": "",     # image URL or colour for the sign-in page
+        "terms": {},                # { "Member": "Child", ... } wording overrides
     },
 }
 
@@ -179,17 +191,22 @@ async def _load_raw() -> dict:
     Used by helpers like get_resend_config() — NEVER returned over HTTP directly."""
     doc = await db.system_settings.find_one({"id": SETTINGS_ID}, {"_id": 0})
     if not doc:
-        doc = dict(_DEFAULTS)
-    # Merge missing keys onto defaults to handle schema additions
+        doc = deepcopy(_DEFAULTS)
+    # Merge missing keys onto defaults to handle schema additions.
+    # iter394 — deep-copied, always. These used to be handed out by reference,
+    # so the first organisation to save a setting it had no key for mutated the
+    # module-level defaults and every other organisation then inherited its
+    # branding. Each tenant has its own settings doc; the defaults must stay
+    # pristine between them.
     for k, v in _DEFAULTS.items():
         if k == "id":
             continue
         if k not in doc:
-            doc[k] = v
+            doc[k] = deepcopy(v)
         elif isinstance(v, dict):
             for sub, subv in v.items():
                 if sub not in doc[k]:
-                    doc[k][sub] = subv
+                    doc[k][sub] = deepcopy(subv)
     return doc
 
 
@@ -253,12 +270,23 @@ def _mask_for_read(doc: dict) -> dict:
 
 
 @router.get("/public")
-async def public_system_settings(response: Response):
+async def public_system_settings(response: Response, request: Request):
     """Non-secret, public-readable subset of system settings — used by the app shell
     to pick the org's primary country/currency + branding overrides without an
-    admin auth round-trip. Cached for 30 s on the client to avoid hammering the
-    DB on every anonymous page load."""
-    response.headers["Cache-Control"] = "public, max-age=30"
+    admin auth round-trip.
+
+    Anonymous callers get whichever organisation the hostname belongs to. A
+    signed-in caller gets their own organisation's branding even on a shared
+    address, which is what makes the app look like theirs before their domain
+    is pointed here. Must not be cached publicly for that reason."""
+    header = request.headers.get("authorization") or ""
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    viewer = await authenticate_socket(token) if token else None
+    if viewer:
+        set_current_org(viewer["organization_id"])
+        response.headers["Cache-Control"] = "private, max-age=30"
+    else:
+        response.headers["Cache-Control"] = "public, max-age=30"
     raw = await _load_raw()
     org = raw.get("org") or {}
     branding = raw.get("branding") or {}
@@ -275,6 +303,11 @@ async def public_system_settings(response: Response):
             "primary_color": branding.get("primary_color") or "",
             "nav_overrides": branding.get("nav_overrides") or {},
             "section_overrides": branding.get("section_overrides") or {},
+            "accent_color": branding.get("accent_color") or "",
+            "login_headline": branding.get("login_headline") or "",
+            "login_subtitle": branding.get("login_subtitle") or "",
+            "login_background": branding.get("login_background") or "",
+            "terms": branding.get("terms") or {},
         },
         "email_provider": (raw.get("email") or {}).get("provider", "resend"),
         "payments": {
@@ -330,6 +363,14 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
                 block[k] = v
             merged[pid] = block
         data["payments"]["providers"] = merged
+    if isinstance(data.get("branding"), dict):
+        allowed_branding = set(_DEFAULTS["branding"].keys())
+        data["branding"] = {k: v for k, v in data["branding"].items() if k in allowed_branding}
+        terms = data["branding"].get("terms")
+        if isinstance(terms, dict):
+            data["branding"]["terms"] = {
+                str(k)[:40]: str(v)[:40] for k, v in list(terms.items())[:60] if str(v).strip()
+            }
     for top in ("email", "sentry", "org", "branding", "payments", "security", "kiosk"):
         if top in data and isinstance(data[top], dict):
             current_block = raw.get(top) or {}
@@ -446,3 +487,39 @@ async def get_sentry_config() -> dict:
     if not s.get("dsn"):
         s["dsn"] = _os.environ.get("SENTRY_DSN", "")
     return s
+
+
+@router.post("/branding/logo")
+async def upload_branding_logo(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_admin),
+) -> dict:
+    """Upload this organisation's logo and return its public URL.
+
+    Stored per organisation, so one tenant can never overwrite another's file.
+    The caller still has to save the returned URL into branding.logo_url."""
+    # iter395 — SVG is deliberately NOT allowed: it is a script-carrying document,
+    # and this file is served from the app's own origin.
+    ALLOWED = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+    ct = (file.content_type or "").lower()
+    if ct not in ALLOWED:
+        raise HTTPException(status_code=400, detail="Use a PNG, JPG or WEBP image")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="That file is empty")
+    # Trust the bytes, not the browser's label.
+    sniffed = (
+        "image/png" if data[:8] == b"\x89PNG\r\n\x1a\n"
+        else "image/jpeg" if data[:3] == b"\xff\xd8\xff"
+        else "image/webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+        else None
+    )
+    if sniffed is None or sniffed != ct:
+        raise HTTPException(status_code=400, detail="That file is not a PNG, JPG or WEBP image")
+    if len(data) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Logo must be under 3 MB")
+    org_id = current_user.get("organization_id") or "shared"
+    filename = f"logo-{uuid.uuid4().hex[:10]}.{ALLOWED[ct]}"
+    url = await save_upload(f"branding/{org_id}", filename, data, ct)
+    await _audit(current_user["id"], "upload", "branding_logo", filename, {"url": url})
+    return {"url": url, "filename": filename}

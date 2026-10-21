@@ -2,12 +2,20 @@
 Enhanced Presence System with Activity Tracking
 Supports: online (active), idle (5 min timeout), offline, pbx_only
 """
-from fastapi import APIRouter, Depends, Query, WebSocket
+from fastapi import APIRouter, Depends, Query, WebSocket, HTTPException
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional, List
 import asyncio
 
-router = APIRouter(prefix="/api/presence", tags=["presence"])
+from deps import get_current_user
+
+router = APIRouter(prefix="/api/presence", tags=["presence"],
+    # iter393 — every route here reads or writes tenant data (staff extensions,
+    # contacts, conference rooms, presence). They previously required no auth at
+    # all, so an anonymous caller inherited the default organisation and could
+    # read another tenant's directory. Authentication now gates the whole router,
+    # which is also what pins the caller's organisation.
+    dependencies=[Depends(get_current_user)])
 
 # In-memory presence store (in production, use Redis)
 user_presence: Dict[str, Dict] = {}  # user_id -> {status, last_activity, socket_connected, pbx_registered}
@@ -62,8 +70,12 @@ def get_presence_display(status: str) -> Dict:
     return display_map.get(status, display_map["offline"])
 
 @router.get("/status/{user_id}")
-async def get_user_presence(user_id: str):
+async def get_user_presence(user_id: str, db=Depends(get_db)):
     """Get presence status for a single user"""
+    # iter394 — presence is process-global shared state, so reading it has to be
+    # gated on the user being visible in the caller's own organisation.
+    if not await db.users.find_one({"id": user_id}, {"_id": 0, "id": 1}):
+        raise HTTPException(status_code=404, detail="User not found")
     user_data = user_presence.get(user_id, {})
     status = calculate_presence_status(user_data)
     display = get_presence_display(status)
@@ -95,7 +107,9 @@ async def get_bulk_presence(user_ids: str = Query(..., description="Comma-separa
     return result
 
 @router.put("/heartbeat")
-async def update_heartbeat(user_id: str = Query(...)):
+async def update_heartbeat(current_user: dict = Depends(get_current_user)):
+    # iter394 — presence is keyed to the caller, never to a user_id they supply.
+    user_id = current_user["id"]
     """Update user's last activity (called periodically by frontend)"""
     now = datetime.now(timezone.utc)
     
@@ -109,10 +123,11 @@ async def update_heartbeat(user_id: str = Query(...)):
 
 @router.put("/status")
 async def set_manual_status(
-    user_id: str = Query(...),
     status: str = Query(..., description="online, away, dnd, offline"),
-    status_message: Optional[str] = None
+    status_message: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
 ):
+    user_id = current_user["id"]
     """Set manual presence status"""
     valid_statuses = ["online", "away", "dnd", "offline"]
     if status not in valid_statuses:
@@ -128,7 +143,8 @@ async def set_manual_status(
     return {"success": True, "status": status}
 
 @router.put("/pbx-register")
-async def register_pbx_presence(user_id: str = Query(...), registered: bool = True):
+async def register_pbx_presence(registered: bool = True, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     """Mark user as registered on PBX (called by PBX integration)"""
     if user_id not in user_presence:
         user_presence[user_id] = {}
@@ -138,7 +154,8 @@ async def register_pbx_presence(user_id: str = Query(...), registered: bool = Tr
     return {"success": True}
 
 @router.put("/connect")
-async def mark_connected(user_id: str = Query(...)):
+async def mark_connected(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     """Mark user as connected (WebSocket connected)"""
     now = datetime.now(timezone.utc)
     
@@ -152,7 +169,8 @@ async def mark_connected(user_id: str = Query(...)):
     return {"success": True}
 
 @router.put("/disconnect")
-async def mark_disconnected(user_id: str = Query(...)):
+async def mark_disconnected(current_user: dict = Depends(get_current_user)):
+    user_id = current_user["id"]
     """Mark user as disconnected"""
     if user_id in user_presence:
         user_presence[user_id]["socket_connected"] = False
@@ -187,8 +205,18 @@ async def get_online_users(db=Depends(get_db)):
         for ou in online_users:
             user_info = user_map.get(ou["user_id"])
             if not user_info:
-                # Drop stale presence entries for deleted/inactive users
-                user_presence.pop(ou["user_id"], None)
+                # Not visible to this caller. That means either the account is
+                # gone, or it belongs to another organisation — and presence is
+                # process-global shared state, so only the former may be
+                # discarded. iter393: this used to evict other tenants' entries.
+                from org_context import org_bypass
+                from deps import raw_db
+                with org_bypass():
+                    still_exists = await raw_db.users.find_one(
+                        {"id": ou["user_id"]}, {"_id": 0, "id": 1}
+                    )
+                if not still_exists:
+                    user_presence.pop(ou["user_id"], None)
                 continue
             ou["name"] = user_info.get("name", "Unknown")
             ou["email"] = user_info.get("email", "")

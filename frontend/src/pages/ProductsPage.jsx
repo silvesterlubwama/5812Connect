@@ -865,12 +865,12 @@ export default function ProductsPage() {
 
       <Tabs value={isPosKiosk ? 'pos' : activeTab} onValueChange={setActiveTab}>
         {!isPosKiosk && (
-          <TabsList className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto">
-            <TabsTrigger value="pos" data-testid="tab-pos">Point of Sale</TabsTrigger>
-            <TabsTrigger value="products" data-testid="tab-products">Products</TabsTrigger>
-            <TabsTrigger value="invoices" data-testid="tab-invoices">Invoices</TabsTrigger>
-            <TabsTrigger value="history" data-testid="tab-history">Sales History</TabsTrigger>
-            <TabsTrigger value="customers" data-testid="tab-customers">Customers</TabsTrigger>
+          <TabsList className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto [mask-image:linear-gradient(to_right,black_85%,transparent)] md:[mask-image:none]">
+            <TabsTrigger value="pos" className="shrink-0" data-testid="tab-pos">Point of Sale</TabsTrigger>
+            <TabsTrigger value="products" className="shrink-0" data-testid="tab-products">Products</TabsTrigger>
+            <TabsTrigger value="invoices" className="shrink-0" data-testid="tab-invoices">Invoices</TabsTrigger>
+            <TabsTrigger value="history" className="shrink-0" data-testid="tab-history">Sales History</TabsTrigger>
+            <TabsTrigger value="customers" className="shrink-0" data-testid="tab-customers">Customers</TabsTrigger>
           </TabsList>
         )}
 

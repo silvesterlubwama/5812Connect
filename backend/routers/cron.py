@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 
-from deps import db
+from deps import db, run_for_every_org
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cron", tags=["cron"])
@@ -98,7 +98,7 @@ async def cron_event_reminders(
     run_id = x_webhook_id or envelope.get("run_id") or ""
     if await _seen_before(run_id, "event-reminders"):
         return {"accepted": True, "duplicate": True}
-    background.add_task(send_event_reminders)
+    background.add_task(run_for_every_org, send_event_reminders)
     return {"accepted": True}
 
 
@@ -155,5 +155,5 @@ async def cron_calendar_sync(
     run_id = x_webhook_id or envelope.get("run_id") or ""
     if await _seen_before(run_id, "calendar-sync"):
         return {"accepted": True, "duplicate": True}
-    background.add_task(sync_subscribed_calendars)
+    background.add_task(run_for_every_org, sync_subscribed_calendars)
     return {"accepted": True}

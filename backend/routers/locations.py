@@ -148,7 +148,11 @@ async def update_location(loc_id: str, data: LocationUpdate, current_user: dict 
         if existing and existing.get("type") == "sub-location" and "type" not in update_data:
             update_data["type"] = "campus"
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db.locations.update_one({"id": loc_id}, {"$set": update_data})
+    res = await db.locations.update_one({"id": loc_id}, {"$set": update_data})
+    if not res.matched_count:
+        # Nothing was changed anyway (the scoped db cannot reach another
+        # tenant's rows), but say so plainly instead of returning 200/null.
+        raise HTTPException(status_code=404, detail="Location not found")
     return await db.locations.find_one({"id": loc_id}, {"_id": 0})
 
 
@@ -185,7 +189,9 @@ async def get_exchange_rate(from_currency: str = "UGX", to_currency: str = "USD"
 
 @router.delete("/locations/{loc_id}")
 async def delete_location(loc_id: str, current_user: dict = Depends(require_admin)):
-    await db.locations.delete_one({"id": loc_id})
+    res = await db.locations.delete_one({"id": loc_id})
+    if not res.deleted_count:
+        raise HTTPException(status_code=404, detail="Location not found")
     return {"message": "Location deleted"}
 
 

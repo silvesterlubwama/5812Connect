@@ -1,0 +1,60 @@
+{
+  "summary": "iter395 backend + frontend test of the socket login check, organisation-bound calendar links, owner activity log, move-person tool, per-organisation branding (with logo upload and DOM wording replacement) and the isolation regression. New suite test_iter395_ws_branding_owner_tools.py: 20/20 pass against the external URL. iter394 hardening retest: 28/28 pass after two test-side fixes (see updated_files). All requested UI flows work: the branding editor saves, the dashboard shows 'Total Residents'/'Add Resident', the tab title changes to the app name, the owner console edit/move/activity dialogs work with filters and paging, an org admin is bounced from /organizations, and chat sockets connect with ?token=. Problems found: (1) SVG logo uploads allow stored XSS on the app origin. (2) The DOM wording replacement changes emails, URLs and nested code, and misses text that React updates in place. (3) The activity log 'total' is wrong, and some rows have no organisation tag. (4) Org admins see the 'Organisations' sidebar link.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/admin/system-settings/branding/logo + GET /api/storage/branding/...", "issue": "Stored XSS. image/svg+xml is accepted, and the file is served from the app origin as image/svg+xml with no Content-Security-Policy and no Content-Disposition. An org admin uploaded <svg><script>alert(document.domain)</script></svg>, and the script runs for anyone who opens the URL. That includes the platform owner, and the script can read their localStorage token. Repro: tests/probe_iter395_adversarial.py. Fix: drop SVG from ALLOWED (or sanitise it), check magic bytes, and serve branding/ files with 'Content-Security-Policy: default-src none; style-src unsafe-inline' (or as attachment).", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/organizations/activity", "issue": "'total' is len(merged rows), and each source is capped at limit+skip. The UI shows '1–50 of 100' when about 8,400 rows exist, and the total grows as you page. Use count_documents for each source."},
+      {"endpoint": "GET /api/organizations/activity", "issue": "Transfer rows (resource='person') have organization_id=None and organization_name=''. Even so, ?org_id=X returns them (matched through details.to/from), so filtered results include untagged rows. Rows for deleted organisations (691 platform rows from t392* test orgs) and 81 audit_log rows with no organisation have an empty organization_name. Fall back to details.name, and tag transfer rows with the to/from organisation."},
+      {"endpoint": "POST /api/admin/system-settings/branding/logo", "issue": "The content type is trusted from the client. HTML uploaded as image/png is accepted. It is served as image/png with nosniff, so it is low risk, but the bytes should still be checked."},
+      {"endpoint": "PUT /api/admin/system-settings", "issue": "branding accepts any key (e.g. newkey_x), and terms accepts any keys and values with no length limit. Whitelist the branding keys."},
+      {"endpoint": "routers/events.py public_calendar_location_json", "issue": "Calls org_as(oid).__enter__() by hand and never exits it. Use 'with org_as(oid):' like the sibling routes."},
+      {"endpoint": "POST /api/organizations/transfer-person", "issue": "The clash check lowercases the email, but the user lookup does not, so mixed-case stored emails can slip past the 409."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BrandingContext DOM wording replacement", "issue": "It rewrites user data, not just UI words. With Member->Resident and Campus->House set, an injected text node 'member.probe@lubwamas.org' became 'resident.probe@lubwamas.org', 'https://x.org/members/12' became '/residents/12', and 'Main Campus' (a location name) became 'Main House'. SKIP only checks the direct parent, so <code><span>campus_id member</span></code> became 'campus_id resident'. Emails, URLs and names in tables and chat will show wrong values. Skip tokens that touch @ / . / _ (emails, URLs, identifiers), skip any element whose ancestor is CODE/PRE/[data-no-term], and consider exempting data cells.", "selector": "document.body text nodes", "priority": "MEDIUM"},
+      {"component": "BrandingContext MutationObserver", "issue": "It watches childList only, not characterData. When React updates an existing text node in place (counts, re-renders), the original word comes back. Repro: span textContent 'x', then nodeValue = '5 Members', and it stays '5 Members'. Add characterData:true (and guard against loops).", "selector": "MutationObserver.observe(document.body,{childList,subtree})", "priority": "MEDIUM"},
+      {"component": "Layout sidebar", "issue": "Org admins (admin@lubwamas.org) see the 'Organisations' link under ADMIN, because canSee uses '!item.roles.includes(role) && !isAdmin', so admins skip the super_admin-only rule. Clicking it bounces to /dashboard. Exempt SUPER_ADMIN_ROLES items from the isAdmin bypass.", "selector": "components/Layout.jsx:414", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Branding editor", "issues": ["Primary and accent colours are plain text inputs with no colour swatch or picker, so there is no visual preview."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter395_ws_branding_owner_tools.py",
+    "/app/backend/tests/probe_iter395_adversarial.py",
+    "/app/backend/tests/test_iter394_hardening_retest.py",
+    "/app/test_reports/pytest/pytest_iter395.xml"
+  ],
+  "action_items": [
+    "HIGH: block SVG (or sanitise it) in the branding logo upload, check magic bytes, and add a restrictive CSP / Content-Disposition to /api/storage responses",
+    "Make the term replacer skip emails, URLs and identifiers, and anything with a CODE/PRE ancestor; also observe characterData so in-place React updates are reworded",
+    "Activity log: return real counts for total; tag transfer rows and rows for deleted organisations with an organisation name",
+    "Hide the 'Organisations' nav item from non-super_admin admins",
+    "events.py public_calendar_location_json: use a 'with org_as(oid):' block",
+    "Whitelist branding keys on PUT /admin/system-settings"
+  ],
+  "critical_code_review_comments": [
+    "authenticate_socket is solid: it checks the sub against the path id, the revoked jti, user status and suspended orgs. Verified: no token, garbage, another user's token, another org's token and a revoked (post-transfer) token are all refused with HTTP 403. The own token is accepted, and online_users contains only same-org ids.",
+    "Calendar tokens bind the org correctly. A swapped org prefix, a zeroed signature, a bare signature and an empty token all return 404. A Lubwamas link returned only the Lubwamas event.",
+    "Branding isolation held. A unique marker set in Lubwamas (including keys 58:12 never had) did not show up for the 58:12 token, anonymous callers, a garbage token, the 58:12 full settings or the 58:12 DB doc after 58:12 saved its own branding. Hostname resolution works (Host: new.lubwamas.org returns Lubwamas branding).",
+    "The platform owner's active_organization_id persists on the user doc, so the owner skips the org picker on the next login if they never logged out or exited. That may be intended, but the credential notes say login returns requires_org_selection.",
+    "Transfer: the moved user's old token returns 401 and their socket is refused. After a new login, the members/events/admin/users lists contain 0 rows from the source org."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter395_ws_branding_owner_tools.py (new)",
+    "/app/backend/tests/probe_iter395_adversarial.py (new)",
+    "/app/backend/tests/test_iter394_hardening_retest.py (WS connects now pass ?token=; presence test resets the caller's dnd status, which had been making test_other_org_presence_not_evicted fail)"
+  ],
+  "success_rate": {"backend": "100% of the 48 functional tests (20 new + 28 retest); 1 HIGH security finding (SVG XSS)", "frontend": "~90% (all requested flows pass; wording replacement over-reaches, stale nav link)"},
+  "seed_data_creation": "Throwaway users, a TEST_ public event, and a hostname test395.lubwamas.org were all removed afterwards. Lubwamas branding was reset to empty defaults (the earlier 'Lubwamas Home' values are gone, as requested). The owner exited their organisation (active_organization_id=None). A few test logo files (png/svg/html-as-png) remain in object storage under branding/ee79732c-.../ and cannot be deleted through the API.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run test_iter395_ws_branding_owner_tools.py and test_iter394_hardening_retest.py in separate pytest invocations (auth rate limit). Export MONGO_URL/DB_NAME from backend/.env and REACT_APP_BACKEND_URL. member@5812uganda.org/Member@5812 no longer logs in (401), so the iter395 suite creates its own throwaway Member. WS handshakes through the ingress sometimes time out once (flaky); retry passes. After the fixes, re-run probe_iter395_adversarial.py to confirm SVG is rejected, and re-check the term replacer with an email such as member.x@org.",
+  "test_credentials": "The credentials in /app/memory/test_credentials.md work for the owner, admin@5812uganda.org and admin@lubwamas.org. member@5812uganda.org / Member@5812 returns 401 Invalid credentials (account missing or password changed).",
+  "rca of the issue": "SVG XSS: upload_branding_logo allows image/svg+xml, and serve_object_storage streams it with the stored content type on the app origin, so the browser runs the embedded script. Term corruption: buildTermReplacer uses \\b word boundaries, and '@', '.' and '/' count as boundaries, so 'member' in member@x.org matches. acceptNode checks only the immediate parent tag, and the observer ignores characterData mutations."
+}

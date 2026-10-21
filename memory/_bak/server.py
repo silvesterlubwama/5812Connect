@@ -1,0 +1,804 @@
+# iter301 — bcrypt is pinned to 3.2.2 in requirements.txt (compatible with
+# passlib==1.7.4 which is unmaintained but stable). This defensive shim keeps
+# hashing/verification functional if a future dependency upgrade pulls in
+# bcrypt 4.x (which dropped the `__about__` attribute passlib introspects).
+import bcrypt
+if not hasattr(bcrypt, '__about__'):
+    class _About:
+        __version__ = getattr(bcrypt, '__version__', '4.0.0')
+    bcrypt.__about__ = _About()
+
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from dotenv import load_dotenv
+from storage import init_storage
+from deps import get_role_level, require_role, require_admin, require_director, require_manager, require_coordinator, require_staff, get_current_user, hash_password, verify_password, create_token, is_system_admin, get_campus_filter
+from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+import logging
+import json
+import time
+import asyncio
+from collections import defaultdict
+from pathlib import Path
+from pydantic import BaseModel, Field
+from typing import List, Optional, Any, Dict
+import uuid
+from datetime import datetime, timezone, timedelta
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+# MongoDB connection — reuse the organisation-scoped handle from deps so the
+# endpoints defined directly in this file are gated by the same wall as every
+# router, rather than holding a second, unscoped connection.
+from deps import db, raw_db, client  # noqa: E402
+from org_context import set_current_org, org_bypass, reset_current_org  # noqa: E402
+mongo_url = os.environ["MONGO_URL"]
+db_name = os.environ["DB_NAME"]
+
+app = FastAPI(title="58:12 Global Connect API")
+api_router = APIRouter(prefix="/api")
+
+# Mount the local uploads folder so photos saved on the filesystem fallback path
+# (`/app/backend/uploads/photos/...`) are actually retrievable via the URL
+# `/api/uploads/photos/...` returned by the upload endpoints.
+from fastapi.staticfiles import StaticFiles
+import os as _os_for_static
+_os_for_static.makedirs("/app/backend/uploads/photos", exist_ok=True)
+_os_for_static.makedirs("/app/backend/uploads/child-extras", exist_ok=True)
+_os_for_static.makedirs("/app/backend/uploads/files", exist_ok=True)
+app.mount("/api/uploads", StaticFiles(directory="/app/backend/uploads"), name="uploads")
+
+
+# Capture process start time so /api/health can report uptime + a static-version stamp
+import time as _time_mod
+_APP_STARTED_AT = _time_mod.time()
+_APP_VERSION = os.environ.get("APP_VERSION") or os.environ.get("GIT_COMMIT") or "dev"
+
+
+@app.get("/api/health")
+async def health_check():
+    """Rich health probe — used by uptime monitors + the kiosk Diagnostics page.
+    Returns aggregate status + per-subsystem detail. Status `healthy` iff every
+    *required* subsystem (db, storage) is OK; degraded means optional pieces (LLM)
+    are unconfigured but the app can still serve traffic."""
+    started = _time_mod.time()
+    out = {
+        "status": "healthy",
+        "service": "58:12 Global Connect CRM",
+        "version": _APP_VERSION,
+        "uptime_seconds": int(_time_mod.time() - _APP_STARTED_AT),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "subsystems": {},
+    }
+    # --- DB ping ---
+    db_status = {"ok": False}
+    try:
+        await asyncio.wait_for(db.command("ping"), timeout=2.0)
+        db_status = {"ok": True, "latency_ms": round((_time_mod.time() - started) * 1000, 1)}
+    except Exception as e:
+        db_status = {"ok": False, "error": str(e)[:200]}
+        out["status"] = "unhealthy"
+    out["subsystems"]["db"] = db_status
+    # --- Uploads dir writable ---
+    storage_status = {"ok": False}
+    try:
+        from pathlib import Path
+        uploads = Path("/app/backend/uploads")
+        uploads.mkdir(parents=True, exist_ok=True)
+        # Touch a tiny canary file to confirm writability
+        canary = uploads / ".healthcheck"
+        canary.write_text(str(int(_time_mod.time())))
+        canary.unlink(missing_ok=True)
+        storage_status = {"ok": True, "path": str(uploads)}
+    except Exception as e:
+        storage_status = {"ok": False, "error": str(e)[:200]}
+        out["status"] = "unhealthy"
+    out["subsystems"]["storage"] = storage_status
+    # --- LLM key configured (optional) ---
+    llm_key = os.environ.get("EMERGENT_LLM_KEY", "")
+    out["subsystems"]["llm"] = {
+        "configured": bool(llm_key),
+        "provider": "emergent",
+    }
+    if not llm_key and out["status"] == "healthy":
+        out["status"] = "degraded"
+    # --- Email (Resend) ---
+    out["subsystems"]["email"] = {"configured": bool(os.environ.get("RESEND_API_KEY"))}
+    # --- Scheduler heartbeat ---
+    out["subsystems"]["scheduler"] = {"running": True}  # the loop has a try/except wrapper around each tick
+    return out
+
+
+@app.get("/health")
+async def root_health_check():
+    """Root-level health endpoint for deployment probes that hit /health directly."""
+    return {"status": "healthy", "service": "58:12 Global Connect CRM"}
+
+
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe — verifies MongoDB round-trip. Returns 503 if DB unreachable."""
+    started = time.time()
+    try:
+        await asyncio.wait_for(db.command("ping"), timeout=3.0)
+        return {"status": "ready", "db_latency_ms": round((time.time() - started) * 1000, 1)}
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "db_error": str(e)[:200], "db_latency_ms": round((time.time() - started) * 1000, 1)},
+        )
+
+
+# Rate limiting middleware — pure ASGI (see iter-middleware-asgi above).
+#
+# iter317: this used to key the bucket on `scope["client"]`, which behind the
+# K8s ingress + Cloudflare is ALWAYS the proxy pod IP. Every user on the
+# platform therefore shared one 120/min bucket, and since a single page load
+# fires 15-25 API calls, a handful of staff browsing at once produced spurious
+# 429s that the UI swallowed into empty panels.
+#
+# Now: authenticated callers get their OWN bucket keyed on the JWT subject;
+# anonymous traffic falls back to the real client IP (CF-Connecting-IP →
+# left-most X-Forwarded-For hop → socket). Auth endpoints keep a tight
+# per-IP bucket on top (the real brute-force lockout still lives in
+# `routers/auth.py` + the `login_attempts` collection — this is only a coarse
+# net in front of it).
+from jose import jwt as _rl_jwt, JWTError as _RLJWTError
+from deps import SECRET_KEY as _RL_SECRET, ALGORITHM as _RL_ALGO
+
+RL_AUTHENTICATED_PER_MIN = int(os.environ.get("RATE_LIMIT_AUTHENTICATED_PER_MIN", "600"))
+RL_ANONYMOUS_PER_MIN = int(os.environ.get("RATE_LIMIT_ANONYMOUS_PER_MIN", "120"))
+RL_AUTH_ROUTE_PER_MIN = int(os.environ.get("RATE_LIMIT_AUTH_ROUTES_PER_MIN", "20"))
+# Probes and the login flow's own guard shouldn't be throttled here.
+RL_EXEMPT_PATHS = {"/health", "/readyz", "/api/health"}
+# Login/registration/reset — tight per-IP bucket regardless of token.
+RL_AUTH_PREFIXES = ("/api/auth/login", "/api/auth/register", "/api/auth/forgot-password",
+                    "/api/auth/reset-password", "/api/auth/verify-2fa")
+
+
+class RateLimitMiddleware:
+    def __init__(self, app):
+        self.app = app
+        self.request_counts: Dict[str, list] = defaultdict(list)
+        self._last_prune = time.time()
+
+    @staticmethod
+    def _real_ip(headers: dict, scope) -> str:
+        """Client IP behind Cloudflare + K8s ingress.
+
+        Only meaningful because every request reaches us THROUGH those proxies;
+        a direct caller could spoof these headers, which is why anonymous
+        traffic gets the tighter limit and never any authorisation weight.
+        """
+        cf = (headers.get("cf-connecting-ip") or "").strip()
+        if cf:
+            return cf
+        xff = headers.get("x-forwarded-for") or ""
+        if xff:
+            first = xff.split(",")[0].strip()
+            if first:
+                return first
+        client = scope.get("client") or ("unknown", 0)
+        return client[0] if isinstance(client, (tuple, list)) else "unknown"
+
+    @staticmethod
+    def _subject(headers: dict) -> Optional[str]:
+        """JWT subject, or None. Signature IS verified so a forged token can't
+        mint itself a private bucket; expiry is NOT enforced here because an
+        expired token still deserves its own bucket (the endpoint's own
+        dependency is what rejects it). Never raises, never leaks auth state.
+        """
+        auth = headers.get("authorization") or ""
+        if not auth.lower().startswith("bearer "):
+            return None
+        try:
+            payload = _rl_jwt.decode(
+                auth[7:].strip(), _RL_SECRET, algorithms=[_RL_ALGO],
+                options={"verify_exp": False},
+            )
+            sub = payload.get("sub")
+            return str(sub) if sub else None
+        except (_RLJWTError, Exception):
+            return None
+
+    def _prune(self, now: float):
+        """Drop cold buckets so the dict can't grow without bound."""
+        if now - self._last_prune < 60:
+            return
+        self._last_prune = now
+        window = now - 60
+        for key in [k for k, hits in self.request_counts.items() if not hits or hits[-1] <= window]:
+            self.request_counts.pop(key, None)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        # Websocket upgrades, CORS preflight and health probes pass through.
+        if headers.get("upgrade") == "websocket" or scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path") or ""
+        if path in RL_EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        ip = self._real_ip(headers, scope)
+        if path.startswith(RL_AUTH_PREFIXES):
+            key, limit = f"auth:{ip}", RL_AUTH_ROUTE_PER_MIN
+        else:
+            sub = self._subject(headers)
+            if sub:
+                key, limit = f"u:{sub}", RL_AUTHENTICATED_PER_MIN
+            else:
+                key, limit = f"ip:{ip}", RL_ANONYMOUS_PER_MIN
+
+        now = time.time()
+        self._prune(now)
+        window = now - 60
+        hits = [t for t in self.request_counts[key] if t > window]
+        self.request_counts[key] = hits
+        if len(hits) >= limit:
+            retry_after = max(1, int(60 - (now - hits[0])))
+            response = JSONResponse(
+                status_code=429,
+                content={"detail": f"Rate limit exceeded ({limit}/min). Try again in {retry_after}s."},
+                headers={
+                    "Retry-After": str(retry_after),
+                    "RateLimit-Limit": str(limit),
+                    "RateLimit-Remaining": "0",
+                    "RateLimit-Reset": str(retry_after),
+                },
+            )
+            await response(scope, receive, send)
+            return
+        hits.append(now)
+        await self.app(scope, receive, send)
+
+app.add_middleware(RateLimitMiddleware)
+
+
+# ============================================================
+# SECURITY HEADERS MIDDLEWARE
+# Hardens every response with browser-standard security headers.
+# ============================================================
+
+# iter-middleware-asgi: BaseHTTPMiddleware (used implicitly by
+# `@app.middleware("http")`) triggers `RuntimeError: No response returned`
+# intermittently under load — Starlette bug. Rewritten as pure ASGI
+# middleware which doesn't wrap `call_next` and therefore doesn't hit
+# the excgroup edge cases.
+#
+# Signature: `async def __call__(self, scope, receive, send)`; we wrap
+# `send` to inject headers on the response start event, and delegate
+# everything else to the inner app untouched.
+
+class SecurityHeadersASGI:
+    """Add security headers to every HTTP response.
+
+    Pure ASGI so it does NOT sit inside Starlette's BaseHTTPMiddleware
+    excgroup, which was raising 'No response returned' under load in the
+    preview container. Injects headers by wrapping the `send` callable.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        is_https = scope.get("scheme") == "https"
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                # append our security headers as raw bytes tuples
+                headers.extend([
+                    (b"x-frame-options", b"SAMEORIGIN"),
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+                    (
+                        b"permissions-policy",
+                        b"geolocation=(self), camera=(self), microphone=(self), "
+                        b"payment=(), fullscreen=(self), serial=(self), "
+                        b"hid=(self), usb=(self), bluetooth=(self)",
+                    ),
+                    (b"x-xss-protection", b"1; mode=block"),
+                ])
+                if is_https:
+                    headers.append((
+                        b"strict-transport-security",
+                        b"max-age=31536000; includeSubDomains",
+                    ))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+app.add_middleware(SecurityHeadersASGI)
+
+
+# ============================================================
+# ORGANISATION CONTEXT MIDDLEWARE
+# Pins exactly one organisation per request before any route runs.
+#
+# Authenticated traffic is pinned authoritatively in get_current_user from the
+# user record. This middleware covers the rest: public pages (the shop, booking
+# links, shared calendars) which have no user to resolve. Those are pinned from
+# the request hostname, an explicit ?org=<slug>, or the default organisation.
+# ============================================================
+class OrgContextASGI:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        token = None
+        try:
+            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+            host = (headers.get("host") or "").split(":")[0].strip().lower()
+            org_id = None
+            if host:
+                with org_bypass():
+                    org = await raw_db.organizations.find_one(
+                        {"hostnames": host}, {"_id": 0, "id": 1, "status": 1}
+                    )
+                if org:
+                    if org.get("status") == "suspended":
+                        await JSONResponse(
+                            status_code=403,
+                            content={"detail": "This organisation is suspended."},
+                        )(scope, receive, send)
+                        return
+                    org_id = org["id"]
+            if not org_id:
+                # An explicit ?org=<slug> lets a tenant share public links
+                # before its own hostname is wired up.
+                qs = scope.get("query_string") or b""
+                slug = ""
+                if b"org=" in qs:
+                    from urllib.parse import parse_qs
+                    slug = (parse_qs(qs.decode()).get("org") or [""])[0].strip().lower()
+                if slug:
+                    with org_bypass():
+                        org = await raw_db.organizations.find_one(
+                            {"slug": slug, "status": "active"}, {"_id": 0, "id": 1}
+                        )
+                    if org:
+                        org_id = org["id"]
+            if not org_id:
+                # Last resort for public pages on an unclaimed hostname (the
+                # preview URL, localhost): the default organisation. This only
+                # decides WHOSE published content shows — the request is still
+                # pinned to exactly one tenant, so nothing crosses over.
+                with org_bypass():
+                    fallback = await raw_db.organizations.find_one(
+                        {"status": "active", "is_default": True}, {"_id": 0, "id": 1}
+                    ) or await raw_db.organizations.find_one(
+                        {"status": "active"}, {"_id": 0, "id": 1}, sort=[("created_at", 1)]
+                    )
+                if fallback:
+                    org_id = fallback["id"]
+            if org_id:
+                token = set_current_org(org_id)
+        except Exception as e:
+            logging.warning(f"Org context resolution failed: {e}")
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if token is not None:
+                reset_current_org(token)
+
+
+app.add_middleware(OrgContextASGI)
+
+
+# Security Contractor role is meant to be **kiosk-only** — the frontend router
+# already blocks them from every non-checkpoint page. This middleware enforces
+# the same restriction at the API layer so a stolen contractor token cannot be
+# used with curl to exfiltrate the member directory, org financials, etc.
+# Iteration 226 audit surfaced this leak; the fix here is a positive-list of
+# path prefixes contractors ARE allowed to hit.
+_CONTRACTOR_ALLOWED_PREFIXES = (
+    "/api/security/checkpoint",       # scan, session, pair
+    "/api/security-companies",        # read own company for badge
+    "/api/auth/",                     # login/logout/me
+    "/api/members/",                  # NFC endpoints keyed by their own id
+    "/api/notifications/mark",        # dismiss own notifications
+    "/api/system/health",
+    "/api/storage/",                  # photos/logos on the badge
+    "/api/uploads/",                  # local file serving
+)
+_CONTRACTOR_DENY_METHODS = {"DELETE"}  # never let a contractor delete anything
+
+
+@app.middleware("http")
+async def kiosk_role_guard(request, call_next):
+    """Enforce Security Contractor kiosk-only scope at the transport layer.
+    (Kept as `@app.middleware` — this one needs the parsed `Request` and
+    doesn't hit the RuntimeError since it always returns a Response.)
+    """
+    path = request.url.path
+    if not path.startswith("/api/") or request.method == "OPTIONS":
+        return await call_next(request)
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return await call_next(request)
+    token = auth.split(" ", 1)[1].strip()
+    if not token:
+        return await call_next(request)
+    try:
+        from deps import _decode_token, db as _db
+        payload = _decode_token(token)
+        user_id = payload.get("sub") if payload else None
+        if not user_id:
+            return await call_next(request)
+        user = await _db.users.find_one({"id": user_id}, {"_id": 0, "role": 1})
+        if not user or user.get("role") != "Security Contractor":
+            return await call_next(request)
+        if request.method in _CONTRACTOR_DENY_METHODS:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403, content={"detail": "Security Contractors cannot perform delete operations"})
+        if not any(path.startswith(p) for p in _CONTRACTOR_ALLOWED_PREFIXES):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=403, content={"detail": "Security Contractor role is restricted to the checkpoint kiosk"})
+    except Exception:
+        # Never block a request if the guard itself fails — better to fall
+        # through to the endpoint's own auth than to lock users out.
+        pass
+    return await call_next(request)
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+from deps import _audit, normalize_gender, resolve_department
+
+
+# ========== MODELS (imported from models.py) ==========
+from models import (
+    UserRegister, UserLogin, UserOut, MemberCreate, MemberUpdate,
+    EventCreate, EventUpdate, TaskCreate, TaskUpdate, CheckInCreate,
+    VenueCreate, VenueUpdate, PublicBookingCreate, SpaceBookingCreate,
+    FamilyCreate, ChildCreate, GuestCreate, AuditLogCreate,
+)
+
+
+# ========== LOCATION MODELS (moved to routers/locations.py) ==========
+# NotificationCreate + all `/api/notifications/*` endpoints moved to
+# `routers/notifications.py` in iter304 (see the consolidated router).
+
+
+# ========== LOCATIONS (extracted to routers/locations.py) ==========
+# Location models also moved to routers/locations.py
+
+
+# ========== INCLUDE ALL ROUTERS ==========
+try:
+    from routers.bookings import router as bookings_router
+    from routers.websocket import router as ws_router
+    from routers.notifications import router as notifications_router
+    from routers.access import router as access_router
+    from routers.access_eligible import router as access_eligible_router
+    from routers.access_children import router as access_children_router
+    from routers.reports import router as reports_router
+    from routers.documents import router as documents_router
+    from routers.auth import router as auth_router
+    from routers.members import router as members_router
+    from routers.import_csv import router as import_csv_router
+    from routers.portal import router as portal_router
+    from routers.events import router as events_router
+    from routers.tasks import router as tasks_router
+    # NEW single finance package (iter 246 — full reset). Old routers
+    # (financial, accounting, chart_accounts, invoices, statements) are
+    # deliberately NOT included so every money movement flows through the
+    # new balanced-ledger `finance` package.
+    from routers.finance import router as finance_router
+    from routers.chat import router as chat_router
+    from routers.admin import router as admin_router
+    from routers.programmes import router as programmes_router
+    from routers.misc import router as misc_router
+    from routers.organizations import router as organizations_router
+    from routers.webauthn import router as webauthn_router
+    from routers.boards import router as boards_router
+    from routers.email import router as email_router
+    from routers.analytics import router as analytics_router
+    from routers.scheduling import router as scheduling_router
+    from routers.templates import router as templates_router
+    from routers.calling import router as calling_router
+    from routers.presence import router as presence_router
+    from routers.conferences import router as conferences_router
+    from routers.reactions import router as reactions_router
+    from routers.locations import router as locations_router
+    from routers.settings import router as settings_router
+    from routers.voip import router as voip_router
+    from routers.consumable_sheets import router as consumable_sheets_router
+    from routers.event_tickets import router as event_tickets_router
+    from routers.event_tickets import tickets_router as tickets_router
+    from routers.purchase_orders import router as purchase_orders_router
+    from routers.holidays import router as holidays_router
+    app.include_router(bookings_router)
+    app.include_router(ws_router)
+    app.include_router(notifications_router)
+    app.include_router(access_router)
+    app.include_router(access_eligible_router)
+    app.include_router(access_children_router)
+    app.include_router(reports_router)
+    app.include_router(documents_router)
+    app.include_router(auth_router)
+    app.include_router(members_router)
+    app.include_router(import_csv_router)
+    app.include_router(portal_router)
+    app.include_router(events_router)
+    app.include_router(tasks_router)
+    app.include_router(finance_router)
+    app.include_router(chat_router)
+    app.include_router(admin_router)
+    app.include_router(programmes_router)
+    app.include_router(misc_router)
+    app.include_router(organizations_router)
+    app.include_router(webauthn_router)
+    app.include_router(boards_router)
+    app.include_router(email_router)
+    app.include_router(analytics_router)
+    app.include_router(scheduling_router)
+    app.include_router(templates_router)
+    app.include_router(calling_router)
+    app.include_router(presence_router)
+    app.include_router(conferences_router)
+    app.include_router(reactions_router)
+    app.include_router(locations_router)
+    app.include_router(settings_router)
+    app.include_router(voip_router)
+    app.include_router(consumable_sheets_router)
+    app.include_router(event_tickets_router)
+    app.include_router(tickets_router)
+    app.include_router(purchase_orders_router)
+    app.include_router(holidays_router)
+    from routers.hr import router as hr_router
+    app.include_router(hr_router)
+    from routers.hr_timesheet_templates import router as hr_ts_tpl_router
+    app.include_router(hr_ts_tpl_router)
+    from routers.donors_vendors import router as donors_vendors_router
+    app.include_router(donors_vendors_router)
+    from routers.seed import router as seed_router
+    from routers.dashboard import router as dashboard_router
+    from routers.i18n import router as i18n_router
+    from routers.translate import router as translate_router
+    from routers.products import router as products_router
+    from routers.sales import router as sales_router
+    from routers.sheet_import import router as sheet_import_router
+    # iter319: POS store config — lifted out of the legacy financial router so
+    # Kiosk / Products / POS Setup stop calling a 404.
+    from routers.store_settings import router as store_settings_router
+    # iter319: public online shop (products flagged `sell_online` + orders).
+    from routers.public_shop import router as public_shop_router
+    # iter346: Flutterwave online checkout for the public shop (card + Uganda MoMo).
+    from routers.payments_flutterwave import router as payments_flutterwave_router
+    from routers.payments_gateway import router as payments_gateway_router
+    # iter361: outreach lesson planning — yearly theme, monthly topic, session
+    # run sheets with a leader per slot.
+    from routers.lesson_planning import router as lesson_planning_router
+    # iter319: customer directory (extracted from the offline financial.py) and
+    # customer statements / payment reminders — both had live UI hitting 404s.
+    from routers.customers import router as customers_router
+    from routers.statements import router as statements_router
+    # iter246 dropped the old financial/accounting/statements routers. The
+    # INVOICES router is back (iter319, user request): the Sales→Invoices tab,
+    # the Accounts-Receivable data and the public quote-acceptance page were
+    # all calling it. Its convert-to-sale now runs the same customer-link and
+    # ledger posting as the POS path, so money still flows through the one
+    # balanced ledger.
+    from routers.invoices import router as invoices_router
+    from routers.approvals import router as approvals_router
+    from routers.social_work import router as social_work_router, portal_router as school_portal_router
+    from routers.bank import router as bank_router
+    from routers.activity import router as activity_router
+    from routers.sponsor_portal import router as sponsor_links_router, public_router as sponsor_portal_router
+    from routers.security_checkpoint import router as security_checkpoint_router, ocr_router
+    from routers.backup import router as backup_router
+    from routers.system_settings import router as system_settings_router
+    from routers.funds import router as funds_router
+    from routers.social_review_forms import router as social_review_forms_router
+    from routers.social_sponsor_story import router as social_sponsor_story_router
+    from routers.shipments_pkg import router as shipments_router
+    from routers.security_companies import router as security_companies_router
+    from routers.departments import router as departments_router
+    from routers.reports_departments import router as reports_departments_router
+    from routers.sublocations_budget import router as sublocations_budget_router
+    app.include_router(seed_router)
+    app.include_router(dashboard_router)
+    app.include_router(i18n_router)
+    app.include_router(translate_router)
+    app.include_router(products_router)
+    app.include_router(sales_router)
+    app.include_router(sheet_import_router)
+    app.include_router(store_settings_router)
+    app.include_router(public_shop_router)
+    app.include_router(payments_flutterwave_router)
+    app.include_router(payments_gateway_router)
+    app.include_router(lesson_planning_router)
+    app.include_router(customers_router)
+    app.include_router(statements_router)
+    app.include_router(invoices_router)
+    app.include_router(approvals_router)
+    app.include_router(departments_router)
+    app.include_router(reports_departments_router)
+    app.include_router(sublocations_budget_router)
+    app.include_router(social_work_router)
+    app.include_router(school_portal_router)
+    app.include_router(bank_router)
+    app.include_router(activity_router)
+    app.include_router(sponsor_links_router)
+    app.include_router(sponsor_portal_router)
+    app.include_router(security_checkpoint_router)
+    app.include_router(ocr_router)
+    app.include_router(backup_router)
+    app.include_router(system_settings_router)
+    app.include_router(funds_router)
+    app.include_router(social_review_forms_router)
+    app.include_router(social_sponsor_story_router)
+    app.include_router(shipments_router)
+    app.include_router(security_companies_router)
+
+    # iter303 — endpoint blocks extracted from server.py
+    from routers.campus_switcher import router as campus_switcher_router
+    from routers.two_factor import router as two_factor_router
+    from routers.biometric_nfc import router as biometric_nfc_router
+    from routers.google_auth import router as google_auth_router
+    from routers.push import router as push_router
+    app.include_router(campus_switcher_router)
+    app.include_router(two_factor_router)
+    app.include_router(biometric_nfc_router)
+    app.include_router(google_auth_router)
+    app.include_router(push_router)
+    from routers.cron import router as cron_router
+    app.include_router(cron_router)
+    logger.info("All modular routers loaded")
+except Exception as e:
+    logger.warning(f"Router loading: {e}")
+
+
+# ===== iter302: schedulers, indexes, and seed extracted into sibling modules =====
+# Behaviour unchanged — server.py just re-exports the names so callers using
+# `from server import _fire_overdue_task_director_digest` keep working.
+from scheduler import (
+    _send_push_to_user,
+    _run_due_date_reminder_scheduler,
+    _fire_scheduled_customer_statements,
+    _fire_auto_backup,
+    _fire_overdue_task_emails,
+    _fire_overdue_task_director_digest,
+    _fire_payday_payslip_generation,
+    _fire_overdue_payment_reminders,
+    _fire_birthday_anniversary_notifications,
+    _run_flight_status_refresh_loop,
+)
+from db_indexes import _ensure_indexes
+from seed_data import _seed_initial_data
+
+app.include_router(api_router)
+
+# iter351/353 — CORS is an explicit allowlist instead of `*` with credentials.
+# Three sources, checked in order:
+#   1. the Emergent origin regex (preview + *.emergent.host deployments)
+#   2. CORS_ORIGINS in the backend env (comma-separated)
+#   3. the live list an admin manages in System Console → Security
+# (3) is cached in-process and refreshed every 60s, so adding a domain in the
+# UI takes effect without a redeploy.
+_cors_env = (os.environ.get("CORS_ORIGINS") or "").strip()
+CORS_ALLOWED_ORIGIN_REGEX = r"https://([a-z0-9-]+\.)*(emergent\.host|emergentagent\.com)$"
+if _cors_env == "*":
+    logger.warning("CORS_ORIGINS='*' — falling back to the Emergent origin allowlist. "
+                   "Add custom domains in System Console → Security instead.")
+    CORS_ALLOWED_ORIGINS = ["http://localhost:3000"]
+else:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()] or ["http://localhost:3000"]
+
+_dynamic_cors_origins: set = set()
+
+
+class DynamicCORSMiddleware(CORSMiddleware):
+    """Starlette's CORS logic, with an extra admin-managed origin set.
+
+    Only `is_allowed_origin` is overridden — preflight handling, credentials and
+    header echoing stay exactly as Starlette implements them.
+    """
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        if super().is_allowed_origin(origin):
+            return True
+        return origin in _dynamic_cors_origins
+
+
+async def _refresh_cors_origins_loop():
+    """Pull the admin-managed CORS allowlist every 60s."""
+    global _dynamic_cors_origins
+    from routers.system_settings import get_cors_origins
+    while True:
+        try:
+            # Platform-level config, not tenant data — read outside org scope.
+            with org_bypass():
+                _dynamic_cors_origins = set(await get_cors_origins())
+        except Exception as e:
+            logger.warning(f"CORS allowlist refresh failed (keeping previous): {e}")
+        await asyncio.sleep(60)
+
+
+app.add_middleware(
+    DynamicCORSMiddleware,
+    allow_credentials=True,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_origin_regex=CORS_ALLOWED_ORIGIN_REGEX,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup():
+    try:
+        init_storage()
+        logger.info("Storage initialized (cloud)")
+    except Exception as e:
+        # Falling back to local disk (./uploads) — fully supported for self-hosted
+        # appliance deploys. Demoted from ERROR to WARNING so log scrapers don't
+        # treat this as a real problem.
+        logger.warning(f"Cloud storage init unavailable, using local disk fallback: {e}")
+    # ===== Sentry init (iter152) — reads system_settings, falls back to env =====
+    try:
+        from routers.system_settings import get_sentry_config
+        with org_bypass():
+            s = await get_sentry_config()
+        if s.get("dsn") and s.get("enabled", True) is not False:
+            try:
+                import sentry_sdk
+                from sentry_sdk.integrations.fastapi import FastApiIntegration
+                from sentry_sdk.integrations.starlette import StarletteIntegration
+                sentry_sdk.init(
+                    dsn=s["dsn"],
+                    environment=s.get("environment") or "production",
+                    traces_sample_rate=float(s.get("traces_sample_rate") or 0.1),
+                    integrations=[FastApiIntegration(), StarletteIntegration()],
+                    send_default_pii=False,
+                )
+                logger.info(f"Sentry initialised (env={s.get('environment')})")
+            except ImportError:
+                logger.warning("Sentry DSN set but sentry-sdk not installed — skipping")
+            except Exception as se:
+                logger.warning(f"Sentry init failed: {se}")
+    except Exception as e:
+        logger.warning(f"Sentry bootstrap skipped: {e}")
+    # Start background task reminder scheduler
+    asyncio.create_task(_run_due_date_reminder_scheduler())
+    # iter353 — keep the admin-managed CORS allowlist warm, and make sure no
+    # plaintext kiosk PIN survives anywhere in the database.
+    asyncio.create_task(_refresh_cors_origins_loop())
+    try:
+        from pin_security import migrate_plaintext_pins
+        asyncio.create_task(migrate_plaintext_pins())
+    except Exception as e:
+        logger.warning(f"PIN migration bootstrap skipped: {e}")
+    # iter226 — every 15 min refresh flight status for departed/shipped shipments
+    asyncio.create_task(_run_flight_status_refresh_loop())
+    # Defer heavy seeding so the app becomes ready immediately
+    asyncio.create_task(_seed_initial_data())
+
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    if client:
+        client.close()

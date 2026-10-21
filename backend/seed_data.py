@@ -7,7 +7,8 @@ byte the same as the original in-server implementation.
 import uuid
 from datetime import datetime, timezone
 
-from deps import db, logger, hash_password
+from deps import db, raw_db, logger, hash_password
+from org_context import org_as, org_bypass
 from db_indexes import _ensure_indexes
 
 
@@ -15,6 +16,21 @@ async def _seed_initial_data():
     """Background-seed default admin, locations, notifications without blocking startup/readiness."""
     # Always ensure indexes (fast + idempotent)
     await _ensure_indexes()
+    # Seeding predates any request, so there is no organisation pinned. A fresh
+    # install seeds into the first organisation; if none exists yet there is
+    # nothing to seed into and we leave it to the migration script.
+    with org_bypass():
+        first_org = await raw_db.organizations.find_one(
+            {"status": "active"}, {"_id": 0, "id": 1}, sort=[("created_at", 1)]
+        )
+    if not first_org:
+        logger.info("Seed skipped — no organisation exists yet (run scripts/migrate_organizations.py)")
+        return
+    with org_as(first_org["id"]):
+        await _seed_into_org()
+
+
+async def _seed_into_org():
     try:
         user_count = await db.users.count_documents({})
     except Exception as e:

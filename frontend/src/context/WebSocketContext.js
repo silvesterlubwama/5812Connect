@@ -53,7 +53,9 @@ export const WebSocketProvider = ({ children }) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const backendUrl = process.env.REACT_APP_BACKEND_URL || '';
     const host = backendUrl.replace(/^https?:\/\//, '');
-    const wsUrl = `${protocol}//${host}/api/ws/${user.id}`;
+    // iter394 — the server now refuses a socket without a valid login token.
+    const authToken = secureStorage.getToken() || '';
+    const wsUrl = `${protocol}//${host}/api/ws/${user.id}?token=${encodeURIComponent(authToken)}`;
 
     try {
       const ws = new WebSocket(wsUrl);

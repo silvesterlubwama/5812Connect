@@ -168,7 +168,15 @@ def _ocr(image_bytes: bytes, content_type: str) -> str:
         except ImportError:
             raise HTTPException(status_code=500, detail="pdf2image not installed — send an image instead")
     else:
-        img = Image.open(io.BytesIO(image_bytes))
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            img.load()
+        except Exception:
+            # A corrupt or truncated upload is bad input, not a server fault.
+            raise HTTPException(
+                status_code=400,
+                detail="That file could not be read as an image — try re-taking the photo.",
+            )
     try:
         return pytesseract.image_to_string(img)
     except Exception as e:

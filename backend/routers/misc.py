@@ -674,8 +674,8 @@ async def serve_local_security_logo(filename: str):
     if not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Logo not found")
     ext = safe.rsplit('.', 1)[-1].lower() if '.' in safe else 'png'
-    ct = {'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'webp': 'image/webp', 'svg': 'image/svg+xml'}.get(ext, 'image/png')
-    return FileResponse(filepath, media_type=ct)
+    ct = {'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'webp': 'image/webp'}.get(ext, 'image/png')
+    return FileResponse(filepath, media_type=ct, headers={"X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/storage/{full_path:path}")
@@ -699,4 +699,16 @@ async def serve_object_storage(full_path: str):
     except Exception as e:
         logger.warning(f"Object-storage fetch failed for {full_path}: {e}")
         raise HTTPException(status_code=404, detail="Object not found")
-    return StreamingResponse(iter([content]), media_type=ct)
+    # iter395 — these files are uploaded by organisation admins and served from
+    # the app's own origin, so an SVG (or anything the browser is willing to
+    # treat as markup) would run as our code and could read a visitor's session.
+    # Lock the response down: no scripts, no sniffing, and never render SVG/HTML
+    # inline.
+    headers = {
+        "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox",
+        "X-Content-Type-Options": "nosniff",
+    }
+    if ct in ("image/svg+xml", "text/html", "application/xhtml+xml", "text/xml", "application/xml"):
+        ct = "application/octet-stream"
+        headers["Content-Disposition"] = f'attachment; filename="{full_path.rsplit("/", 1)[-1]}"'
+    return StreamingResponse(iter([content]), media_type=ct, headers=headers)

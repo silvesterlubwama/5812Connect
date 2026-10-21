@@ -1,0 +1,79 @@
+{
+  "summary": "Adversarial retest of the iter393 org-isolation hardening. 7 of the 11 fixes hold: seeding needs the platform owner, /api/auth/google is gone, the four routers refuse anonymous callers, presence/online_users WS events stay inside the org, other tenants' presence entries are no longer evicted, the same email in two orgs signs in correctly, a foreign location returns 404, there is one default org, owner logout brings the picker back, and SuperAdminRoute works. The regression risk is clear: a signed-in 58:12 admin can use calling, conferences, presence and reactions (all 200), and the /comms and /voip screens make 21 such calls with zero 4xx/5xx. iter392 passed 10/10 and iter393 hardening passed 11/11 when run on their own. However, I found NEW CRITICAL holes: (1) the JWT SECRET_KEY in backend/.env is the placeholder '5812global_secret_key_change_in_production', which is also hard-coded in routers/auth.py. A token I forged with it for the owner id got 200 on /api/organizations, so anyone can take over the whole platform. (2) The super_admin guard is bypassable through POST /api/admin/users/import and POST /api/guests/{id}/move-to-staff (director level). Both minted a live super_admin from the Lubwamas admin, and I deleted them. Cross-tenant WS pushes remain: call_offer, chat_message to a foreign participant, and the access.py guest-request broadcast all reached the 58:12 admin's socket from Lubwamas. The presence routes take user_id from the query string, so Lubwamas can set the 58:12 admin's presence to DND and read it. New file test_iter394_hardening_retest.py: 19/28 pass, and all 9 failures are real findings (1 also flaky through the ingress).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "ALL authenticated routes (JWT)", "issue": "backend/.env SECRET_KEY=5812global_secret_key_change_in_production — the placeholder string, which is also hard-coded as the os.environ.get fallback in routers/auth.py lines 343/369/407. A token signed with it {sub:<owner id>, exp:far future, no jti} is accepted. GET /api/organizations returned 200 (full registry, so enter/export/suspend/delete any tenant). The same works for any user id, e.g. /auth/me 200 for the 58:12 admin. Tokens without a jti are not checked against the sessions collection either.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/admin/users/import", "issue": "No role guard at all. The Lubwamas org admin imported {role:'super_admin'} and the user was created with role super_admin. This bypasses the iter393 fix (and the ADMIN_TIER guard). Reproduced, then deleted.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/guests/{guest_id}/move-to-staff", "issue": "Body role is used verbatim (guests.py:166) behind only require_director. A Lubwamas admin turned a guest into a role super_admin user with a chosen password. Any director can do this, and it also bypasses ADMIN_TIER. Reproduced, then deleted.", "priority": "CRITICAL"},
+      {"endpoint": "WS /api/ws/{user_id} call_offer / ice / answer / hangup etc.", "issue": "call signalling sends to target_user_id with no _same_org check. A Lubwamas socket sent call_offer to the 58:12 admin's id, and the 58:12 socket received incoming_call carrying the caller id and SDP.", "priority": "HIGH"},
+      {"endpoint": "POST /api/chat/conversations + WS chat_message", "issue": "Conversation participants are not validated against the caller's org. The Lubwamas admin created a conversation with the 58:12 admin's id, sent chat_message over WS, and the text was pushed live to the 58:12 admin's socket (send_to_users has no org filter).", "priority": "HIGH"},
+      {"endpoint": "POST /api/access/guest-requests (access.py:281)", "issue": "ws_manager.broadcast(...) is called WITHOUT organization_id, so it goes to every tenant. A Lubwamas guest request pushed 'Guest visit request: <name> At Lubwamas on <date>' to the 58:12 admin's socket.", "priority": "HIGH"},
+      {"endpoint": "PUT /api/presence/status|heartbeat|connect|disconnect|pbx-register, GET /api/presence/status/{id}, /presence/bulk", "issue": "user_id comes from the query string, not current_user, and user_presence is process-global. The Lubwamas admin set the 58:12 admin to DND (200), and reading the foreign status returned 200. Same pattern in reactions (?user_id) and calling (?user_id=): a caller can impersonate another user, or read another user's voicemail/history/missed calls inside the org.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "PUT /api/admin/users/{id} (id not in caller's org, e.g. the platform owner)", "issue": "Returns 500 ResponseValidationError because the handler returns None. It should be 404. DELETE correctly returns 404."},
+      {"endpoint": "WS /api/ws/{user_id}", "issue": "Still no token auth (pre-existing): anyone who knows a user id can connect as that user and receive their chat, call and presence pushes. User ids are exposed in many payloads."},
+      {"endpoint": "GET /api/webcal/{user_id}.ics", "issue": "Anonymous and keyed on a non-secret user id. It exposes that user's campus events (default org, or ?org=<slug>)."},
+      {"endpoint": "Token-authenticated public routes (checkpoint, school/sponsor portal, public shipments, kiosk, quotes)", "issue": "No user means the middleware pins the default org, so on the shared or preview host these sessions and tokens only resolve for 58:12 data. A Lubwamas checkpoint or portal works only on new.lubwamas.org or with ?org=lubwamas. This is functional only and does not leak."},
+      {"endpoint": "POST /api/auth/logout (super admin)", "issue": "Clearing active_organization_id is account-wide, so the owner's other open tabs/devices lose their org context at once. This may be acceptable."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Comms > Schedule Conference dialog", "issues": ["Date & Time uses the browser's native datetime-local picker (mm/dd/yyyy --:--) instead of the shadcn Calendar/Popover"]},
+      {"screen": "Lubwamas tenant layout", "issues": ["The sidebar logo still shows 58:12 Global branding inside the Lubwamas org. Check whether branding should be per-organisation."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter394_hardening_retest.py",
+    "/app/backend/tests/scan_unauth_routes_iter394.py",
+    "/app/test_reports/pytest/pytest_iter394.xml"
+  ],
+  "action_items": [
+    "CRITICAL: rotate SECRET_KEY in backend/.env to a long random value (this invalidates current tokens), and remove the hard-coded '5812global_secret_key_change_in_production' fallbacks in routers/auth.py (logout, sessions and others — use deps.SECRET_KEY). Consider requiring jti plus a live session row in get_current_user/require_super_admin.",
+    "CRITICAL: centralise the role guard (e.g. deps.assert_assignable_role(role, current_user)) and call it in admin.import_users (per row), guests.move_guest_to_staff, and any other writer of users.role. Block super_admin case-insensitively and apply ADMIN_TIER.",
+    "HIGH: websocket.py — before send_to_user/send_to_users for call_offer/answer/ice/reject/hangup/hold/mute/transfer/conference_add/screen_share, typing, reactions, chat_message and read_receipt, drop targets where manager._same_org(user_id, target) is False.",
+    "HIGH: chat.create_conversation (and add-participant routes) — reject participant ids not found via the org-scoped db.users.",
+    "HIGH: access.py:281 — pass organization_id=get_current_org() (or the caller's org) to ws_manager.broadcast. Better: make organization_id mandatory in ConnectionManager.broadcast.",
+    "HIGH: presence.py / reactions.py / calling.py — take user_id from current_user (ignore or validate the query param). Filter GET /presence/status/{id} and /presence/bulk to ids in the caller's org.",
+    "MINOR: admin_update_user — raise 404 when the target is not found instead of returning None (500).",
+    "MINOR: add token auth to the /api/ws/{user_id} handshake (?token=) and check that sub == user_id."
+  ],
+  "critical_code_review_comments": [
+    "deps.py raises if SECRET_KEY is missing, but the value shipped in .env is the placeholder, and auth.py re-hard-codes it 3 times — a DRY and security violation.",
+    "The super_admin guard was added at 3 call sites rather than at the data layer. Users are inserted in 8 places (auth.py x3, seed, guests, admin x2, organizations), so any new path will bypass it again.",
+    "ConnectionManager.broadcast defaults organization_id=None, meaning broadcast to ALL tenants. That is an unsafe default; make it required.",
+    "user_orgs is keyed by user_id, so a super admin switching orgs keeps the org captured at connect time until reconnect.",
+    "Many calling/presence/reactions/conference endpoints accept identity via ?user_id= despite the router-level get_current_user. The auth dependency is now enforced, but identity is still client-asserted.",
+    "Route audit (scan_unauth_routes_iter394.py): 105 routes have no auth dependency. All looked intentionally public or token/session-gated (checkpoint X-Checkpoint-Session, portals, public shipments/quotes/boards, payment webhooks, kiosk). The calling, conferences, presence and reactions routers are no longer listed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter394_hardening_retest.py (new)",
+    "/app/backend/tests/scan_unauth_routes_iter394.py (new)",
+    "/app/frontend/src/components/Layout.jsx (added data-testid user-menu-trigger and sign-out-menu-item only)"
+  ],
+  "success_rate": {"backend": "68% (19/28 new retest; iter392 10/10; iter393 hardening 11/11 run separately)", "frontend": "100% of tested flows (comms/voip as 58:12, comms as Lubwamas, /organizations guard x2, owner picker after logout)"},
+  "verified_fixed": [
+    "create/PUT/bulk super_admin (incl. Super_Admin, SUPER_ADMIN) -> 403; owner PUT/DELETE by org admins -> 404, owner intact",
+    "POST /api/auth/google -> 404; google-session with forged session_id -> 4xx; alg:none and wrong-key tokens -> 401",
+    "seed x4: anon 401 (incl ?org=lubwamas and Host new.lubwamas.org), org admins 403; no admin@5812global.org injected",
+    "anon calling/conferences/presence/reactions -> 401; 58:12 admin 200 on all of them; conference create/get/delete OK; Lubwamas GET on a 58:12 conference -> 404; Lubwamas calling contacts empty",
+    "WS online_users/user_online/presence_update isolated (passes 3/3 alone)",
+    "presence online-users no longer evicts the other tenant",
+    "same email in two orgs: A->58:12, B->Lubwamas, wrong password -> 401",
+    "foreign location PUT/DELETE -> 404, record survives",
+    "exactly one is_default org; import strips is_default (code review)",
+    "owner logout -> picker on next login (API and UI)",
+    "/organizations as either org admin -> /dashboard with no Import/New buttons; owner sees both",
+    "58:12 regression: members, locations, events, products, tasks, reports/summary, hr/payslips all 200"
+  ],
+  "flaky_tests": ["TestWebsocket::test_presence_events_stay_in_org — WS opening-handshake timeout through the ingress when run inside the full suite (failed in 2 of 2 full-suite runs, passed 3/3 in isolation). Not an isolation failure."],
+  "test_credentials": "owner@5812global.org / Owner@5812!, admin@5812uganda.org / Admin@5812, admin@lubwamas.org / Lubwama@2026 (all present in /app/memory/test_credentials.md)",
+  "seed_data_creation": "None kept. All TEST_ users, members, guests, conversations, conferences and guest requests were deleted. I also cleaned 6 leftover t392* orgs created by a rate-limited iter392 run (suspended, then deleted with the slug). Orgs are now 5812global (default) and lubwamas only. The owner is left inside 58:12 Global.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run test_iter394_hardening_retest.py alone (the in-memory 20/min auth bucket is per IP; the suite clears login_attempts and retries after 35s on 429). Do not run iter392 and iter393 in one pytest invocation, or they hit 429s and leave t392* orgs behind. /financial/summary is intentionally unmounted; the dashboard uses /reports/summary. Calling and conference routes need ?user_id=. The forged-JWT test uses the known placeholder secret: once SECRET_KEY is rotated it should pass. Re-verify import and move-to-staff role guards, WS call/chat/guest-request org filtering, and presence user_id binding.",
+  "rca of the issue": "Privilege escalation remains because the super_admin check lives in individual handlers instead of the user-write path: import_users and move_guest_to_staff copy the role from the request body. Forged tokens work because the HS256 key is a publicly known placeholder (in .env and in source). The WS leaks happen because only presence and online events were org-filtered: send_to_user/send_to_users and broadcast(organization_id=None) remain unscoped, and conversation participant lists are not validated per tenant. The presence write happens because the endpoints trust ?user_id over the authenticated identity."
+}

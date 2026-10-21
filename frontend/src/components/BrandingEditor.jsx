@@ -6,9 +6,9 @@
  * deployments. Changes apply immediately on save via BrandingContext.refresh().
  */
 import React, { useEffect, useState } from 'react';
-import { Paintbrush, GripVertical, EyeOff, RotateCcw, ChevronUp, ChevronDown } from 'lucide-react';
+import { Paintbrush, GripVertical, EyeOff, RotateCcw, ChevronUp, ChevronDown, Upload } from 'lucide-react';
 import api from '../services/api';
-import { useBranding } from '../context/BrandingContext';
+import { useBranding, TERM_VOCABULARY } from '../context/BrandingContext';
 import { Card, CardContent } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -68,6 +68,12 @@ export default function BrandingEditor() {
   const [tagline, setTagline] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
   const [primaryColor, setPrimaryColor] = useState('');
+  const [accentColor, setAccentColor] = useState('');
+  const [loginHeadline, setLoginHeadline] = useState('');
+  const [loginSubtitle, setLoginSubtitle] = useState('');
+  const [loginBackground, setLoginBackground] = useState('');
+  const [terms, setTerms] = useState({});
+  const [uploading, setUploading] = useState(false);
   const [navOverrides, setNavOverrides] = useState({});
   const [sectionOverrides, setSectionOverrides] = useState({});
   const [saving, setSaving] = useState(false);
@@ -78,6 +84,11 @@ export default function BrandingEditor() {
     setTagline(branding.tagline || '');
     setLogoUrl(branding.logo_url || '');
     setPrimaryColor(branding.primary_color || '');
+    setAccentColor(branding.accent_color || '');
+    setLoginHeadline(branding.login_headline || '');
+    setLoginSubtitle(branding.login_subtitle || '');
+    setLoginBackground(branding.login_background || '');
+    setTerms({ ...(branding.terms || {}) });
     setNavOverrides({ ...(branding.nav_overrides || {}) });
     setSectionOverrides({ ...(branding.section_overrides || {}) });
   }, [open, branding]);
@@ -107,6 +118,22 @@ export default function BrandingEditor() {
     });
   };
 
+  const uploadLogo = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const r = await api.post('/admin/system-settings/branding/logo', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      setLogoUrl(r.data?.url || '');
+      toast.success('Logo uploaded — save to apply');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Upload failed');
+    } finally { setUploading(false); }
+  };
+
   const save = async () => {
     setSaving(true);
     try {
@@ -116,6 +143,11 @@ export default function BrandingEditor() {
           tagline: tagline.trim(),
           logo_url: logoUrl.trim(),
           primary_color: primaryColor.trim(),
+          accent_color: accentColor.trim(),
+          login_headline: loginHeadline.trim(),
+          login_subtitle: loginSubtitle.trim(),
+          login_background: loginBackground.trim(),
+          terms: Object.fromEntries(Object.entries(terms).filter(([, v]) => (v || '').trim())),
           nav_overrides: navOverrides,
           section_overrides: sectionOverrides,
         },
@@ -134,6 +166,11 @@ export default function BrandingEditor() {
     setTagline('');
     setLogoUrl('');
     setPrimaryColor('');
+    setAccentColor('');
+    setLoginHeadline('');
+    setLoginSubtitle('');
+    setLoginBackground('');
+    setTerms({});
     setNavOverrides({});
     setSectionOverrides({});
   };
@@ -178,15 +215,98 @@ export default function BrandingEditor() {
               </div>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Logo URL (optional)</Label>
-              <Input value={logoUrl} onChange={e => setLogoUrl(e.target.value)} placeholder="https://cdn.example.com/logo.png" />
+              <Label className="text-xs">Logo</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                {logoUrl && <img src={logoUrl} alt="Logo" className="h-9 w-auto object-contain rounded border bg-white p-1" data-testid="branding-logo-preview" />}
+                <label className="inline-flex">
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    data-testid="branding-logo-input"
+                    onChange={e => uploadLogo(e.target.files?.[0])}
+                  />
+                  <Button size="sm" variant="outline" asChild disabled={uploading}>
+                    <span className="cursor-pointer"><Upload size={12} className="mr-1" /> {uploading ? 'Uploading…' : 'Upload image'}</span>
+                  </Button>
+                </label>
+                {logoUrl && (
+                  <Button size="sm" variant="ghost" onClick={() => setLogoUrl('')} data-testid="branding-logo-clear">Remove</Button>
+                )}
+              </div>
+              <Input value={logoUrl} onChange={e => setLogoUrl(e.target.value)} placeholder="…or paste an image link" data-testid="branding-logo-url" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Primary brand color (hex)</Label>
+                <div className="flex gap-2">
+                  <Input value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} placeholder="#10b981" data-testid="branding-primary-color" />
+                  <input
+                    type="color" aria-label="Pick primary colour"
+                    value={/^#[0-9a-f]{6}$/i.test(primaryColor) ? primaryColor : '#10b981'}
+                    onChange={e => setPrimaryColor(e.target.value)}
+                    className="h-9 w-9 rounded border cursor-pointer bg-transparent p-0.5"
+                    data-testid="branding-primary-color-picker"
+                  />
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Accent color (optional)</Label>
+                <div className="flex gap-2">
+                  <Input value={accentColor} onChange={e => setAccentColor(e.target.value)} placeholder="#f59e0b" data-testid="branding-accent-color" />
+                  <input
+                    type="color" aria-label="Pick accent colour"
+                    value={/^#[0-9a-f]{6}$/i.test(accentColor) ? accentColor : '#f59e0b'}
+                    onChange={e => setAccentColor(e.target.value)}
+                    className="h-9 w-9 rounded border cursor-pointer bg-transparent p-0.5"
+                    data-testid="branding-accent-color-picker"
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Sign-in screen */}
+          <section className="space-y-3 mt-3 p-3 rounded-lg border" data-testid="branding-login-section">
+            <h3 className="text-sm font-semibold">Sign-in screen</h3>
+            <p className="text-xs text-muted-foreground">
+              What people see at this organisation&rsquo;s own web address before they log in.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Headline</Label>
+                <Input value={loginHeadline} onChange={e => setLoginHeadline(e.target.value)} placeholder="Welcome to Lubwamas" data-testid="branding-login-headline" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Supporting line</Label>
+                <Input value={loginSubtitle} onChange={e => setLoginSubtitle(e.target.value)} placeholder="Sign in to continue" data-testid="branding-login-subtitle" />
+              </div>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Primary brand color (hex)</Label>
-              <div className="flex gap-2">
-                <Input value={primaryColor} onChange={e => setPrimaryColor(e.target.value)} placeholder="#10b981" data-testid="branding-primary-color" />
-                {primaryColor && <div className="h-9 w-9 rounded border" style={{ background: primaryColor }} />}
-              </div>
+              <Label className="text-xs">Background (image link or colour)</Label>
+              <Input value={loginBackground} onChange={e => setLoginBackground(e.target.value)} placeholder="#0f172a or https://…/photo.jpg" data-testid="branding-login-background" />
+            </div>
+          </section>
+
+          {/* Wording */}
+          <section className="space-y-3 mt-3 p-3 rounded-lg border" data-testid="branding-terms-section">
+            <h3 className="text-sm font-semibold">Your words</h3>
+            <p className="text-xs text-muted-foreground">
+              Rename the words this system uses. A change here applies everywhere the word
+              appears &mdash; headings, buttons, messages &mdash; including its plural.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {TERM_VOCABULARY.map(word => (
+                <div key={word} className="flex items-center gap-2">
+                  <span className="text-xs w-24 shrink-0 text-muted-foreground">{word}</span>
+                  <Input
+                    value={terms[word] || ''}
+                    placeholder={word}
+                    onChange={e => setTerms(prev => ({ ...prev, [word]: e.target.value }))}
+                    data-testid={`branding-term-${word.toLowerCase()}`}
+                  />
+                </div>
+              ))}
             </div>
           </section>
 

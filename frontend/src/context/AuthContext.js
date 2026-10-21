@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { authApi } from '../services/api';
+import api, { authApi } from '../services/api';
 import { secureStorage } from '../services/secureStorage';
 
 const AuthContext = createContext(null);
@@ -31,12 +31,32 @@ export const AuthProvider = ({ children }) => {
     if (res.data.requires_2fa) {
       return { requires_2fa: true };
     }
+    // A super admin signs in without being inside any organisation yet. The
+    // token only unlocks the organisation picker until one is entered.
+    if (res.data.requires_org_selection) {
+      secureStorage.setToken(res.data.token);
+      return { requires_org_selection: true, organizations: res.data.organizations || [] };
+    }
     const { token, user: userData } = res.data;
     if (!token) throw new Error('Login failed');
     secureStorage.setToken(token);
     secureStorage.setUser(userData);
     setUser(userData);
+    // Branding is per organisation, so re-read it for whoever just signed in.
+    window.dispatchEvent(new Event('branding-refresh'));
     return { success: true, user: userData };
+  };
+
+  // Entering an organisation swaps the session for one scoped to that tenant.
+  // Never additive: whatever was open before is left behind.
+  const enterOrganization = async (orgId) => {
+    const res = await api.post(`/organizations/${orgId}/enter`);
+    secureStorage.setToken(res.data.token);
+    const me = await authApi.me();
+    secureStorage.setUser(me.data);
+    setUser(me.data);
+    window.dispatchEvent(new Event('branding-refresh'));
+    return me.data;
   };
 
   const logout = async () => {
@@ -46,10 +66,11 @@ export const AuthProvider = ({ children }) => {
     // identity context has changed and they should refetch / clear.
     try { window.dispatchEvent(new Event('auth-changed')); } catch (_) {/* SSR safety */}
     setUser(null);
+    window.dispatchEvent(new Event('branding-refresh'));
   };
 
   return (
-    <AuthContext.Provider value={{ user, setUser, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, setUser, loading, login, logout, enterOrganization }}>
       {children}
     </AuthContext.Provider>
   );

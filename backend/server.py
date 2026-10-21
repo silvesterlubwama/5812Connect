@@ -35,16 +35,13 @@ from jose import JWTError, jwt
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
+# MongoDB connection — reuse the organisation-scoped handle from deps so the
+# endpoints defined directly in this file are gated by the same wall as every
+# router, rather than holding a second, unscoped connection.
+from deps import db, raw_db, client  # noqa: E402
+from org_context import set_current_org, org_bypass, reset_current_org  # noqa: E402
 mongo_url = os.environ["MONGO_URL"]
 db_name = os.environ["DB_NAME"]
-try:
-    client = AsyncIOMotorClient(mongo_url)
-    db = client[db_name]
-except Exception as e:
-    logging.error(f"MongoDB connection error: {e}")
-    client = None
-    db = None
 
 app = FastAPI(title="58:12 Global Connect API")
 api_router = APIRouter(prefix="/api")
@@ -333,6 +330,83 @@ class SecurityHeadersASGI:
 app.add_middleware(SecurityHeadersASGI)
 
 
+# ============================================================
+# ORGANISATION CONTEXT MIDDLEWARE
+# Pins exactly one organisation per request before any route runs.
+#
+# Authenticated traffic is pinned authoritatively in get_current_user from the
+# user record. This middleware covers the rest: public pages (the shop, booking
+# links, shared calendars) which have no user to resolve. Those are pinned from
+# the request hostname, an explicit ?org=<slug>, or the default organisation.
+# ============================================================
+class OrgContextASGI:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        token = None
+        try:
+            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+            host = (headers.get("host") or "").split(":")[0].strip().lower()
+            org_id = None
+            if host:
+                with org_bypass():
+                    org = await raw_db.organizations.find_one(
+                        {"hostnames": host}, {"_id": 0, "id": 1, "status": 1}
+                    )
+                if org:
+                    if org.get("status") == "suspended":
+                        await JSONResponse(
+                            status_code=403,
+                            content={"detail": "This organisation is suspended."},
+                        )(scope, receive, send)
+                        return
+                    org_id = org["id"]
+            if not org_id:
+                # An explicit ?org=<slug> lets a tenant share public links
+                # before its own hostname is wired up.
+                qs = scope.get("query_string") or b""
+                slug = ""
+                if b"org=" in qs:
+                    from urllib.parse import parse_qs
+                    slug = (parse_qs(qs.decode()).get("org") or [""])[0].strip().lower()
+                if slug:
+                    with org_bypass():
+                        org = await raw_db.organizations.find_one(
+                            {"slug": slug, "status": "active"}, {"_id": 0, "id": 1}
+                        )
+                    if org:
+                        org_id = org["id"]
+            if not org_id:
+                # Last resort for public pages on an unclaimed hostname (the
+                # preview URL, localhost): the default organisation. This only
+                # decides WHOSE published content shows — the request is still
+                # pinned to exactly one tenant, so nothing crosses over.
+                with org_bypass():
+                    fallback = await raw_db.organizations.find_one(
+                        {"status": "active", "is_default": True}, {"_id": 0, "id": 1}
+                    ) or await raw_db.organizations.find_one(
+                        {"status": "active"}, {"_id": 0, "id": 1}, sort=[("created_at", 1)]
+                    )
+                if fallback:
+                    org_id = fallback["id"]
+            if org_id:
+                token = set_current_org(org_id)
+        except Exception as e:
+            logging.warning(f"Org context resolution failed: {e}")
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            if token is not None:
+                reset_current_org(token)
+
+
+app.add_middleware(OrgContextASGI)
+
+
 # Security Contractor role is meant to be **kiosk-only** — the frontend router
 # already blocks them from every non-checkpoint page. This middleware enforces
 # the same restriction at the API layer so a stolen contractor token cannot be
@@ -437,6 +511,7 @@ try:
     from routers.admin import router as admin_router
     from routers.programmes import router as programmes_router
     from routers.misc import router as misc_router
+    from routers.organizations import router as organizations_router
     from routers.webauthn import router as webauthn_router
     from routers.boards import router as boards_router
     from routers.email import router as email_router
@@ -474,6 +549,7 @@ try:
     app.include_router(admin_router)
     app.include_router(programmes_router)
     app.include_router(misc_router)
+    app.include_router(organizations_router)
     app.include_router(webauthn_router)
     app.include_router(boards_router)
     app.include_router(email_router)
@@ -654,7 +730,9 @@ async def _refresh_cors_origins_loop():
     from routers.system_settings import get_cors_origins
     while True:
         try:
-            _dynamic_cors_origins = set(await get_cors_origins())
+            # Platform-level config, not tenant data — read outside org scope.
+            with org_bypass():
+                _dynamic_cors_origins = set(await get_cors_origins())
         except Exception as e:
             logger.warning(f"CORS allowlist refresh failed (keeping previous): {e}")
         await asyncio.sleep(60)
@@ -683,7 +761,8 @@ async def startup():
     # ===== Sentry init (iter152) — reads system_settings, falls back to env =====
     try:
         from routers.system_settings import get_sentry_config
-        s = await get_sentry_config()
+        with org_bypass():
+            s = await get_sentry_config()
         if s.get("dsn") and s.get("enabled", True) is not False:
             try:
                 import sentry_sdk

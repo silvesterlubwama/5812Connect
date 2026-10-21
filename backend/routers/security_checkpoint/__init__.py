@@ -6,7 +6,8 @@ Package layout (iter 146 refactor):
   - `__init__.py` (this)    endpoint definitions + router/ocr_router exports
 """
 from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
-from deps import db, get_current_user, require_admin, require_director, _audit, logger, has_module_access
+from deps import db, raw_db, get_current_user, require_admin, require_director, _audit, logger, has_module_access
+from org_context import org_bypass, set_current_org
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 import uuid
@@ -596,7 +597,14 @@ async def checkpoint_ws(websocket: WebSocket, session: Optional[str] = None):
     if not session:
         await websocket.close(code=4401)
         return
-    sess_doc = await db.security_checkpoint_sessions.find_one({"token_hash": _hash(session)}, {"_id": 0})
+    # The paired session token is the only identity a kiosk socket has, so it
+    # also decides which organisation this connection belongs to.
+    with org_bypass():
+        sess_doc = await raw_db.security_checkpoint_sessions.find_one(
+            {"token_hash": _hash(session)}, {"_id": 0}
+        )
+    if sess_doc and sess_doc.get("organization_id"):
+        set_current_org(sess_doc["organization_id"])
     if not sess_doc or sess_doc.get("revoked") or sess_doc.get("expires_at", "") <= datetime.now(timezone.utc).isoformat():
         await websocket.close(code=4401)
         return

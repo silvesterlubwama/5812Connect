@@ -108,6 +108,16 @@ async def create_user(data: dict, current_user: dict = Depends(require_admin)) -
     new_role = data.get("role", "Staff")
     if new_role in ADMIN_TIER and not is_system_admin(current_user):
         raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{new_role}' role")
+    # iter393 — super_admin is a PLATFORM role that sits above every
+    # organisation, so no organisation's own admin may hand it out. Minting one
+    # here would let a tenant admin walk into every other tenant. It can only be
+    # created server-side via scripts/create_super_admin.py.
+    if (new_role or "").lower() == "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="The platform owner role cannot be assigned from inside an organisation",
+        )
+
     name = (data.get("name") or "").strip()
     email = (data.get("email") or "").strip().lower()
     if not name:
@@ -344,6 +354,20 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
     ADMIN_TIER = {"admin", "system_admin", "Executive Director"}
     if data.get("role") in ADMIN_TIER and not is_system_admin(current_user):
         raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{data['role']}' role")
+    # iter393 — see create_user: the platform owner role is never grantable from
+    # inside an organisation, in either direction.
+    if (data.get("role") or "").lower() == "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="The platform owner role cannot be assigned from inside an organisation",
+        )
+    target = await db.users.find_one({"id": user_id}, {"_id": 0, "role": 1})
+    if not target:
+        # Includes ids belonging to another organisation, which the scoped db
+        # cannot see. Previously fell through and returned None -> 500.
+        raise HTTPException(status_code=404, detail="User not found")
+    if (target.get("role") or "").lower() == "super_admin":
+        raise HTTPException(status_code=403, detail="The platform owner account cannot be edited here")
     ACCOUNT_FIELDS = {"name", "email", "phone", "national_id", "role", "status",
                       "address", "emergency_contact", "department", "departments",
                       # iter-departments: multi-department tagging (parallels
@@ -546,6 +570,10 @@ async def admin_delete_user(user_id: str, current_user: dict = Depends(require_a
     user = await db.users.find_one({"id": user_id}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    # The platform owner sits above every organisation; an organisation's own
+    # admin must never be able to remove them.
+    if (user.get("role") or "").lower() == "super_admin":
+        raise HTTPException(status_code=403, detail="The platform owner account cannot be deleted here")
     # Soft-delete: move to deleted_items
     user.pop("password_hash", None)
     user["_deleted_from"] = "users"
@@ -575,6 +603,12 @@ async def bulk_update_users(data: dict, current_user: dict = Depends(require_adm
     ADMIN_TIER = {"admin", "system_admin", "Executive Director"}
     if updates.get("role") in ADMIN_TIER and not is_system_admin(current_user):
         raise HTTPException(status_code=403, detail=f"Only system admins can assign the '{updates['role']}' role")
+    # iter393 — the platform owner role is never grantable from inside an organisation.
+    if (updates.get("role") or "").lower() == "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="The platform owner role cannot be assigned from inside an organisation",
+        )
     allowed = {"role", "status", "department", "notes", "secondary_roles", "is_parent", "is_customer", "is_donor"}
     clean_updates = {k: v for k, v in updates.items() if k in allowed and v is not None}
     if not clean_updates:
@@ -593,7 +627,9 @@ async def bulk_delete_users(data: dict, current_user: dict = Depends(require_adm
         raise HTTPException(status_code=400, detail="No user_ids provided")
     if current_user["id"] in user_ids:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
-    result = await db.users.delete_many({"id": {"$in": user_ids}})
+    result = await db.users.delete_many(
+        {"id": {"$in": user_ids}, "role": {"$ne": "super_admin"}}
+    )
     await _audit(current_user["id"], "bulk_delete", "users", None, {"count": result.deleted_count})
     return {"deleted": result.deleted_count}
 

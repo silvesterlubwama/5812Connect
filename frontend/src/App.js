@@ -49,6 +49,7 @@ import TicketScannerPage from './pages/TicketScannerPage';
 import AccessPage from './pages/AccessPage';
 import ReportsPage from './pages/ReportsPage';
 import AdminPage from './pages/AdminPage';
+const OrganizationsPage = lazy(() => import('./pages/OrganizationsPage'));
 import AppSettingsPage from './pages/AppSettingsPage';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage';
 import AuthCallback from './pages/AuthCallback';
@@ -92,7 +93,7 @@ import LessonPlanningPage from './pages/LessonPlanningPage';
 import SalesPortalPage from './pages/SalesPortalPage';
 import SecurityCheckpointPage from './pages/SecurityCheckpointPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { StaffRoute, PortalRoute, StaffOnlyPortalRoute } from './components/RouteGuards';
+import { StaffRoute, PortalRoute, StaffOnlyPortalRoute, SuperAdminRoute } from './components/RouteGuards';
 import usePwaOfflinePrefetch from './hooks/usePwaOfflinePrefetch';
 
 const KIOSK_ONLY_ROLES = new Set(['Security Contractor', 'security_contractor']);
@@ -191,6 +192,7 @@ function AppRoutes() {
         <Route path="location-analytics" element={<LocationAnalyticsPage />} />
         <Route path="comms" element={<CommsPage />} />
         <Route path="voip" element={<VoipAdminPage />} />
+        <Route path="organizations" element={<SuperAdminRoute><OrganizationsPage /></SuperAdminRoute>} />
         <Route path="outreach" element={<OutreachPage />} />
         <Route path="lesson-planning" element={<LessonPlanningPage />} />
         <Route path="resources" element={<ResourcesPage />} />

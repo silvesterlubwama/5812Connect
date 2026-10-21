@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { Outlet, NavLink, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useBranding } from '../context/BrandingContext';
 import useIdleTimeout from '../utils/kioskMode';
@@ -30,7 +30,9 @@ import Dialer from './Dialer';
 import IncomingCallModal from './IncomingCallModal';
 
 // Role helpers
-const ADMIN_ROLES = ['admin', 'system_admin'];
+const ADMIN_ROLES = ['admin', 'system_admin', 'super_admin'];
+// The platform owner — the only role that can move between organisations.
+const SUPER_ADMIN_ROLES = ['super_admin'];
 const ED_PLUS = ['admin', 'system_admin', 'Executive Director'];
 const DIRECTOR_PLUS = [...ED_PLUS, 'Adviser', 'Director'];
 const MANAGER_PLUS = [...DIRECTOR_PLUS, 'Manager'];
@@ -116,6 +118,7 @@ const NAV_SECTIONS = [
     collapsible: true,
     roles: ADMIN_ROLES,
     items: [
+      { to: '/organizations', icon: Building2, label: 'Organisations', roles: SUPER_ADMIN_ROLES },
       { to: '/admin', icon: Settings, label: 'System Console' },
       { to: '/locations', icon: MapPin, label: 'Campuses' },
       { to: '/financial-apis', icon: CreditCard, label: 'Financial APIs', roles: ADMIN_ROLES },
@@ -187,7 +190,7 @@ export default function Layout() {
     if (!user) return 0;
     const role = user.role || '';
     if (['Security Contractor', 'Guest', 'guest'].includes(role)) return 0; // no idle logout on kiosks
-    if (['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(role)) {
+    if (['super_admin', 'admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'].includes(role)) {
       return 15 * 60 * 1000;   // 15 min for privileged
     }
     return 30 * 60 * 1000;     // 30 min for everyone else
@@ -225,7 +228,7 @@ export default function Layout() {
 
   const initials = user?.name ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : 'AU';
   const isAdmin = ADMIN_ROLES.includes(user?.role);
-  const isGlobalAdmin = ['admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
+  const isGlobalAdmin = ['super_admin', 'admin', 'system_admin', 'Executive Director', 'Adviser'].includes(user?.role);
   // iter 260 — Multi-campus detection now unions `location_ids` with the
   // primary `location_id` so users with a mismatch (older accounts where
   // the primary campus wasn't pushed into `location_ids`) still see the
@@ -379,7 +382,7 @@ export default function Layout() {
   // Finance feature gate (mirrors backend `has_finance_access`):
   //   • implicit for Director+/Admin/EDs (Manager and below now require explicit grant)
   //   • explicit per-user via `{module}_access: true` (with optional `{module}_access_expires_at`)
-  const PRIVILEGED_ROLES = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'];
+  const PRIVILEGED_ROLES = ['super_admin', 'admin', 'system_admin', 'Executive Director', 'Adviser', 'Director'];
 
   const _grantActive = (mod) => {
     if (!user?.[`${mod}_access`]) return false;
@@ -408,6 +411,9 @@ export default function Layout() {
 
   // Check if user can see a nav item
   const canAccess = (item) => {
+    // The platform-owner-only rows are not an "admin can see everything" case —
+    // an organisation admin must never be offered the organisation registry.
+    if (item.roles === SUPER_ADMIN_ROLES) return item.roles.includes(userRole);
     if (item.roles && !item.roles.includes(userRole) && !isAdmin) return false;
     if (item.adminOnly && !isAdmin) return false;
     // Per-module gate (new): each nav entry can declare a `module` key — Director+ implicit,
@@ -445,6 +451,7 @@ export default function Layout() {
     // Non-sidebar routes that still need a role gate
     Object.assign(out, {
       '/admin': { roles: ADMIN_ROLES, module: null },
+      '/organizations': { roles: SUPER_ADMIN_ROLES, module: null },
       '/audit': { roles: ADMIN_ROLES, module: null },
       '/locations': { roles: ADMIN_ROLES, module: null },
       '/financial-apis': { roles: ADMIN_ROLES, module: null },
@@ -524,6 +531,20 @@ export default function Layout() {
           />
           <button className="lg:hidden ml-auto text-muted-foreground" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
+
+        {/* Which organisation you are inside. Shown to the platform owner only —
+            everyone else has exactly one and never needs reminding. */}
+        {user?.role === 'super_admin' && user?.organization_name && (
+          <Link
+            to="/organizations"
+            className="flex items-center gap-2 px-3 py-2 border-b border-border bg-primary/5 hover:bg-primary/10 transition-colors"
+            data-testid="active-org-banner"
+          >
+            <Building2 size={13} className="text-primary shrink-0" />
+            <span className="text-xs font-medium truncate">{user.organization_name}</span>
+            <span className="text-[10px] text-muted-foreground ml-auto shrink-0">Switch</span>
+          </Link>
+        )}
 
         {/* Campus Switcher */}
         {canSwitchCampus && campuses.length > 0 && (
@@ -711,7 +732,7 @@ export default function Layout() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" className="flex items-center gap-2 px-2 h-9">
+              <Button variant="ghost" className="flex items-center gap-2 px-2 h-9" data-testid="user-menu-trigger">
                 <Avatar className="h-7 w-7"><AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">{initials}</AvatarFallback></Avatar>
                 <span className="text-sm font-medium hidden sm:block">{user?.name}</span>
                 <ChevronDown size={13} className="text-muted-foreground" />
@@ -724,7 +745,7 @@ export default function Layout() {
               <DropdownMenuItem asChild><NavLink to="/portal" className="flex items-center gap-2 cursor-pointer" data-testid="profile-menu-my-portal"><UserCheck size={14} /> My Member Portal</NavLink></DropdownMenuItem>
               <DropdownMenuItem asChild><a href="/kiosk" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 cursor-pointer"><ExternalLink size={14} /> Open Kiosk</a></DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive cursor-pointer"><LogOut size={14} className="mr-2" /> Sign Out</DropdownMenuItem>
+              <DropdownMenuItem onClick={handleLogout} data-testid="sign-out-menu-item" className="text-destructive focus:text-destructive cursor-pointer"><LogOut size={14} className="mr-2" /> Sign Out</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </header>

@@ -2316,3 +2316,70 @@ See `/app/memory/test_credentials.md`.
     counted per store, shared price with per-store override. (Done. Variants excluded.)
     Product editor lives at Finance → **Marketplace** (`/sales`) → Products tab; the user
     chose to keep that menu label.
+
+
+## 2026-10-21 — Multi-organisation tenancy (iter392–393) — DELIVERED
+
+### What the user asked for
+1. Adding a second/third organisation separates all of its data and administration
+   while sharing one backend, reachable on its own hostname (`personal.5812uganda.org`,
+   `new.lubwamas.org`) or an explicit picker.
+2. Nothing is ever shared between organisations except a platform super admin
+   (the owner / shared IT person).
+3. No combined cross-organisation view — one organisation at a time, no stale ones.
+
+### How it works
+- `organizations` collection; every document carries `organization_id`.
+- `OrgScopedDatabase` (`backend/org_scoped_db.py`) intercepts every Mongo call and
+  injects the active organisation. A query with no organisation pinned raises
+  `OrgScopeError` — deliberate cross-tenant work must say so via `org_bypass()`.
+  This was chosen over editing ~3,123 query sites across 82 routers.
+- Context lives in `backend/org_context.py` (`org_as()`, `org_bypass()`); cron and
+  scheduler loops run once per organisation (`run_for_every_org`).
+- Super admins get `requires_org_selection` at login and hold no data access until
+  they enter exactly one organisation; logout clears it.
+- Emails are unique per organisation (compound index), not globally.
+- Organisation #1 is **58:12 Global**, holding all pre-existing data (migration
+  stamped 6,240 documents across 75 collections, zero left unstamped).
+- Super-admin console at `/organizations`: create, rename, hostnames, enter/exit,
+  suspend, hard delete, JSON export/import. Server-side equivalents:
+  `scripts/create_super_admin.py`, `scripts/migrate_organizations.py`.
+- The platform-owner role cannot be granted through any API route; only the server
+  script can create one.
+
+### Still outstanding (not tenancy)
+- `5812uganda.org` / `www.5812uganda.org` still serve stale static content: both
+  hostnames must be pointed at `caddy:80` as Cloudflare Tunnel public hostnames and
+  any Pages/static custom-domain assignment removed. Untested since.
+
+
+## 2026-10-21 — Phase 2, branding and owner activity log (iter394-395) — DELIVERED
+
+User's asks, in their order: finish the leftover security items, organisation setup
+tools, give each organisation its own web address; then per-organisation branding
+(logo, colours, sign-in screen, tab and navigation names, wording inside pages);
+then the owner activity log; then the socket login check.
+
+### Delivered
+- **Socket login check** — chat/call/notification sockets require a valid login token
+  that must match both the user id in the URL and their organisation.
+- **Calendar links** — public `.ics`/webcal tokens name the organisation they belong
+  to and the feed is served pinned to it.
+- **Own web address** — hostnames editable per organisation; visiting one shows that
+  organisation's branding and signs in against it; a signed-in user sees their own
+  organisation's branding even on the shared address.
+- **Setup tools** — searchable per-organisation people list and a "move someone"
+  tool (account moves, records stay, sessions revoked, email clash refused).
+- **Branding** — logo upload (object storage, per organisation), primary + accent
+  colour, sign-in headline/subtitle/background, app name (browser tab), sidebar
+  section/item renaming (pre-existing) and a wording dictionary applied to rendered
+  text with plural and capitalisation handling.
+- **Owner activity log** — platform actions + every tenant's admin audit trail,
+  merged newest-first, tagged per organisation, filterable and paged.
+
+### Not done / accepted
+- Wording overrides also rewrite stored values that contain the word on screen
+  (opt out with `data-no-term`).
+- `5812uganda.org` / `www.5812uganda.org` still serve stale static content — both
+  hostnames must be pointed at `caddy:80` as Cloudflare Tunnel public hostnames and
+  any Pages/static custom-domain assignment removed. Untested since.

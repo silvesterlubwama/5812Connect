@@ -12,7 +12,15 @@ import json
 import asyncio
 import httpx
 
-router = APIRouter(prefix="/api/calling", tags=["calling"])
+from deps import get_current_user
+
+router = APIRouter(prefix="/api/calling", tags=["calling"],
+    # iter393 — every route here reads or writes tenant data (staff extensions,
+    # contacts, conference rooms, presence). They previously required no auth at
+    # all, so an anonymous caller inherited the default organisation and could
+    # read another tenant's directory. Authentication now gates the whole router,
+    # which is also what pins the caller's organisation.
+    dependencies=[Depends(get_current_user)])
 
 # ============== MODELS ==============
 

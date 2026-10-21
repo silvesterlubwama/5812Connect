@@ -493,9 +493,13 @@ async def get_webcal_link(current_user: dict = Depends(get_current_user)):
 @router.get("/events/webcal/{token}")
 async def webcal_feed(token: str):
     """Public webcal feed — no auth required, uses token"""
-    token_doc = await db.webcal_tokens.find_one({"token": token}, {"_id": 0})
+    with org_bypass():
+        token_doc = await raw_db.webcal_tokens.find_one({"token": token}, {"_id": 0})
     if not token_doc:
         raise HTTPException(status_code=404, detail="Invalid calendar link")
+    # The link is unauthenticated, so the token itself names the tenant.
+    if token_doc.get("organization_id"):
+        set_current_org(token_doc["organization_id"])
     user = await db.users.find_one({"id": token_doc["user_id"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -519,18 +523,33 @@ async def webcal_feed(token: str):
 # lookup is required to validate the link — rotate SECRET_KEY to invalidate.
 
 import hmac as _hmac, hashlib as _hashlib
-from deps import SECRET_KEY as _SECRET_KEY
+from deps import SECRET_KEY as _SECRET_KEY, raw_db
+from org_context import get_current_org, org_as, org_bypass, set_current_org
 
 
 def _calendar_token(scope: str, ident: str = "") -> str:
-    """Deterministic 12-char signature so the same scope always yields the
-    same URL. Rotating SECRET_KEY invalidates every existing link."""
-    msg = f"cal:{scope}:{ident}".encode("utf-8")
-    return _hmac.new(_SECRET_KEY.encode(), msg, _hashlib.sha256).hexdigest()[:16]
+    """Deterministic signature so the same scope always yields the same URL.
+    Rotating SECRET_KEY invalidates every existing link.
+
+    iter394 — the organisation is part of both the signature and the token
+    itself. Before, every tenant's "global" feed signed to the same string, so
+    one organisation's public calendar link opened whichever organisation the
+    hostname happened to resolve to."""
+    oid = get_current_org() or ""
+    msg = f"cal:{oid}:{scope}:{ident}".encode("utf-8")
+    sig = _hmac.new(_SECRET_KEY.encode(), msg, _hashlib.sha256).hexdigest()[:16]
+    return f"{oid}.{sig}" if oid else sig
 
 
-def _verify_calendar_token(token: str, scope: str, ident: str = "") -> bool:
-    return _hmac.compare_digest(token, _calendar_token(scope, ident))
+def _verify_calendar_token(token: str, scope: str, ident: str = ""):
+    """Returns the organisation this link belongs to, or None. Public calendar
+    routes have no logged-in user, so the token is what names the tenant."""
+    if not token or "." not in token:
+        return None
+    oid, _, sig = token.partition(".")
+    msg = f"cal:{oid}:{scope}:{ident}".encode("utf-8")
+    expected = _hmac.new(_SECRET_KEY.encode(), msg, _hashlib.sha256).hexdigest()[:16]
+    return oid if _hmac.compare_digest(sig, expected) else None
 
 
 def _ical_escape(s: str) -> str:
@@ -624,9 +643,11 @@ async def _fetch_public_events(location_id: Optional[str] = None) -> list:
 
 @router.get("/public/calendar/global.ics")
 async def public_calendar_global_ical(token: str):
-    if not _verify_calendar_token(token, "global"):
+    oid = _verify_calendar_token(token, "global")
+    if not oid:
         raise HTTPException(status_code=404, detail="Invalid calendar link")
-    events = await _fetch_public_events()
+    with org_as(oid):
+        events = await _fetch_public_events()
     ical = _events_to_ical(events, "58:12 Public Events")
     from fastapi.responses import Response
     return Response(content=ical, media_type="text/calendar",
@@ -635,18 +656,22 @@ async def public_calendar_global_ical(token: str):
 
 @router.get("/public/calendar/global")
 async def public_calendar_global_json(token: str):
-    if not _verify_calendar_token(token, "global"):
+    oid = _verify_calendar_token(token, "global")
+    if not oid:
         raise HTTPException(status_code=404, detail="Invalid calendar link")
-    events = await _fetch_public_events()
+    with org_as(oid):
+        events = await _fetch_public_events()
     return {"scope": "global", "events": events, "count": len(events)}
 
 
 @router.get("/public/calendar/location/{location_id}.ics")
 async def public_calendar_location_ical(location_id: str, token: str):
-    if not _verify_calendar_token(token, "location", location_id):
+    oid = _verify_calendar_token(token, "location", location_id)
+    if not oid:
         raise HTTPException(status_code=404, detail="Invalid calendar link")
-    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1})
-    events = await _fetch_public_events(location_id)
+    with org_as(oid):
+        loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1})
+        events = await _fetch_public_events(location_id)
     ical = _events_to_ical(events, f"58:12 · {loc.get('name') if loc else location_id}")
     from fastapi.responses import Response
     return Response(content=ical, media_type="text/calendar",
@@ -655,11 +680,13 @@ async def public_calendar_location_ical(location_id: str, token: str):
 
 @router.get("/public/calendar/location/{location_id}")
 async def public_calendar_location_json(location_id: str, token: str):
-    if not _verify_calendar_token(token, "location", location_id):
+    oid = _verify_calendar_token(token, "location", location_id)
+    if not oid:
         raise HTTPException(status_code=404, detail="Invalid calendar link")
-    loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "city": 1, "country": 1})
-    events = await _fetch_public_events(location_id)
-    return {"scope": "location", "location": loc or {"id": location_id}, "events": events, "count": len(events)}
+    with org_as(oid):
+        loc = await db.locations.find_one({"id": location_id}, {"_id": 0, "name": 1, "city": 1, "country": 1})
+        events = await _fetch_public_events(location_id)
+        return {"scope": "location", "location": loc or {"id": location_id}, "events": events, "count": len(events)}
 
 
 # ─── PERSONALISED SHARE LINKS ────────────────────────────────────────────
@@ -863,9 +890,12 @@ async def delete_share_config(config_id: str, current_user: dict = Depends(get_c
 
 
 async def _load_public_config(token: str) -> dict:
-    cfg = await db.calendar_share_configs.find_one({"token": token}, {"_id": 0})
+    with org_bypass():
+        cfg = await raw_db.calendar_share_configs.find_one({"token": token}, {"_id": 0})
     if not cfg:
         raise HTTPException(status_code=404, detail="Invalid or revoked calendar link")
+    if cfg.get("organization_id"):
+        set_current_org(cfg["organization_id"])
     expires = cfg.get("expires_at")
     if expires and datetime.now(timezone.utc).strftime("%Y-%m-%d") > expires[:10]:
         raise HTTPException(status_code=404, detail="This calendar link has expired")

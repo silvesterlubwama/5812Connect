@@ -1,11 +1,12 @@
 """WebSocket real-time notifications, chat, and call signaling"""
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Dict, List, Set
 import json
 import logging
 from datetime import datetime, timezone
 import uuid
-from deps import db
+from deps import db, raw_db, authenticate_socket
+from org_context import org_bypass, set_current_org
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,14 +31,30 @@ except ImportError:
 
 
 class ConnectionManager:
-    """Manages WebSocket connections per user"""
+    """Manages WebSocket connections per user.
+
+    iter393 — connection state is process-global, so it sits outside the
+    organisation-scoped db proxy entirely. Every socket is tagged with its
+    owner's organisation on connect and all fan-out (presence, online lists,
+    broadcasts) is filtered to that organisation, otherwise one tenant's staff
+    names and online/offline activity are pushed to another tenant's browsers.
+    """
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.user_orgs: Dict[str, str] = {}
 
-    async def connect(self, websocket: WebSocket, user_id: str):
+    def org_of(self, user_id: str):
+        return self.user_orgs.get(user_id)
+
+    def _same_org(self, user_id: str, other_id: str) -> bool:
+        return self.user_orgs.get(user_id) == self.user_orgs.get(other_id)
+
+    async def connect(self, websocket: WebSocket, user_id: str, organization_id: str = None):
         await websocket.accept()
         if user_id not in self.active_connections:
             self.active_connections[user_id] = []
+        if organization_id:
+            self.user_orgs[user_id] = organization_id
         self.active_connections[user_id].append(websocket)
         # Update presence
         set_user_online(user_id)
@@ -50,6 +67,7 @@ class ConnectionManager:
             self.active_connections[user_id] = [ws for ws in self.active_connections[user_id] if ws != websocket]
             if not self.active_connections[user_id]:
                 del self.active_connections[user_id]
+                self.user_orgs.pop(user_id, None)
                 # Update presence only when all connections closed
                 set_user_offline(user_id)
         # Remove from all board rooms on disconnect
@@ -71,7 +89,7 @@ class ConnectionManager:
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         for uid, connections in self.active_connections.items():
-            if uid != user_id:
+            if uid != user_id and self._same_org(uid, user_id):
                 for ws in connections:
                     try:
                         await ws.send_json(message)
@@ -82,11 +100,20 @@ class ConnectionManager:
         """Check if user has active WebSocket connections"""
         return user_id in self.active_connections and len(self.active_connections[user_id]) > 0
 
-    def get_online_users(self) -> List[str]:
-        """Get list of all online user IDs"""
-        return list(self.active_connections.keys())
+    def get_online_users(self, organization_id: str = None) -> List[str]:
+        """Online user IDs, limited to one organisation when given."""
+        if organization_id is None:
+            return list(self.active_connections.keys())
+        return [uid for uid in self.active_connections
+                if self.user_orgs.get(uid) == organization_id]
 
-    async def send_to_user(self, user_id: str, message: dict):
+    async def send_to_user(self, user_id: str, message: dict, organization_id: str = None):
+        # iter394 — targeted sends (call signalling, chat) addressed a raw user
+        # id, so a socket in one organisation could ring or message a user in
+        # another. When the sender's organisation is known, the target must
+        # share it.
+        if organization_id and self.user_orgs.get(user_id) not in (None, organization_id):
+            return
         if user_id in self.active_connections:
             dead = []
             for ws in self.active_connections[user_id]:
@@ -97,13 +124,15 @@ class ConnectionManager:
             for ws in dead:
                 self.active_connections[user_id].remove(ws)
 
-    async def send_to_users(self, user_ids: List[str], message: dict):
+    async def send_to_users(self, user_ids: List[str], message: dict, organization_id: str = None):
         for uid in user_ids:
-            await self.send_to_user(uid, message)
+            await self.send_to_user(uid, message, organization_id=organization_id)
 
-    async def broadcast(self, message: dict):
+    async def broadcast(self, message: dict, organization_id: str = None):
         dead_users = []
         for user_id, connections in self.active_connections.items():
+            if organization_id and self.user_orgs.get(user_id) != organization_id:
+                continue
             dead = []
             for ws in connections:
                 try:
@@ -132,19 +161,40 @@ manager = ConnectionManager()
 
 
 @router.websocket("/api/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    await manager.connect(websocket, user_id)
+async def websocket_endpoint(websocket: WebSocket, user_id: str, token: str = Query(None)):
+    # iter394 — the handshake now requires a real login token. The user id in
+    # the path used to be the only credential, so anyone could listen in as
+    # anyone else simply by guessing an id. The token decides identity; the
+    # path id must agree with it or the socket is refused.
+    owner = await authenticate_socket(token, claimed_user_id=user_id)
+    if not owner:
+        await websocket.close(code=4401)
+        return
+    # A socket carries no request context, so pin this connection's
+    # organisation once from the user it belongs to. Without this every db call
+    # below would be unscoped.
+    owner_org = owner["organization_id"]
+    set_current_org(owner_org)
+
+    # Every targeted send from this socket stays inside its own organisation.
+    async def _send(uid, payload):
+        await manager.send_to_user(uid, payload, organization_id=owner_org)
+
+    async def _send_many(uids, payload):
+        await manager.send_to_users(uids, payload, organization_id=owner_org)
+
+    await manager.connect(websocket, user_id, owner_org)
     try:
         # Send initial online users
         await websocket.send_json({
             "type": "online_users",
-            "users": manager.get_online_users()
+            "users": manager.get_online_users(owner_org)
         })
-        # Notify others
+        # Notify others in the same organisation only
         await manager.broadcast({
             "type": "user_online",
             "user_id": user_id
-        })
+        }, organization_id=owner_org)
 
         while True:
             data = await websocket.receive_text()
@@ -172,7 +222,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         if conv:
                             for pid in conv.get("participants", []):
                                 if pid != user_id:
-                                    await manager.send_to_user(pid, {
+                                    await _send(pid, {
                                         "type": "typing_indicator",
                                         "conversation_id": conv_id,
                                         "user_id": user_id,
@@ -187,7 +237,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         if conv:
                             for pid in conv.get("participants", []):
                                 if pid != user_id:
-                                    await manager.send_to_user(pid, {
+                                    await _send(pid, {
                                         "type": "typing_indicator",
                                         "conversation_id": conv_id,
                                         "user_id": user_id,
@@ -209,7 +259,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
                         if conv:
                             for pid in conv.get("participants", []):
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "reaction_update",
                                     "message_id": message_id,
                                     "conversation_id": conv_id,
@@ -227,7 +277,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
                         if conv:
                             for pid in conv.get("participants", []):
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "reaction_update",
                                     "message_id": message_id,
                                     "conversation_id": conv_id,
@@ -285,7 +335,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     participants = msg.get("participants", [])
                     for pid in participants:
                         if pid != user_id:
-                            await manager.send_to_user(pid, {
+                            await _send(pid, {
                                 "type": "typing",
                                 "user_id": user_id,
                                 "conversation_id": conv_id,
@@ -322,7 +372,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         {"id": conv_id},
                         {"$set": {"updated_at": msg_doc["created_at"], "last_message": text[:100]}}
                     )
-                    await manager.send_to_users(participants, {
+                    await _send_many(participants, {
                         "type": "chat_message",
                         "conversation_id": conv_id,
                         "message": msg_doc,
@@ -338,7 +388,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         )
                         conv = await db.conversations.find_one({"id": conv_id}, {"_id": 0, "participants": 1})
                         if conv:
-                            await manager.send_to_users(conv.get("participants", []), {
+                            await _send_many(conv.get("participants", []), {
                                 "type": "read_receipt",
                                 "conversation_id": conv_id,
                                 "message_id": message_id,
@@ -372,7 +422,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         call_participants[call_id] = {user_id, target_user_id}
                         
                         # Send offer to target
-                        await manager.send_to_user(target_user_id, {
+                        await _send(target_user_id, {
                             "type": "incoming_call",
                             "call_id": call_id,
                             "caller_id": user_id,
@@ -394,7 +444,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         active_calls[call_id]["answered_at"] = datetime.now(timezone.utc).isoformat()
                     
                     if caller_id and sdp:
-                        await manager.send_to_user(caller_id, {
+                        await _send(caller_id, {
                             "type": "call_answered",
                             "call_id": call_id,
                             "sdp": sdp,
@@ -409,7 +459,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     target_user_id = msg.get("target_user_id")
                     
                     if target_user_id and candidate:
-                        await manager.send_to_user(target_user_id, {
+                        await _send(target_user_id, {
                             "type": "ice_candidate",
                             "call_id": call_id,
                             "candidate": candidate,
@@ -429,7 +479,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         del call_participants[call_id]
                     
                     if caller_id:
-                        await manager.send_to_user(caller_id, {
+                        await _send(caller_id, {
                             "type": "call_rejected",
                             "call_id": call_id,
                             "rejected_by": user_id,
@@ -445,7 +495,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         # Notify all participants
                         for pid in call_participants[call_id]:
                             if pid != user_id:
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "call_ended",
                                     "call_id": call_id,
                                     "ended_by": user_id
@@ -462,7 +512,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     if call_id in call_participants:
                         for pid in call_participants[call_id]:
                             if pid != user_id:
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "call_hold_changed",
                                     "call_id": call_id,
                                     "is_held": is_held,
@@ -477,7 +527,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     if call_id in call_participants:
                         for pid in call_participants[call_id]:
                             if pid != user_id:
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "call_mute_changed",
                                     "call_id": call_id,
                                     "is_muted": is_muted,
@@ -493,7 +543,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     
                     if transfer_to_user_id:
                         call_info = active_calls.get(call_id, {})
-                        await manager.send_to_user(transfer_to_user_id, {
+                        await _send(transfer_to_user_id, {
                             "type": "incoming_transfer",
                             "call_id": call_id,
                             "from_user_id": user_id,
@@ -514,7 +564,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         call_participants[call_id].add(new_participant_id)
                         
                         call_info = active_calls.get(call_id, {})
-                        await manager.send_to_user(new_participant_id, {
+                        await _send(new_participant_id, {
                             "type": "conference_invite",
                             "call_id": call_id,
                             "from_user_id": user_id,
@@ -525,7 +575,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         # Notify existing participants
                         for pid in call_participants[call_id]:
                             if pid != user_id and pid != new_participant_id:
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "conference_participant_added",
                                     "call_id": call_id,
                                     "new_participant_id": new_participant_id
@@ -536,7 +586,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     if call_id in call_participants:
                         for pid in call_participants[call_id]:
                             if pid != user_id:
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "screen_share_started",
                                     "call_id": call_id,
                                     "by_user_id": user_id
@@ -547,7 +597,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     if call_id in call_participants:
                         for pid in call_participants[call_id]:
                             if pid != user_id:
-                                await manager.send_to_user(pid, {
+                                await _send(pid, {
                                     "type": "screen_share_stopped",
                                     "call_id": call_id,
                                     "by_user_id": user_id
@@ -561,4 +611,4 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         await manager.broadcast({
             "type": "user_offline",
             "user_id": user_id
-        })
+        }, organization_id=owner_org)
