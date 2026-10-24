@@ -121,7 +121,10 @@ class TestPrivilegeEscalation:
             requests.delete(f"{API}/admin/users/{uid}", headers=H("l_admin"), timeout=30)
 
     def test_owner_untouchable_by_org_admin(self):
-        owner_id = "489c73cf-60ca-4721-bd5b-16e2e61a5a36"
+        # iter396 — the old hardcoded owner was deleted; look the current owner up
+        async def _o(db):
+            return await db.users.find_one({"email": OWNER_EMAIL.lower()}, {"_id": 0, "id": 1})
+        owner_id = mongo(_o)["id"]
         for k in ("g_admin", "l_admin"):
             p = requests.put(f"{API}/admin/users/{owner_id}", headers=H(k), json={"name": "PWNED", "status": "inactive"}, timeout=30)
             d = requests.delete(f"{API}/admin/users/{owner_id}", headers=H(k), timeout=30)
@@ -225,7 +228,7 @@ class TestSeed:
 
     def test_no_injected_admin_in_lubwamas(self):
         async def f(db):
-            return await db.users.count_documents({"email": "admin@5812global.org"})
+            return await db.users.count_documents({"email": "admin@5812global.org", "organization_id": LUB_ORG})
         assert mongo(f) == 0
 
 

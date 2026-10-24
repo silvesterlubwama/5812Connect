@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## 2026-10-24 — "Google sign-in bounces back to login" + "passkeys are error 500" (both fixed)
+One root cause, confirmed against production by the deployer agent: **the live
+database had no organisation at all.** The scoped-DB proxy requires an active
+organisation for every query, so every unauthenticated auth route raised
+`OrgScopeError` → 500. `/api/auth/google-session`'s generic `except Exception`
+turned that into "Google authentication failed", and the React callback then
+navigated back to `/login` — exactly the reported symptom. Production logs showed
+`Query on 'users' with no organisation pinned`, 500s on `/api/webauthn/authenticate/begin`,
+and `Seed skipped — no organisation exists yet`, so production had never seeded either.
+- `backend/org_bootstrap.py`: organisation #1 is created at startup whenever the
+  `organizations` collection is empty (not only when the whole database is — production
+  had 176 collections and 11 users). Name/slug via `ORG_NAME`/`ORG_SLUG`.
+- `_adopt_existing_data()`: rows that predate organisations are stamped into it, so a
+  pre-tenancy deployment's existing data becomes visible instead of being orphaned.
+  Only rows with no organisation are touched, the platform owner is deliberately left
+  out, and unscoped collections (sessions etc.) are skipped. Idempotent across restarts.
+- Google sign-in is now tenant-aware: the account is looked up across organisations,
+  the right one is pinned via `_resolve_login_org`, and an existing person is never
+  turned into a new pending guest. The same email in several organisations returns a
+  409 naming them, since a Google session can only be exchanged once.
+- Passkeys: challenges and credentials are keyed by random values, so they are looked
+  up unscoped and the credential's owner decides the organisation — an organisation B
+  passkey used to be invisible on the shared address. Sign-in then goes through the same
+  rules as password login (wrong site refused, suspended tenant refused, owner picks).
+- Browser input is now validated at the boundary: `authenticate/complete` returns 400
+  (not 500) for a missing/`null`/string `response`, junk `clientDataJSON`, a
+  non-string challenge or a missing credential id; `authenticate/begin` accepts no body.
+- **Frontend bug found by the testing agent**: the axios 401 interceptor hard-redirects
+  to `/login`, and `/auth/google-session` was not in its skip list — so even a clean
+  401 bounced the user with no explanation. Added that path and `/webauthn/authenticate/`.
+  `AuthCallback` now shows the reason with a "Back to sign-in" link, and handles
+  `pending_approval` instead of silently redirecting.
+- Tests: `test_iter396_google_passkey_bootstrap.py` (28 passed, 1 skipped) including a
+  full software-authenticator passkey sign-in, cross-tenant checks, and a probe that
+  replays production's exact shape (data present, `organizations` empty) and asserts the
+  adoption. Note for future tests: `tests/conftest.py` patches pymongo to stamp direct
+  inserts with the default organisation, so a "pre-tenancy" fixture must unset it again.
+
+
 ## 2026-10-24 — one web address, one organisation (hardening the subdomain mapping)
 Tracing how the per-organisation subdomain works turned up a real gap: uniqueness
 was only a check-then-write in the router with no index behind it, so two owners

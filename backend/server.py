@@ -794,6 +794,12 @@ async def startup():
         logger.warning(f"PIN migration bootstrap skipped: {e}")
     # iter226 — every 15 min refresh flight status for departed/shipped shipments
     asyncio.create_task(_run_flight_status_refresh_loop())
+    # Nothing can be read or written until organisation #1 exists.
+    try:
+        from org_bootstrap import ensure_default_organization
+        await ensure_default_organization()
+    except Exception as e:
+        logger.warning(f"Organisation bootstrap skipped: {e}")
     # A fresh deployment has no way in until the platform owner exists.
     try:
         from owner_bootstrap import ensure_platform_owner

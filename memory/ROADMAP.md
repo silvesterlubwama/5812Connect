@@ -3,6 +3,13 @@
 ## P0 — none open
 - ~~Multi-organisation data isolation~~ → built in iter392, hardened in iter393.
 
+## Needs a deploy to take effect
+- The organisation bootstrap + Google/passkey fixes are in the code but production is
+  still running the pre-fix image (deployer confirmed run 00c092f0, image sha256:fb342cb7).
+  Until it ships, the live site's Google sign-in and passkeys stay broken and nothing is
+  seeded. After deploying, verify on the live URL: Google sign-in, a passkey sign-in, and
+  that `scripts/create_super_admin.py --list` shows the owner.
+
 ## Known, accepted, NOT yet fixed
 - ~~WebSocket handshake has no token check~~ → fixed in iter394 (token required, must
   match the user and their organisation).

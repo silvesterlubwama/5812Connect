@@ -1,0 +1,47 @@
+{
+  "summary": "iter396 retest of the Google sign-in / passkey 500 fix and first-boot org bootstrap. Fresh-DB simulation: scratch DB_NAME booted the real app in-process (ensure_default_organization + ensure_platform_owner + startup), it created org #1 '58:12 Global'/'5812global' (is_default, active) and exactly one owner (organization_id null). Both are idempotent, no public auth route returned 500, and owner login gave requires_org_selection with 1 org. The scratch DB was dropped and the live DB was not touched. Passkey begin returns 200 with allowCredentials for every email case, and an org-B (Lubwamas) passkey is now visible on the shared address. Full passkey sign-in works end to end, using a software ES256 authenticator whose credential row was inserted and then deleted by id. The token from it is scoped to Lubwamas (/auth/me is correct, /members holds only org-B rows, an org-A member by id gives 403/404). The challenge is single-use, and an org-A passkey used on Host new.lubwamas.org is refused. Google session: no session_id gives 400, an invalid one gives 401, and the users and guests counts do not change. Password regression passes. FRONTEND BUG FOUND AND FIXED: the '#session_id=fake' fragment still landed silently on /login, because the axios 401 interceptor in services/api.js hard-redirects to /login and '/auth/google-session' was not in LOGIN_PATHS_SKIP_REDIRECT. I added '/auth/google-session' and '/webauthn/authenticate/' to the list. Now the 'Completing Google sign-in...' screen shows, then 'Invalid Google session' with a working Back to sign-in link. Password login in the UI lands on /dashboard. Remaining problems: authenticate/complete returns 500 when 'response' is a string or null, and authenticate/begin with no JSON body returns 422 instead of 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/webauthn/authenticate/complete", "issue": "Returns 500 (AttributeError) when body.response is a string or null: body.get('response', {}).get(...) assumes a dict. Use `resp = body.get('response'); if not isinstance(resp, dict): raise 400`."},
+      {"endpoint": "POST /api/webauthn/authenticate/begin", "issue": "Returns 422 when the request has no JSON body, but the spec asks for 200 in every case. The frontend always sends a body, so this is low impact. Fix: `body: Optional[dict] = None` and `body = body or {}`."},
+      {"endpoint": "POST /api/webauthn/authenticate/complete", "issue": "stored['expires_at'] is never checked, so a challenge stays valid until it is used. Challenges are only deleted after a successful sign-in, and the stored ISO string cannot back a TTL index. 206 stale rows already exist. Store a datetime with a TTL index and reject expired challenges."},
+      {"endpoint": "POST /api/webauthn/authenticate/complete", "issue": "challenge (from client JSON) and id/rawId are passed to Mongo without a type check, so {'$ne': ''} operator objects reach find_one. Signature verification still fails, so the request ends 4xx and is not exploitable, but these values should be forced to str."},
+      {"endpoint": "POST /api/webauthn/authenticate/begin", "issue": "The email lookup is find_one across all orgs and ignores host_org. If the same email exists in two orgs (allowed per org), it can return the other tenant's credential ids on a claimed hostname. No such duplicate exists today. Filter by host_org when one is set."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "services/api.js 401 interceptor", "issue": "FIXED BY TESTER: a 401 from /auth/google-session (and a failed passkey /webauthn/authenticate/complete) did window.location.href='/login', which wiped out the new AuthCallback explanation. This was the real cause of the 'bounces back to login' symptom for an invalid or expired session.", "selector": "[data-testid='google-signin-problem']", "priority": "HIGH"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "AuthCallback problem screen", "issues": ["The SoftphonePanel 'No softphone' pill shows on this pre-login screen because path '/' is not in publicPrefixes.", "The URL keeps '#session_id=...' while the error is shown (replaceState only runs on success).", "'Invalid Google session' is terse; a friendlier text such as 'Your Google sign-in expired or was already used - please try again' would help."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter396_google_passkey_bootstrap.py", "/app/backend/tests/scratch_iter396_fresh_boot.py", "/app/test_reports/pytest/pytest_iter396.xml"],
+  "action_items": [
+    "Guard authenticate/complete against a non-dict 'response' (return 400, not 500)",
+    "Make the authenticate/begin body optional (200 with no body)",
+    "Enforce webauthn challenge expiry, add TTL cleanup, and cast challenge/credential id to str",
+    "Make the authenticate/begin email lookup host-aware",
+    "Review the api.js skip list fix (added '/auth/google-session' and '/webauthn/authenticate/') and hide the SoftphonePanel on the AuthCallback screen"
+  ],
+  "critical_code_review_comments": [
+    "webauthn._get_rp_id and authenticate/complete take rpId and expectedOrigin from the client body. The server-side origin check is therefore client-controlled and adds no protection (the browser's own rpId binding still applies). Derive them from the Host / configured hostnames.",
+    "Google new-guest creation on an unclaimed host relies on the ASGI middleware falling back to the default org, so a Google guest on the shared URL always lands in 58:12 Global. This is intended, but worth documenting.",
+    "An owner who logs in while active_organization_id is still set goes straight into that org (no picker). This is consistent with _resolve_login_org but surprising if they never logged out."
+  ],
+  "updated_files": [
+    "/app/frontend/src/services/api.js (added '/auth/google-session' and '/webauthn/authenticate/' to LOGIN_PATHS_SKIP_REDIRECT)",
+    "/app/backend/tests/test_iter396_google_passkey_bootstrap.py (new, 27 tests)",
+    "/app/backend/tests/scratch_iter396_fresh_boot.py (new, scratch-DB boot simulation, drops its DB)",
+    "/app/backend/tests/test_iter394_hardening_retest.py (stale test fixes: the owner id is now looked up from OWNER_EMAIL instead of the deleted hardcoded owner; the 'no injected admin in lubwamas' count is now filtered by LUB_ORG because admin@5812global.org legitimately lives in 58:12 Global)"
+  ],
+  "success_rate": {"backend": "89% (24/27 iter396 pass; 1 skipped because org A has no hostname; the 3 fails are the minor issues above); regressions iter392/393/394/395 all green when run separately", "frontend": "100% after the tester fix to the api.js interceptor"},
+  "seed_data_creation": "None kept. Temporary webauthn_credentials rows (device_name TEST_iter396) were deleted by id. The scratch DB scratch_iter396_* was dropped. The owner's active_organization_id was restored.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run each suite alone; the login rate limit is 20/min, and running 392-395 together caused 429 failures. test_iter396 builds real WebAuthn assertions with a software P-256 key (cbor2 + cryptography), passing rpId/expectedOrigin in the body. 58:12 Global has no hostnames; Lubwamas has new.lubwamas.org. Owner login returns requires_org_selection only when active_organization_id is null.",
+  "rca of the issue": "Google bounce on the frontend: AuthCallback now catches the error, but the global axios response interceptor runs first and on any 401 not in LOGIN_PATHS_SKIP_REDIRECT sets window.location.href='/login'. An invalid or expired session_id (401 'Invalid Google session') therefore still bounced silently. Repro: open /#session_id=fake. Fix applied: whitelist /auth/google-session and /webauthn/authenticate/."
+}

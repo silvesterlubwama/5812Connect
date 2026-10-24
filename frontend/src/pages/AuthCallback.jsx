@@ -1,5 +1,5 @@
 import { secureStorage } from '../services/secureStorage';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../services/api';
@@ -9,6 +9,7 @@ export default function AuthCallback() {
   const navigate = useNavigate();
   const { setUser: setAuthUser } = useAuth();
   const hasProcessed = useRef(false);
+  const [problem, setProblem] = useState('');
 
   useEffect(() => {
     if (hasProcessed.current) return;
@@ -25,17 +26,42 @@ export default function AuthCallback() {
     (async () => {
       try {
         const res = await api.post('/auth/google-session', { session_id: sessionId });
-        const { token, user } = res.data;
+        const { token, user, pending_approval: pendingApproval } = res.data;
+        window.history.replaceState(null, '', window.location.pathname);
+        if (pendingApproval) {
+          // A first-time Google visitor: the account exists but nobody has let
+          // them in yet. Silently bouncing to the login page looked broken.
+          setProblem('Your account has been created and is waiting for an administrator to approve it.');
+          return;
+        }
         secureStorage.setToken(token);
         if (setAuthUser) setAuthUser(user);
-        // Clean the hash from URL and redirect to dashboard
-        window.history.replaceState(null, '', window.location.pathname);
         navigate('/dashboard', { replace: true });
-      } catch {
-        navigate('/login', { replace: true });
+      } catch (err) {
+        // Say why. This used to drop people back on the login page with no
+        // explanation, which read as "Google sign-in is broken".
+        setProblem(err.response?.data?.detail || 'Google sign-in could not be completed. Please try again.');
       }
     })();
   }, [navigate, setAuthUser]);
+
+  if (problem) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background px-4">
+        <div className="max-w-md text-center space-y-4" data-testid="google-signin-problem">
+          <p className="text-sm text-foreground">{problem}</p>
+          <button
+            type="button"
+            onClick={() => navigate('/login', { replace: true })}
+            className="text-sm font-medium text-primary underline underline-offset-4"
+            data-testid="google-signin-back"
+          >
+            Back to sign-in
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">

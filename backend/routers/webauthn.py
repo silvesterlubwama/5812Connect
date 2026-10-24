@@ -1,6 +1,8 @@
 """WebAuthn (Passkey/FIDO2) registration and authentication"""
 from fastapi import APIRouter, Depends, HTTPException, Request
-from deps import db, get_current_user, create_token, logger
+from deps import db, raw_db, get_current_user, create_token, logger, org_for_hostname
+from org_context import org_bypass, set_current_org
+from routers.auth import _resolve_login_org
 from datetime import datetime, timezone, timedelta
 import json
 import uuid
@@ -157,21 +159,30 @@ async def webauthn_register_complete(request: Request, body: dict, current_user:
 # ===== AUTHENTICATION =====
 
 @router.post("/authenticate/begin")
-async def webauthn_authenticate_begin(request: Request, body: dict):
+async def webauthn_authenticate_begin(request: Request, body: Optional[dict] = None):
     """Start passkey authentication (no auth required — user not yet logged in)"""
+    body = body or {}
     rp_id = _get_rp_id(request, body.get("rpId"))
-    email = body.get("email", "").strip().lower()
+    email = (body.get("email") or "").strip().lower()
 
     allow_credentials = []
     user_id_hint = None
 
     if email:
-        user = await db.users.find_one({"email": email}, {"_id": 0, "id": 1})
+        # iter396 — a passkey belongs to a person, and nobody is signed in yet, so
+        # the organisation is not known until we find them. Looked up across
+        # tenants and then pinned, the same as password sign-in.
+        with org_bypass():
+            user = await raw_db.users.find_one(
+                {"email": email}, {"_id": 0, "id": 1, "organization_id": 1})
         if user:
             user_id_hint = user["id"]
-            creds = await db.webauthn_credentials.find(
-                {"user_id": user_id_hint, "active": True}, {"_id": 0, "credential_id": 1}
-            ).to_list(20)
+            if user.get("organization_id"):
+                set_current_org(user["organization_id"])
+            with org_bypass():
+                creds = await raw_db.webauthn_credentials.find(
+                    {"user_id": user_id_hint, "active": True}, {"_id": 0, "credential_id": 1}
+                ).to_list(20)
             allow_credentials = [
                 PublicKeyCredentialDescriptor(
                     type=PublicKeyCredentialType.PUBLIC_KEY,
@@ -188,7 +199,8 @@ async def webauthn_authenticate_begin(request: Request, body: dict):
 
     challenge_b64 = bytes_to_base64url(options.challenge)
     # Store challenge keyed by challenge itself for lookup at complete step
-    await db.webauthn_challenges.replace_one(
+    with org_bypass():
+        await raw_db.webauthn_challenges.replace_one(
         {"challenge": challenge_b64},
         {
             "challenge": challenge_b64,
@@ -204,16 +216,21 @@ async def webauthn_authenticate_begin(request: Request, body: dict):
 
 
 @router.post("/authenticate/complete")
-async def webauthn_authenticate_complete(request: Request, body: dict):
+async def webauthn_authenticate_complete(request: Request, body: Optional[dict] = None):
     """Complete passkey authentication — verify response and return JWT"""
+    body = body or {}
     rp_id = _get_rp_id(request, body.get("rpId"))
     origin = request.headers.get("origin", f"https://{rp_id}")
     if body.get("expectedOrigin"):
         origin = body["expectedOrigin"]
 
-    # Find challenge
-    client_data_b64 = body.get("response", {}).get("clientDataJSON", "")
-    if not client_data_b64:
+    # Find challenge. Every field below arrives from a browser, so a malformed
+    # or missing `response` is a bad request, not a crash.
+    response = body.get("response")
+    if not isinstance(response, dict):
+        raise HTTPException(status_code=400, detail="Missing or malformed passkey response")
+    client_data_b64 = response.get("clientDataJSON") or ""
+    if not isinstance(client_data_b64, str) or not client_data_b64:
         raise HTTPException(status_code=400, detail="Missing clientDataJSON")
 
     import base64 as _base64
@@ -223,8 +240,15 @@ async def webauthn_authenticate_complete(request: Request, body: dict):
         challenge_b64 = client_data.get("challenge", "")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid clientDataJSON")
+    if not isinstance(challenge_b64, str) or not challenge_b64:
+        raise HTTPException(status_code=400, detail="Invalid clientDataJSON")
+    credential_id_raw = body.get("id") or body.get("rawId")
+    if not isinstance(credential_id_raw, str) or not credential_id_raw:
+        raise HTTPException(status_code=400, detail="Missing credential id")
 
-    stored = await db.webauthn_challenges.find_one({"challenge": challenge_b64, "type": "authentication"})
+    with org_bypass():
+        stored = await raw_db.webauthn_challenges.find_one(
+            {"challenge": challenge_b64, "type": "authentication"})
     if not stored:
         raise HTTPException(status_code=400, detail="Challenge not found or expired")
 
@@ -235,7 +259,9 @@ async def webauthn_authenticate_complete(request: Request, body: dict):
 
     # Find credential
     credential_id = body.get("id") or body.get("rawId")
-    cred_doc = await db.webauthn_credentials.find_one({"credential_id": credential_id, "active": True})
+    with org_bypass():
+        cred_doc = await raw_db.webauthn_credentials.find_one(
+            {"credential_id": credential_id, "active": True})
     if not cred_doc:
         raise HTTPException(status_code=400, detail="Credential not found")
 
@@ -255,20 +281,31 @@ async def webauthn_authenticate_complete(request: Request, body: dict):
         raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
 
     # Update sign count
-    await db.webauthn_credentials.update_one(
+    with org_bypass():
+        await raw_db.webauthn_credentials.update_one(
         {"credential_id": credential_id},
         {"$set": {"sign_count": verification.new_sign_count, "last_used_at": datetime.now(timezone.utc).isoformat()}}
     )
 
     # Get user and issue token
-    user = await db.users.find_one({"id": cred_doc["user_id"]}, {"_id": 0, "password_hash": 0})
+    with org_bypass():
+        user = await raw_db.users.find_one({"id": cred_doc["user_id"]}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    # The key proves who they are; this is where their organisation is decided,
+    # with the same rules the password flow uses (wrong site, suspended tenant,
+    # owner choosing which organisation to enter).
+    host_org = await org_for_hostname(request)
+    org_id, _org, pending = await _resolve_login_org(user, host_org)
+    if pending:
+        return pending
+    set_current_org(org_id)
 
     token = create_token(user["id"])
 
     # Cleanup
-    await db.webauthn_challenges.delete_one({"challenge": challenge_b64})
+    with org_bypass():
+        await raw_db.webauthn_challenges.delete_one({"challenge": challenge_b64})
 
     return {"token": token, "user": user}
 

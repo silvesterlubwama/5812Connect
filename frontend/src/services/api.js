@@ -22,6 +22,8 @@ const LOGIN_PATHS_SKIP_REDIRECT = [
   '/auth/2fa/verify',
   '/auth/password-reset',
   '/auth/forgot-password',
+  '/auth/google-session',  // iter396 — invalid/expired Google session; AuthCallback shows the reason
+  '/webauthn/authenticate/',  // iter396 — failed passkey assertion; LoginPage toasts the reason
   '/kiosk/unlock',
   '/kiosk/pin-checkin',  // public kiosk lookup — 401 here means bad PIN, NOT session expiry
   '/security/checkpoint/pair',  // bad pairing PIN — handled on the lock screen

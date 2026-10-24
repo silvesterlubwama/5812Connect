@@ -446,7 +446,7 @@ async def sales_portal_login(data: dict, request: Request) -> dict:
 
 
 @router.post("/auth/google-session")
-async def google_auth_session(data: dict) -> dict:
+async def google_auth_session(data: dict, request: Request) -> dict:
     import httpx
     session_id = data.get("session_id")
     if not session_id:
@@ -466,11 +466,43 @@ async def google_auth_session(data: dict) -> dict:
         picture = google_data.get("picture", "")
         if not email:
             raise HTTPException(status_code=400, detail="No email from Google")
-        existing = await db.users.find_one({"email": email}, {"_id": 0})
+        # iter396 — find the account the way password sign-in does. The scoped
+        # db only sees the organisation this hostname belongs to, so an existing
+        # person signing in on the shared address used to come back as "not
+        # found" and get a brand-new pending guest account instead — which is
+        # exactly what bounced them to the login page.
+        host_org = await org_for_hostname(request)
+        with org_bypass():
+            candidates = await raw_db.users.find(
+                {"email": email}, {"_id": 0, "password_hash": 0}
+            ).to_list(20)
+        if host_org:
+            candidates = [c for c in candidates
+                          if c.get("organization_id") == host_org["id"] or is_super_admin(c)]
+        if len(candidates) > 1:
+            # The same address exists in more than one organisation. A Google
+            # session can only be exchanged once, so there is no safe way to ask
+            # "which one" mid-flow — send them to the right front door instead.
+            with org_bypass():
+                orgs = await raw_db.organizations.find(
+                    {"id": {"$in": [c.get("organization_id") for c in candidates]}},
+                    {"_id": 0, "name": 1},
+                ).to_list(20)
+            names = ", ".join(o.get("name", "") for o in orgs if o.get("name"))
+            raise HTTPException(
+                status_code=409,
+                detail=(f"{email} is used in more than one organisation ({names}). "
+                        "Open that organisation's own web address to sign in, or use your password."),
+            )
+        existing = candidates[0] if candidates else None
         if existing:
             user_id = existing["id"]
             if existing.get("status") == "suspended":
                 raise HTTPException(status_code=403, detail="Account suspended. Contact an administrator.")
+            org_id, org, pending = await _resolve_login_org(existing, host_org)
+            if pending:
+                return pending
+            set_current_org(org_id)
             if picture and not existing.get("picture"):
                 await db.users.update_one({"id": user_id}, {"$set": {"picture": picture}})
         else:
