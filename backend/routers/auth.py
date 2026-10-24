@@ -168,7 +168,12 @@ async def _resolve_login_org(user: dict, host_org: dict):
             # deployment had — is a dead end, not a safeguard.
             only = orgs[0]
             if only.get("status") == "suspended":
-                raise HTTPException(status_code=403, detail=f"{only.get('name')} is suspended")
+                # Signing them in without entering it: the organisations console
+                # is not organisation-scoped, so this is the only way back in to
+                # reactivate it. A hard 403 left the owner locked out of their
+                # own platform.
+                return None, None, {"requires_org_selection": True, "organizations": orgs,
+                                    "all_suspended": True}
             with org_bypass():
                 await raw_db.users.update_one(
                     {"id": user["id"]}, {"$set": {"active_organization_id": only["id"]}}
@@ -196,12 +201,14 @@ async def _resolve_login_org(user: dict, host_org: dict):
         # address maps to, or the default one. Refusing them with "contact your
         # administrator" was wrong: there was nothing an administrator could do
         # from inside the app.
-        fallback = host_org
-        if not fallback:
-            with org_bypass():
-                fallback = await raw_db.organizations.find_one(
-                    {"status": "active", "is_default": True}, {"_id": 0}
-                ) or await raw_db.organizations.find_one({"status": "active"}, {"_id": 0})
+        # Always the default organisation — never "whichever address they used".
+        # These accounts predate organisations, so they belong to the original
+        # one; a tenant's own address can only admit its own people, and those
+        # already carry an organisation.
+        with org_bypass():
+            fallback = await raw_db.organizations.find_one(
+                {"status": "active", "is_default": True}, {"_id": 0}
+            ) or await raw_db.organizations.find_one({"status": "active"}, {"_id": 0})
         if not fallback:
             raise HTTPException(
                 status_code=503,
@@ -273,7 +280,19 @@ async def login(data: UserLogin, request: Request) -> dict:
     # organisation's accounts may sign in there — the same email at another
     # tenant is a different person.
     if host_org:
-        identity_query = {"$and": [identity_query, {"organization_id": host_org["id"]}]}
+        # …except the platform owner, who belongs to no organisation and is the
+        # one account allowed to enter any of them. Without this they were
+        # refused on every organisation's own address.
+        identity_query = {"$and": [
+            identity_query,
+            {"$or": [
+                {"organization_id": host_org["id"]},
+                # Only the owner. An account with no organisation must NOT be
+                # let in here: it would be captured by whichever address it
+                # happened to use, moving a 58:12 person into another tenant.
+                {"role": {"$regex": "^super_admin$", "$options": "i"}},
+            ]},
+        ]}
     with org_bypass():
         # Two organisations may legitimately hold the same email as two
         # different people, so match on the password too rather than taking

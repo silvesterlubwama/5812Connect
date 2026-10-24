@@ -1,5 +1,43 @@
 # CHANGELOG
 
+## 2026-10-24 (later) — the export now really exports everything, and downloads
+The API was returning the data all along; **the browser download was broken** and the
+dump was incomplete. Both fixed:
+- Download: the anchor was never added to the document and the object URL was revoked
+  immediately after `click()`, which cancels the download for anything but a tiny file —
+  so nothing ever arrived. It is now appended, clicked, and revoked a minute later; the
+  response is fetched as text instead of being re-serialised with indentation (half the
+  memory on a 13 MB dump); the button shows "Preparing…" and the toast reports records,
+  files and size.
+- Completeness: the export stopped at 100,000 rows per collection and said nothing about
+  the rest — it now pages through everything, returns `collection_counts` per collection,
+  and lists `platform_rows_not_moved` (sessions, rate limits, the tenant registry) so what
+  is deliberately left behind is visible rather than silent. Verified against an
+  independent database count: 31,662 documents across 158 collections, zero mismatches.
+- Import: `restored_documents` is now checked against `expected_documents`, per-collection
+  `failures` are returned instead of only logged, and the restored slug is sanitised.
+
+Fixes from the second adversarial pass (report iteration_259):
+- **HIGH — a second import returned 500.** It wrote `hostnames: []`, and the unique index
+  indexes an empty array as a value, so the second address-less copy collided. The field
+  is left out, and a genuine clash is now a 409.
+- **The owner could not sign in on an organisation's own address** (401). The hostname
+  filter required `organization_id == host org`, and the owner has none — so the one
+  account allowed into every organisation was refused by all of them. Owners now pass
+  that filter and land directly in that organisation.
+- Letting *unattached* accounts through the same filter would have captured a 58:12 person
+  into Lubwamas just because they used its address; they are always attached to the
+  default organisation instead. (Caught by the testing agent's own test.)
+- **A suspended only-organisation locked the owner out** with a hard 403 and no way to
+  reactivate it. They are now signed in with `all_suspended` and no active organisation,
+  which still reaches the organisations console.
+- Copy polish: "1 user" not "1 users", and small exports report KB rather than "0.0 MB".
+- Test hygiene: the single-organisation test no longer removes a real organisation (the
+  fresh-boot test already covers it), the export/import test restores Lubwamas' branding,
+  and the picker test no longer depends on what ran before it.
+- Suites: iter396 35 passed/1 skipped, iter397 11 passed, iter392 10, iter393 15.
+
+
 ## 2026-10-24 — sign-in self-heals, and moving an organisation between apps actually moves it
 Sign-in (answers "existing users keep being told to use the organisation web address"):
 - An account with no `organization_id` — i.e. every account on a deployment that

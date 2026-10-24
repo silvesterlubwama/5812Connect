@@ -1,0 +1,43 @@
+{
+  "summary": "iter397 retest of two features: sign-in self-heal (accounts with no organisation, and the owner's organisation picker) and organisation export/import. I wrote a new suite, tests/test_iter397_signin_selfheal_org_move.py, with 11 tests: 9 passed and 2 failed. I also re-ran the iter396 suite minus 2 tests that would have deleted Lubwamas or changed its branding: 29 passed, 1 failed (a test-order problem, not a product bug), 1 skipped. Passing: an account with no organisation is attached to 58:12 Global on the shared address and can use /auth/me. A wrong password does not attach it. The same account on new.lubwamas.org gets a 401 and is not attached to Lubwamas. The owner sees the picker when two organisations exist and no organisation is active, and goes straight in when one is. The export has the right shape (no _id, every row stamped with the source organisation, counts add up, files dict present). Export and import need the owner (403 for a tenant admin). A bad import format gives 400. An imported copy keeps the fixed settings id 'default', so its branding survives. Deleting an active organisation is refused. After importing a Lubwamas copy, admin@lubwamas.org still landed in the real Lubwamas 4 out of 4 times. UI: owner login shows the picker with 2 choices; picking 58:12 lands on /dashboard; /organizations shows 2 cards; Lubwamas Export downloads lubwamas-export-2026-10-24.json with the toast 'Lubwamas: 117 records and 17 files (0.0 MB)'. BUG (HIGH): a second import returns 500. The import route inserts 'hostnames: []', and the unique sparse index hostname_unique treats [] as a value, so the second address-less organisation hits a DuplicateKeyError that is not caught. Both orgs were left as they were: neither was deleted and their branding matches the snapshot I took before testing.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/organizations/import", "issue": "The second import of any organisation with no web address returns 500. organizations.py around line 446 sets \"hostnames\": [] on the new record. hostname_unique is unique+sparse, and sparse does not skip empty arrays, so the error is E11000 dup key { hostnames: undefined }. Fix: leave the hostnames field out, as create_organization already does, and catch DuplicateKeyError so it returns 409. Reproduced twice; the backend log shows the DuplicateKeyError.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/auth/login (owner on a tenant hostname)", "issue": "The owner signing in on new.lubwamas.org gets 401 'Invalid credentials'. When a host organisation exists, the identity query adds organization_id == host org, and the owner has organization_id null, so the owner is never found. That makes the super-admin + host_org branch in _resolve_login_org unreachable, along with the 'attach to host org' fallback for accounts with no organisation. Either let super_admin through the host filter, or remove the dead branches."},
+      {"endpoint": "POST /api/auth/login (owner, single org)", "issue": "If the only organisation is suspended, the owner gets 403 and has no way back in to reactivate it. Return the picker token instead of a hard 403."},
+      {"endpoint": "POST /api/organizations/import", "issue": "The copy keeps the same user emails and password hashes. On the shared address, login takes the first candidate whose password matches, so it only lands in the original organisation by natural insertion order; nothing guarantees it. Consider preferring the default or oldest organisation, or suspending imported copies by default. The imported slug is not checked against SLUG_RE. insert_many failures are only logged, so restored_documents comes back low with no error to the caller."},
+      {"endpoint": "GET /api/organizations/{id}/export", "issue": "The whole organisation plus up to 150MB of base64 files is built in memory as one JSON response. Risk of memory exhaustion on large tenants (58:12 Global is already 13MB)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/organizations", "issues": ["The Lubwamas card says '1 users'; it should be '1 user'.", "The export toast says '17 files (0.0 MB)'. Small sizes should be shown in KB."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter397_signin_selfheal_org_move.py", "/app/test_reports/pytest/iter397_selfheal.xml", "/app/test_reports/pytest/iter396_regress.xml"],
+  "action_items": [
+    "Fix POST /organizations/import: do not insert hostnames: [] (leave the field out), and turn DuplicateKeyError into 409. Then re-run test_two_imports_and_login_isolation.",
+    "Make login on a tenant hostname work for the super_admin (currently 401), or remove the unreachable host_org branches in _resolve_login_org.",
+    "Fix test isolation in test_iter396: test_owner_with_several_organisations_is_still_asked only passes if the previous test left active_organization_id as None. Set it explicitly in the test.",
+    "test_iter396 tests test_owner_with_a_single_organisation_skips_the_picker (temporarily find_one_and_delete's Lubwamas) and test_export_and_import_moves_rows_settings_and_files (overwrites Lubwamas branding) break the rule 'do not delete or alter Lubwamas'. Rewrite them to use a throwaway organisation.",
+    "Lubwamas branding is already polluted by an earlier test: app_name 'Lub TESTXd7a27a', logo '/x/TESTXd7a27a.png'. I did not touch it, as instructed. The user should decide whether to restore it."
+  ],
+  "critical_code_review_comments": [
+    "organizations.py import: hostnames [] conflicts with the unique sparse index (the root cause of the 500).",
+    "auth.py login: the host filter on the identity query makes the super_admin and no-organisation branches of _resolve_login_org dead code on tenant hostnames.",
+    "organizations.py _remap checks every file path for every string field, which gets slow for large imports. Precompile one regex instead.",
+    "Export and import hold everything in memory with no size limit on the import body."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter397_signin_selfheal_org_move.py"],
+  "success_rate": {"backend": "93% (38/41 run; 1 real bug, 1 minor finding, 1 test-order problem)", "frontend": "100% of flows tested (picker, enter, organisations page, export)"},
+  "test_credentials": "Owner: OWNER_EMAIL / OWNER_PASSWORD from backend/.env. Tenant admins as listed in /app/memory/test_credentials.md.",
+  "seed_data_creation": "None left behind. Created 'legacy-t397' and deleted it. Imported orgs 'TEST t397 copy 0' were suspended and deleted by their own id. Owner active_organization_id is restored to 58:12 Global.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run each suite on its own (login limit 20/min). In test_iter396, deselect -k 'not single_organisation_skips and not export_and_import_moves' to protect Lubwamas. test_iter397 asserts in its fixture teardown that both organisations' system_settings branding is unchanged.",
+  "rca of the issue": "Second import returns 500. Steps: export Lubwamas, import it once (200), import it again (500). Cause: the import route inserts {hostnames: []}. The unique+sparse index hostname_unique indexes an empty array as 'undefined', so the second copy collides with the first. db_indexes already unsets [] at startup and create_organization already leaves the field out; import was missed. Fix: drop the 'hostnames': [] key from the inserted org document (it can stay in the response) and wrap insert_one in try/except DuplicateKeyError returning 409."
+}

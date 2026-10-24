@@ -273,14 +273,33 @@ async def export_organization(
             raise HTTPException(status_code=404, detail="Organisation not found")
         names = await raw_db.list_collection_names()
         data = {}
+        counts = {}
         total = 0
+        skipped = {}
         for name in names:
             if name in UNSCOPED_COLLECTIONS:
+                # Platform plumbing (sessions, rate limits, the tenant registry).
+                # Reported rather than silently dropped, so "everything" is a
+                # claim the operator can check.
+                n = await raw_db[name].count_documents({"organization_id": org_id})
+                if n:
+                    skipped[name] = n
                 continue
-            rows = await raw_db[name].find({"organization_id": org_id}, {"_id": 0}).to_list(100000)
-            if rows:
-                data[name] = rows
-                total += len(rows)
+            expected = await raw_db[name].count_documents({"organization_id": org_id})
+            if not expected:
+                continue
+            # Page through the whole collection. This used to stop at 100,000
+            # rows per collection and say nothing about the rest.
+            rows = []
+            cursor = raw_db[name].find({"organization_id": org_id}, {"_id": 0}).batch_size(2000)
+            async for row in cursor:
+                rows.append(row)
+            if len(rows) != expected:
+                logger.warning("Export %s: %s rows read but %s counted in %s",
+                               org_id, len(rows), expected, name)
+            data[name] = rows
+            counts[name] = len(rows)
+            total += len(rows)
     # Rows alone are not the whole organisation: logos, receipt scans and photos
     # live in storage, and a move that left them behind would land on the other
     # server with broken images everywhere.
@@ -293,6 +312,8 @@ async def export_organization(
         "organization": org,
         "collections": data,
         "document_count": total,
+        "collection_counts": counts,
+        "platform_rows_not_moved": skipped,
         "files": files,
         "file_count": len(files),
         "file_bytes": files_bytes,
@@ -371,7 +392,7 @@ async def import_organization(payload: dict, current_user: dict = Depends(requir
         raise HTTPException(status_code=400, detail="Export is missing its organisation record")
 
     new_id = str(uuid.uuid4())
-    slug = (src_org.get("slug") or "imported")[:30]
+    slug = re.sub(r"[^a-z0-9-]", "", (src_org.get("slug") or "imported").lower())[:30] or "imported"
 
     # Record ids are globally unique, so a restore cannot reuse them while the
     # original still exists. Mint a fresh id for every row and rewrite any
@@ -422,14 +443,21 @@ async def import_organization(payload: dict, current_user: dict = Depends(requir
                if k not in ("id", "_id", "hostnames", "slug", "is_default")},
             "id": new_id,
             "slug": slug,
-            "hostnames": [],
+            # Deliberately no `hostnames` key: the unique index indexes an empty
+            # array as a value, so a second address-less copy collided and the
+            # import failed with a duplicate key.
             "status": "active",
             "imported_at": datetime.now(timezone.utc).isoformat(),
             "imported_by": current_user.get("id"),
         }
-        await raw_db.organizations.insert_one(dict(org))
+        try:
+            await raw_db.organizations.insert_one(dict(org))
+        except DuplicateKeyError:
+            raise HTTPException(status_code=409,
+                                detail="An organisation with that name or web address already exists")
 
         restored = 0
+        failures: list[str] = []
         for name, rows in collections.items():
             if name in UNSCOPED_COLLECTIONS or not isinstance(rows, list) or not rows:
                 continue
@@ -446,6 +474,7 @@ async def import_organization(payload: dict, current_user: dict = Depends(requir
                     restored += len(docs)
                 except Exception as e:
                     logger.warning(f"Import: {name} partially failed: {e}")
+                    failures.append(f"{name}: {str(e)[:120]}")
     await _audit(current_user.get("id"), "import", "organization", new_id,
                  {"documents": restored, "slug": slug, "files": len(file_map)})
     org.pop("_id", None)
@@ -454,6 +483,8 @@ async def import_organization(payload: dict, current_user: dict = Depends(requir
         "restored_documents": restored,
         "restored_files": len(file_map),
         "files_not_in_export": payload.get("files_missing") or [],
+        "expected_documents": payload.get("document_count"),
+        "failures": failures,
     }
 
 

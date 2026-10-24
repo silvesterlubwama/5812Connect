@@ -29,6 +29,7 @@ export default function OrganizationsPage() {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [deleteSlug, setDeleteSlug] = useState('');
   const [editing, setEditing] = useState(null);
+  const [busyOrg, setBusyOrg] = useState(null);
   const [moving, setMoving] = useState(null);
 
   const load = async () => {
@@ -75,18 +76,51 @@ export default function OrganizationsPage() {
   };
 
   const exportOrg = async (org) => {
+    if (busyOrg) return;
+    setBusyOrg(org.id);
+    const preparing = toast.loading(`Preparing ${org.name} — this can take a minute for a large organisation…`);
     try {
-      const res = await api.get(`/organizations/${org.id}/export`);
-      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      // Ask for the raw text: a big export is tens of MB and re-serialising the
+      // parsed object (JSON.stringify with indentation) doubled the memory for
+      // no benefit.
+      const res = await api.get(`/organizations/${org.id}/export`, { responseType: 'text' });
+      const text = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+      let summary = {};
+      try { summary = JSON.parse(text); } catch { summary = {}; }
+
+      const blob = new Blob([text], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `${org.slug}-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.style.display = 'none';
+      // The anchor has to be in the document, and the object URL has to outlive
+      // the click — revoking it immediately cancelled the download, which is why
+      // nothing ever arrived for anything but the smallest organisation.
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Exported ${res.data.document_count} records`);
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 60000);
+
+      toast.dismiss(preparing);
+      const files = summary.file_count || 0;
+      const size = blob.size >= 1024 * 1024
+        ? `${(blob.size / 1024 / 1024).toFixed(1)} MB`
+        : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
+      toast.success(
+        `${org.name}: ${summary.document_count ?? '?'} records and ${files} file${files === 1 ? '' : 's'} (${size})`,
+        { duration: 8000 },
+      );
+      if (summary.files_missing?.length) {
+        toast.warning(`${summary.files_missing.length} file(s) could not be read and are listed in the export`, { duration: 10000 });
+      }
     } catch (err) {
+      toast.dismiss(preparing);
       toast.error(err.response?.data?.detail || 'Export failed');
+    } finally {
+      setBusyOrg(null);
     }
   };
 
@@ -178,9 +212,9 @@ export default function OrganizationsPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex gap-4 text-sm">
-                  <span><strong>{org.stats?.users ?? 0}</strong> <span className="text-muted-foreground">users</span></span>
-                  <span><strong>{org.stats?.members ?? 0}</strong> <span className="text-muted-foreground">people</span></span>
-                  <span><strong>{org.stats?.campuses ?? 0}</strong> <span className="text-muted-foreground">campuses</span></span>
+                  <span><strong>{org.stats?.users ?? 0}</strong> <span className="text-muted-foreground">{org.stats?.users === 1 ? 'user' : 'users'}</span></span>
+                  <span><strong>{org.stats?.members ?? 0}</strong> <span className="text-muted-foreground">{org.stats?.members === 1 ? 'person' : 'people'}</span></span>
+                  <span><strong>{org.stats?.campuses ?? 0}</strong> <span className="text-muted-foreground">{org.stats?.campuses === 1 ? 'campus' : 'campuses'}</span></span>
                 </div>
                 {(org.hostnames || []).length > 0 && (
                   <p className="text-xs text-muted-foreground break-all">{org.hostnames.join(', ')}</p>
@@ -198,8 +232,9 @@ export default function OrganizationsPage() {
                     <LogIn size={14} /> {org.id === activeId ? 'Current' : 'Open'}
                   </Button>
                   <Button size="sm" variant="outline" className="gap-1.5"
-                    onClick={() => exportOrg(org)} data-testid={`export-org-${org.slug}`}>
-                    <Download size={14} /> Export
+                    onClick={() => exportOrg(org)} disabled={busyOrg === org.id}
+                    data-testid={`export-org-${org.slug}`}>
+                    <Download size={14} /> {busyOrg === org.id ? 'Preparing…' : 'Export'}
                   </Button>
                   {org.status === 'suspended' ? (
                     <Button size="sm" variant="outline" className="gap-1.5"
