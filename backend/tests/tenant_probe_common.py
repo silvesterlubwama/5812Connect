@@ -20,7 +20,27 @@ API = f"{BASE}/api"
 MONGO = _env("/app/backend/.env", "MONGO_URL")
 DBN = _env("/app/backend/.env", "DB_NAME")
 
-SUPER = {"identifier": "owner@5812global.org", "password": "Owner@5812!"}
+# The platform owner's credentials live in backend/.env (gitignored), never in
+# a test file — this suite would otherwise publish the key to every organisation.
+def _owner_creds():
+    env = {}
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "..", ".env")) as fh:
+            for line in fh:
+                if "=" in line and not line.strip().startswith("#"):
+                    k, _, v = line.strip().partition("=")
+                    env[k] = v
+    except OSError:
+        pass
+    email = os.environ.get("OWNER_EMAIL") or env.get("OWNER_EMAIL")
+    password = os.environ.get("OWNER_PASSWORD") or env.get("OWNER_PASSWORD")
+    if not email or not password:
+        import pytest as _pytest
+        _pytest.skip("OWNER_EMAIL/OWNER_PASSWORD not configured", allow_module_level=True)
+    return {"identifier": email, "password": password}
+
+
+SUPER = _owner_creds()
 A_ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
 LUB_ADMIN = {"identifier": "admin@lubwamas.org", "password": "Lubwama@2026"}
 A_ORG = "c1f75976-4d8c-4958-8703-ff2ff0b3f7cf"

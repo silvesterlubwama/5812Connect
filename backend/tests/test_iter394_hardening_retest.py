@@ -12,6 +12,23 @@ import websockets
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
+def _owner_pair():
+    env = {}
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "..", ".env")) as fh:
+            for line in fh:
+                if "=" in line and not line.strip().startswith("#"):
+                    k, _, v = line.strip().partition("=")
+                    env[k] = v
+    except OSError:
+        pass
+    return (os.environ.get("OWNER_EMAIL") or env.get("OWNER_EMAIL") or "",
+            os.environ.get("OWNER_PASSWORD") or env.get("OWNER_PASSWORD") or "")
+
+
+OWNER_EMAIL, OWNER_PASSWORD = _owner_pair()
+
+
 load_dotenv("/app/backend/.env")
 load_dotenv("/app/frontend/.env")
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
@@ -21,7 +38,7 @@ LOCAL = "http://localhost:8001/api"  # only for spoofed Host header probes
 GLOBAL_ORG = "c1f75976-4d8c-4958-8703-ff2ff0b3f7cf"
 LUB_ORG = "ee79732c-1263-46a8-bf46-511c5fe812bf"
 CREDS = {
-    "owner": ("owner@5812global.org", "Owner@5812!"),
+    "owner": (OWNER_EMAIL, OWNER_PASSWORD),
     "g_admin": ("admin@5812uganda.org", "Admin@5812"),
     "l_admin": ("admin@lubwamas.org", "Lubwama@2026"),
 }

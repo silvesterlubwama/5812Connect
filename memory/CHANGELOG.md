@@ -1,5 +1,53 @@
 # CHANGELOG
 
+## 2026-10-24 — one web address, one organisation (hardening the subdomain mapping)
+Tracing how the per-organisation subdomain works turned up a real gap: uniqueness
+was only a check-then-write in the router with no index behind it, so two owners
+saving the same address at the same moment could both pass.
+- Unique index on `organizations.hostnames` (`db_indexes.py`, new "organizations"
+  index group), with `DuplicateKeyError` surfaced as a clean 409. An organisation
+  with no address stores the field as absent, not `[]`, because a unique index
+  indexes an empty array as a value and the second address-less organisation
+  would collide. Existing `[]` values are unset on startup.
+- `_clean_hostnames` now also strips a path/port and adds the `www.` twin
+  automatically, because the request hostname is matched literally — someone
+  typing `www.new.lubwamas.org` previously fell through to the default
+  organisation.
+- Tests (`test_iter395_ws_branding_owner_tools.py`, now 24): normalisation + www
+  twin, two organisations cannot share an address, clearing addresses twice does
+  not collide, and signing in on another organisation's address is refused (401)
+  while the right account on the same address succeeds.
+- Test suites no longer hardcode the platform owner's password — they read
+  `OWNER_EMAIL`/`OWNER_PASSWORD` from the gitignored `backend/.env` and skip when
+  absent. Publishing that password in a test file would have handed over every
+  organisation.
+
+
+## 2026-10-24 — platform owner for every deployment
+- `backend/owner_bootstrap.py`: on startup, if no platform owner exists and
+  `OWNER_EMAIL` + `OWNER_PASSWORD` are set, one is created. Idempotent by design —
+  an existing owner is never touched (so the value in `.env` cannot be used to
+  reset a live server later), and an email that already belongs to an ordinary
+  account is refused rather than silently promoted out of its organisation.
+  All three paths tested against scratch databases.
+- Appliance: `docker-compose.yml` passes `OWNER_EMAIL`/`OWNER_NAME`/`OWNER_PASSWORD`;
+  `install.sh` writes them into the per-box `.env` (owner address defaults to the
+  user's, password comes from the installer's environment or is generated and
+  printed once). The password is never committed or baked into an image — the
+  user explicitly chose "keep it out of the public code".
+- `scripts/create_super_admin.py --list` shows the owners: email, name, id, status,
+  which organisation they are currently inside, when created. No secrets, since
+  passwords are hashed.
+- Owner for this platform is now `silvesterlubwama@icloud.com`; the test owner
+  `owner@5812global.org` was deleted. `silvester@lubwamas.org` stays an org admin.
+- Earlier the same day: the appliance only set `JWT_SECRET` while the API now
+  requires `SECRET_KEY`, so an update would have left the backend dead on boot.
+  Compose falls back to the box's existing `JWT_SECRET` value and `install.sh`
+  adds the line to an existing `.env`. New runbook: `appliance/OPERATIONS.md`
+  (updating the Ubuntu box, Cloudflare Tunnel hostnames, per-organisation
+  addresses, diagnosis table).
+
+
 ## 2026-10-21 — iter 394-395 (phase 2 security, organisation setup tools, own web address, branding, owner activity log)
 **Socket login check.** `/api/ws/{user_id}` used to accept the user id in the URL as
 its only credential. The handshake now requires a real login token

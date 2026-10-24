@@ -12,7 +12,8 @@
 # What it does:
 #   1. Installs Docker Engine + docker compose plugin (skipped if present).
 #   2. Drops the appliance into /opt/connect (configurable).
-#   3. Generates fresh SECRET_KEY/JWT_SECRET and NFC_SECRET_KEY into .env (preserved on re-run).
+#   3. Generates fresh SECRET_KEY/JWT_SECRET and NFC_SECRET_KEY into .env (preserved on re-run)
+#      and records the first-boot platform owner (OWNER_EMAIL / OWNER_PASSWORD).
 #   4. Pulls the latest images from GHCR.
 #   5. Brings the stack up + waits for /healthz.
 #   6. Prints the LAN IP + URL.
@@ -84,6 +85,16 @@ if [ ! -f .env ]; then
     log "Generating fresh .env (secrets randomised) — edit before production use."
     JWT=$(openssl rand -hex 48)
     NFC=$(openssl rand -hex 32)
+    # The platform owner is the only login that can move between organisations.
+    # Supply it at install time:  OWNER_PASSWORD='…' sudo -E bash install.sh
+    OWNER_EMAIL_VALUE=${OWNER_EMAIL:-silvesterlubwama@icloud.com}
+    OWNER_NAME_VALUE=${OWNER_NAME:-Silvester Lubwama}
+    OWNER_PASSWORD_VALUE=${OWNER_PASSWORD:-}
+    OWNER_GENERATED=no
+    if [ -z "$OWNER_PASSWORD_VALUE" ]; then
+        OWNER_PASSWORD_VALUE=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)
+        OWNER_GENERATED=yes
+    fi
     # Write .env directly so we don't depend on .env.example existing in the
     # checkout (some early commits accidentally gitignored it).
     cat > .env <<EOF
@@ -96,6 +107,11 @@ if [ ! -f .env ]; then
 # Required — random secrets baked in at install time
 SECRET_KEY=$JWT
 JWT_SECRET=$JWT
+
+# Platform owner, created on first boot only (never resets an existing owner)
+OWNER_EMAIL=$OWNER_EMAIL_VALUE
+OWNER_NAME=$OWNER_NAME_VALUE
+OWNER_PASSWORD=$OWNER_PASSWORD_VALUE
 NFC_SECRET_KEY=$NFC
 
 # Database
@@ -182,9 +198,15 @@ cat <<EOM
     - Cloudflare Tunnel for remote access (CLOUDFLARED_TOKEN)
     - Email / OCR / Sentry integrations
 
-  Default admin login:
+  Default admin login (inside the first organisation):
     Email:    admin@5812uganda.org
     Password: Admin@5812
   >>> Rotate this password under Settings → Security before going live. <<<
+
+  Platform owner (can move between organisations):
+    Email:    $(grep '^OWNER_EMAIL=' "$APPLIANCE/.env" | cut -d= -f2-)
+    Password: $(if [ "${OWNER_GENERATED:-no}" = yes ]; then grep '^OWNER_PASSWORD=' "$APPLIANCE/.env" | cut -d= -f2-; else echo "the one you supplied at install"; fi)
+  >>> Shown once. It is stored in $APPLIANCE/.env (chmod 600) and nowhere else. <<<
+  >>> See owners any time: sudo docker compose exec backend python scripts/create_super_admin.py --list <<<
 ────────────────────────────────────────────────────────────────────
 EOM

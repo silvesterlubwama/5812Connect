@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timezone
 import re
+from pymongo.errors import DuplicateKeyError
 import uuid
 
 from deps import (
@@ -61,11 +62,22 @@ class OrganizationUpdate(BaseModel):
 
 
 def _clean_hostnames(hostnames):
+    """Accept what people actually type: 'https://New.Lubwamas.org/' → 'new.lubwamas.org'.
+
+    Both the bare and the www form are kept, because the request hostname is
+    matched literally — someone typing www.lubwamas.org must land in the same
+    organisation as lubwamas.org."""
     out = []
     for h in hostnames or []:
         h = (h or "").strip().lower().replace("https://", "").replace("http://", "").strip("/")
-        if h:
+        h = h.split("/")[0].split(":")[0]
+        if not h:
+            continue
+        if h not in out:
             out.append(h)
+        twin = h[4:] if h.startswith("www.") else f"www.{h}"
+        if twin and twin not in out:
+            out.append(twin)
     return out
 
 
@@ -122,14 +134,22 @@ async def create_organization(
         "id": org_id,
         "name": data.name.strip(),
         "slug": slug,
-        "hostnames": hostnames,
         "status": "active",
         "created_at": now,
         "created_by": current_user.get("id"),
         "last_activity_at": now,
     }
+    if hostnames:
+        # Left out entirely when empty: the unique index indexes an empty array
+        # as a value, so two address-less organisations would collide.
+        org["hostnames"] = hostnames
     with org_bypass():
-        await raw_db.organizations.insert_one(dict(org))
+        try:
+            await raw_db.organizations.insert_one(dict(org))
+        except DuplicateKeyError:
+            # Two owners saving the same address at the same moment — the index
+            # is what actually guarantees one hostname, one organisation.
+            raise HTTPException(status_code=409, detail="That web address was just claimed by another organisation")
 
     # Seed the new tenant: its own campus and its own administrator. Created
     # inside org context so the proxy stamps them with the new organisation.
@@ -184,8 +204,20 @@ async def update_organization(
         updates["hostnames"] = hostnames
     if not updates:
         raise HTTPException(status_code=400, detail="Nothing to update")
+    mutation: dict = {}
+    if updates.get("hostnames") == []:
+        mutation["$unset"] = {"hostnames": ""}
+        updates = {k: v for k, v in updates.items() if k != "hostnames"}
+        if updates:
+            mutation["$set"] = updates
+        updates["hostnames"] = []
+    else:
+        mutation["$set"] = updates
     with org_bypass():
-        res = await raw_db.organizations.update_one({"id": org_id}, {"$set": updates})
+        try:
+            res = await raw_db.organizations.update_one({"id": org_id}, mutation)
+        except DuplicateKeyError:
+            raise HTTPException(status_code=409, detail="That web address was just claimed by another organisation")
     if not res.matched_count:
         raise HTTPException(status_code=404, detail="Organisation not found")
     await _audit(current_user.get("id"), "update", "organization", org_id, updates)

@@ -185,6 +185,34 @@ you have given Caddy a certificate — the tunnel leg is already encrypted.
 
 ---
 
+## B6. The platform owner on a new server
+
+A fresh server seeds the owner on first boot from its own `.env`:
+
+```bash
+cd /opt/connect/appliance
+grep '^OWNER_EMAIL=' .env            # who the owner is
+sudo docker compose exec backend python scripts/create_super_admin.py --list
+```
+
+`--list` shows every owner, which organisation they are currently inside and when
+the account was made. Passwords are hashed and cannot be read back; set a new one
+with:
+
+```bash
+sudo docker compose exec backend python scripts/create_super_admin.py \
+  --email silvesterlubwama@icloud.com --password 'a-new-passphrase'
+```
+
+Installing with your own owner password instead of a generated one:
+
+```bash
+OWNER_PASSWORD='a-long-passphrase' sudo -E bash install.sh
+```
+
+The owner value is used **once**, only when no owner exists — it is not a standing
+reset, so an old `.env` cannot be used to take over a running server.
+
 ## C. Point each organisation at its own address
 
 Once the hostname reaches the box, tell the app which organisation owns it:

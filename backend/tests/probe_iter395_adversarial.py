@@ -3,6 +3,23 @@ transfer, SVG logo XSS, activity total, hostname branding, logo content sniffing
 import os, time, uuid, requests
 from pymongo import MongoClient
 
+def _owner_pair():
+    env = {}
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "..", ".env")) as fh:
+            for line in fh:
+                if "=" in line and not line.strip().startswith("#"):
+                    k, _, v = line.strip().partition("=")
+                    env[k] = v
+    except OSError:
+        pass
+    return (os.environ.get("OWNER_EMAIL") or env.get("OWNER_EMAIL") or "",
+            os.environ.get("OWNER_PASSWORD") or env.get("OWNER_PASSWORD") or "")
+
+
+OWNER_EMAIL, OWNER_PASSWORD = _owner_pair()
+
+
 BASE = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 API = f"{BASE}/api"
 ORG_A = "c1f75976-4d8c-4958-8703-ff2ff0b3f7cf"
@@ -18,7 +35,7 @@ def login(i, p):
 
 
 H = lambda t: {"Authorization": f"Bearer {t}"}
-o = login("owner@5812global.org", "Owner@5812!")
+o = login(OWNER_EMAIL, OWNER_PASSWORD)
 o = requests.post(f"{API}/organizations/{ORG_A}/enter", headers=H(o)).json()["token"]
 b = login("admin@lubwamas.org", "Lubwama@2026")
 

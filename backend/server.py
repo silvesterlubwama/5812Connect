@@ -794,6 +794,12 @@ async def startup():
         logger.warning(f"PIN migration bootstrap skipped: {e}")
     # iter226 — every 15 min refresh flight status for departed/shipped shipments
     asyncio.create_task(_run_flight_status_refresh_loop())
+    # A fresh deployment has no way in until the platform owner exists.
+    try:
+        from owner_bootstrap import ensure_platform_owner
+        await ensure_platform_owner()
+    except Exception as e:
+        logger.warning(f"Owner bootstrap skipped: {e}")
     # Defer heavy seeding so the app becomes ready immediately
     asyncio.create_task(_seed_initial_data())
 

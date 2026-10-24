@@ -375,7 +375,22 @@ async def _ensure_audit_ttl_index():
         logger.info(f"audit_log TTL left as-is (pre-existing index): {e.__class__.__name__}")
 
 
+async def _ensure_organization_indexes():
+    """The tenant registry. One web address can only ever belong to one
+    organisation — enforced here, not just by a check-then-write in the router,
+    which two owners saving at the same moment could both pass."""
+    # Stored as an absent field (never an empty array) when an organisation has
+    # no address yet, because a unique index indexes [] as a value and the
+    # second address-less organisation would collide.
+    await db.organizations.update_many({"hostnames": []}, {"$unset": {"hostnames": ""}})
+    await _recreate_index(db.organizations, "hostname_unique", [("hostnames", 1)],
+                          unique=True, sparse=True)
+    await db.organizations.create_index("slug", unique=True)
+    await db.organizations.create_index([("status", 1), ("is_default", -1)])
+
+
 _INDEX_GROUPS = (
+    ("organizations", _ensure_organization_indexes),
     ("people", _ensure_people_indexes),
     ("scheduling", _ensure_scheduling_indexes),
     ("tasks", _ensure_task_indexes),

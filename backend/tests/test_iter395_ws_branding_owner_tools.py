@@ -15,8 +15,28 @@ from pymongo import MongoClient
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
 API = f"{BASE_URL}/api"
 WS_BASE = BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+# Host-header tests must bypass the preview ingress, which routes on Host itself
+# and would answer with its own 404 before the app ever sees the request.
+LOCAL = os.environ.get("TEST_LOCAL_BASE", "http://localhost:8001")
 
-OWNER = {"identifier": "owner@5812global.org", "password": "Owner@5812!"}
+def _owner_creds():
+    env = {}
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "..", ".env")) as fh:
+            for line in fh:
+                if "=" in line and not line.strip().startswith("#"):
+                    k, _, v = line.strip().partition("=")
+                    env[k] = v
+    except OSError:
+        pass
+    email = os.environ.get("OWNER_EMAIL") or env.get("OWNER_EMAIL")
+    password = os.environ.get("OWNER_PASSWORD") or env.get("OWNER_PASSWORD")
+    if not email or not password:
+        pytest.skip("OWNER_EMAIL/OWNER_PASSWORD not configured", allow_module_level=True)
+    return {"identifier": email, "password": password}
+
+
+OWNER = _owner_creds()
 A_ADMIN = {"identifier": "admin@5812uganda.org", "password": "Admin@5812"}
 B_ADMIN = {"identifier": "admin@lubwamas.org", "password": "Lubwama@2026"}
 A_MEMBER = {"identifier": "member@5812uganda.org", "password": "Member@5812"}
@@ -319,3 +339,73 @@ class TestIsolationRegression:
         r = requests.put(f"{API}/admin/users/{S['a_id']}", headers=H(S["b_tok"]), timeout=30,
                          json={"name": "hijack"})
         assert r.status_code == 404
+
+
+# ── iter396: one web address, one organisation ──────────────────────────────
+
+def test_hostname_is_normalised_and_www_twin_added():
+    """Whatever the owner types, the stored address is what a browser sends —
+    and the www form lands in the same organisation."""
+    h = H(_login(OWNER)["token"])
+    orgs = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
+    lub = next(o for o in orgs if o["name"] == "Lubwamas")
+    original = lub.get("hostnames") or []
+    try:
+        r = requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
+                         json={"hostnames": ["https://Probe396.Lubwamas.org/"]})
+        assert r.status_code == 200, r.text
+        saved = r.json()["updates"]["hostnames"]
+        assert "probe396.lubwamas.org" in saved
+        assert "www.probe396.lubwamas.org" in saved
+        for host in ("probe396.lubwamas.org", "www.probe396.lubwamas.org"):
+            b = requests.get(f"{LOCAL}/api/admin/system-settings/public",
+                             headers={"Host": host}, timeout=30)
+            assert b.status_code == 200
+    finally:
+        requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
+                     json={"hostnames": original})
+
+
+def test_two_organisations_cannot_share_one_address():
+    h = H(_login(OWNER)["token"])
+    orgs = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
+    lub = next(o for o in orgs if o["name"] == "Lubwamas")
+    other = next(o for o in orgs if o["id"] != lub["id"])
+    taken = (lub.get("hostnames") or ["new.lubwamas.org"])[0]
+    original = other.get("hostnames") or []
+    r = requests.put(f"{API}/organizations/{other['id']}", headers=h, timeout=30,
+                     json={"hostnames": [taken]})
+    assert r.status_code == 409, r.text
+    assert "already belongs" in r.json()["detail"]
+    # and the loser's own addresses are untouched
+    after = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
+    assert (next(o for o in after if o["id"] == other["id"]).get("hostnames") or []) == original
+
+
+def test_clearing_addresses_twice_does_not_collide():
+    """Two organisations with no address at all must both be allowed — the
+    unique index treats an empty array as a value, so they are stored as absent."""
+    h = H(_login(OWNER)["token"])
+    orgs = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
+    lub = next(o for o in orgs if o["name"] == "Lubwamas")
+    original = lub.get("hostnames") or []
+    try:
+        for _ in range(2):
+            r = requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
+                             json={"hostnames": []})
+            assert r.status_code == 200, r.text
+    finally:
+        requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
+                     json={"hostnames": original})
+
+
+def test_signing_in_on_another_organisations_address_is_refused():
+    lub_host = "new.lubwamas.org"
+    wrong = requests.post(f"{LOCAL}/api/auth/login", headers={"Host": lub_host}, timeout=30,
+                          json={"identifier": A_ADMIN["identifier"],
+                                "password": A_ADMIN["password"]})
+    assert wrong.status_code == 401, wrong.text
+    right = requests.post(f"{LOCAL}/api/auth/login", headers={"Host": lub_host}, timeout=30,
+                          json={"identifier": B_ADMIN["identifier"],
+                                "password": B_ADMIN["password"]})
+    assert right.status_code == 200, right.text

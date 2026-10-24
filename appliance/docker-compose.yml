@@ -45,6 +45,12 @@ services:
       # same secret, so existing sessions and PIN digests keep working.
       SECRET_KEY: ${SECRET_KEY:-${JWT_SECRET:-}}
       JWT_SECRET: ${JWT_SECRET}
+      # First-boot platform owner. Used once, only when no owner exists yet;
+      # it never resets an existing one. Lives in this box's .env (chmod 600),
+      # never in the repository or the image.
+      OWNER_EMAIL: ${OWNER_EMAIL:-}
+      OWNER_NAME: ${OWNER_NAME:-}
+      OWNER_PASSWORD: ${OWNER_PASSWORD:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SENDER_EMAIL: ${SENDER_EMAIL:-}
       EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY:-}
