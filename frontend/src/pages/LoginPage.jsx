@@ -142,7 +142,9 @@ export default function LoginPage() {
             {orgChoices ? (
               <div className="space-y-3" data-testid="org-picker">
                 <p className="text-sm text-muted-foreground">
-                  You oversee more than one organisation. Open one at a time — nothing is shared between them.
+                  {orgChoices.length
+                    ? 'You oversee more than one organisation. Open one at a time — nothing is shared between them.'
+                    : 'There is no organisation on this site yet. One is created automatically when the server starts — try signing in again in a moment.'}
                 </p>
                 {orgChoices.map(org => (
                   <button
@@ -159,6 +161,15 @@ export default function LoginPage() {
                     </span>
                   </button>
                 ))}
+                {!orgChoices.length && (
+                  <Button
+                    type="button" variant="outline" className="w-full"
+                    onClick={() => setOrgChoices(null)}
+                    data-testid="org-picker-back"
+                  >
+                    Back to sign-in
+                  </Button>
+                )}
               </div>
             ) : (
             <>

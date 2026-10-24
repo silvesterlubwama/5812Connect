@@ -136,7 +136,11 @@ class TestFreshBootstrap:
         assert res["orgs"] == [["58:12 Global", "5812global", True, "active"]]
         assert res["owners"] == [[OWNER_EMAIL.lower(), None]]
         assert all(c < 500 for c in res["codes"].values()), res["codes"]
-        assert res["owner_login"] == {"requires_org_selection": True, "orgs": 1}
+        # With one organisation there is nothing to choose: the owner is signed
+        # straight in. An empty or single-item picker was a dead end.
+        assert res["owner_login"]["status"] == 200, res["owner_login"]
+        assert res["owner_login"]["requires_org_selection"] is False, res["owner_login"]
+        assert res["owner_login"]["signed_in"] is True, res["owner_login"]
         assert res["scratch_db"] not in MongoClient(MONGO_URL).list_database_names()
 
     def test_live_db_untouched(self):
@@ -390,3 +394,129 @@ def test_passkey_endpoints_never_return_500_on_junk():
                     {"response": {"clientDataJSON": "eyJjaGFsbGVuZ2UiOiJ4eXoifQ"}}):
         r = requests.post(f"{API}/webauthn/authenticate/complete", json=payload, timeout=20)
         assert r.status_code == 400, f"{payload} -> {r.status_code} {r.text[:120]}"
+
+
+# ── iter397: accounts that predate organisations must just sign in ──────────
+
+def test_account_without_an_organisation_is_attached_on_sign_in():
+    """Every account on a pre-tenancy deployment looks like this. Their password
+    is valid and there is exactly one place they can belong to, so refusing them
+    with "contact your administrator" was a dead end — nothing an administrator
+    could do from inside the app would fix it."""
+    import subprocess
+    import sys
+    db = _db()
+    email = "legacy.iter397@5812uganda.org"
+    pw = "Legacy@2026!"
+    pw_hash = subprocess.run(
+        [sys.executable, "-c", f"from deps import hash_password;print(hash_password('{pw}'))"],
+        capture_output=True, text=True, cwd=os.path.join(os.path.dirname(__file__), ".."),
+    ).stdout.strip()
+    db.users.delete_many({"email": email})
+    db.users.insert_one({"id": "legacy-iter397", "name": "Legacy iter397", "email": email,
+                         "password_hash": pw_hash, "role": "admin", "status": "active"})
+    # conftest stamps direct inserts; strip it so this really is a pre-tenancy row
+    db.users.update_one({"id": "legacy-iter397"}, {"$unset": {"organization_id": ""}})
+    try:
+        assert "organization_id" not in db.users.find_one({"id": "legacy-iter397"}, {"_id": 0})
+        r = requests.post(f"{API}/auth/login", json={"identifier": email, "password": pw}, timeout=30)
+        assert r.status_code == 200, r.text
+        token = r.json()["token"]
+        default_org = db.organizations.find_one({"is_default": True}, {"_id": 0, "id": 1})
+        assert db.users.find_one({"id": "legacy-iter397"}, {"_id": 0})["organization_id"] == default_org["id"]
+        # and the app is usable afterwards, not just the sign-in
+        h = {"Authorization": f"Bearer {token}"}
+        assert requests.get(f"{API}/auth/me", headers=h, timeout=20).status_code == 200
+        assert requests.get(f"{API}/members?limit=2", headers=h, timeout=20).status_code == 200
+    finally:
+        db.users.delete_many({"id": "legacy-iter397"})
+
+
+def test_owner_with_a_single_organisation_skips_the_picker():
+    """Asking "which organisation?" when there is one — or none, as a freshly
+    upgraded deployment had — leaves the owner stuck on an empty list."""
+    db = _db()
+    owner = db.users.find_one({"role": "super_admin"}, {"_id": 0, "id": 1})
+    hidden = db.organizations.find_one_and_delete({"is_default": {"$ne": True}})
+    try:
+        db.users.update_one({"id": owner["id"]}, {"$set": {"active_organization_id": None}})
+        r = requests.post(f"{API}/auth/login", json=OWNER, timeout=30)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert not body.get("requires_org_selection"), body
+        assert body.get("token")
+        me = requests.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {body['token']}"},
+                          timeout=20).json()
+        assert me.get("active_organization_id")
+    finally:
+        if hidden:
+            hidden.pop("_id", None)
+            db.organizations.insert_one(hidden)
+        db.users.update_one({"id": owner["id"]}, {"$set": {"active_organization_id": None}})
+
+
+def test_owner_with_several_organisations_is_still_asked():
+    r = requests.post(f"{API}/auth/login", json=OWNER, timeout=30)
+    assert r.status_code == 200, r.text
+    assert r.json().get("requires_org_selection") is True
+    assert len(r.json().get("organizations", [])) >= 2
+
+
+# ── iter397: moving a whole organisation between apps ───────────────────────
+
+def test_export_and_import_moves_rows_settings_and_files():
+    """What "move an organisation to another app" has to mean: the copy opens
+    with its own settings, its branding intact and its images actually loading.
+    Rows alone left the other server full of broken pictures."""
+    import io
+    h = H(_login(OWNER)["token"])
+    lub_admin = _login(B_ADMIN)
+    lh = H(lub_admin["token"])
+
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c6360000002000100ff03000006000557bfabd400000000"
+        "49454e44ae426082")
+    up = requests.post(f"{API}/admin/system-settings/branding/logo", headers=lh, timeout=60,
+                       files={"file": ("probe397.png", io.BytesIO(png), "image/png")})
+    assert up.status_code == 200, up.text
+    logo_url = up.json()["url"]
+    requests.put(f"{API}/admin/system-settings", headers=lh, timeout=30,
+                 json={"branding": {"app_name": "Lubwamas", "logo_url": logo_url}})
+
+    orgs = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
+    src = next(o for o in orgs if o["name"] == "Lubwamas")
+    exp = requests.get(f"{API}/organizations/{src['id']}/export", headers=h, timeout=300)
+    assert exp.status_code == 200, exp.text
+    dump = exp.json()
+    assert dump["document_count"] > 0
+    assert logo_url.split("/api/storage/")[-1] in dump["files"], "the logo was not in the export"
+    assert dump["files_missing"] == []
+
+    dump["organization"] = dict(dump["organization"], name="PROBE iter397 move", slug="probeiter397")
+    imp = requests.post(f"{API}/organizations/import", headers=h, json=dump, timeout=600)
+    assert imp.status_code == 200, imp.text
+    body = imp.json()
+    new_id = body["organization"]["id"]
+    try:
+        assert body["restored_documents"] == dump["document_count"]
+        assert body["restored_files"] == dump["file_count"]
+        # the copy is a separate organisation, never the default one
+        assert body["organization"].get("is_default") is not True
+        assert body["organization"]["hostnames"] == []
+
+        assert requests.post(f"{API}/organizations/{new_id}/enter", headers=h, timeout=30).status_code == 200
+        branding = requests.get(f"{API}/admin/system-settings", headers=h, timeout=30).json()["branding"]
+        # settings are a singleton keyed by a fixed id — re-minting it lost them
+        assert branding["app_name"] == "Lubwamas", branding
+        assert branding["logo_url"] and branding["logo_url"] != logo_url, "logo link was not rewritten"
+        img = requests.get(f"{LOCAL}{branding['logo_url']}", timeout=60)
+        assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+        assert img.content == png, "the restored image is not the file that was uploaded"
+        assert requests.get(f"{API}/members?limit=3", headers=h, timeout=30).status_code == 200
+    finally:
+        requests.post(f"{API}/organizations/exit", headers=h, timeout=30)
+        requests.post(f"{API}/organizations/{new_id}/status", headers=h,
+                      json={"status": "suspended"}, timeout=60)
+        requests.delete(f"{API}/organizations/{new_id}", headers=h,
+                        params={"confirm": "probeiter397"}, timeout=300)

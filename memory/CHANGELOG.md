@@ -1,5 +1,35 @@
 # CHANGELOG
 
+## 2026-10-24 — sign-in self-heals, and moving an organisation between apps actually moves it
+Sign-in (answers "existing users keep being told to use the organisation web address"):
+- An account with no `organization_id` — i.e. every account on a deployment that
+  predates multi-tenancy — is now attached to the hostname's organisation, or the
+  default one, and signed in. It used to be refused with "contact your administrator",
+  which no administrator could fix from inside the app.
+- The owner is no longer shown a picker when there is one organisation (or none, as the
+  freshly upgraded live site had): they are signed straight in. With several, the picker
+  still appears. The login page also explains an empty list instead of showing nothing.
+- Verified end to end: a pre-tenancy account signs in, is attached to 58:12 Global and can
+  immediately use the app; the owner with one organisation skips the picker; with two it
+  still appears; a tenant user on another organisation's address is still refused.
+
+Moving a whole organisation to another app (export/import existed; it was incomplete):
+- Exports now include the organisation's **uploaded files** (logos, scans, photos) as
+  base64, pulled from object storage with a disk fallback, capped by
+  `ORG_EXPORT_MAX_FILE_BYTES` (default 150 MB) and anything past the cap listed in
+  `files_missing` so nothing is silently lost. Import writes them back under the new
+  organisation's prefix and rewrites every link that pointed at the old path.
+- Import bug fixed: it re-minted the id of **every** row, including singleton documents
+  addressed by a fixed name — the settings row is literally id `default` — so a restored
+  copy came back with no branding at all. Only uuid-shaped ids are re-minted now.
+- Verified: 58:12 Global exports as 13.1 MB / 31,657 documents and imports back as a
+  complete, separate organisation (31,514 documents restored, then hard-deleted); a
+  Lubwamas copy opens with its own app name, its logo link rewritten, and the image
+  downloading byte-for-byte identical to the one uploaded.
+- Tests: `test_iter396_google_passkey_bootstrap.py` now 32 passed, 1 skipped, including
+  the full move with files and the pre-tenancy sign-in cases.
+
+
 ## 2026-10-24 — "Google sign-in bounces back to login" + "passkeys are error 500" (both fixed)
 One root cause, confirmed against production by the deployer agent: **the live
 database had no organisation at all.** The scoped-DB proxy requires an active

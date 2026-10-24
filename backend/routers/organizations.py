@@ -8,6 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timezone
+import asyncio
+import base64
+import os
 import re
 from pymongo.errors import DuplicateKeyError
 import uuid
@@ -22,6 +25,9 @@ from deps import (
     org_as,
     logger,
 )
+from storage import get_object
+from upload_helper import save_upload
+from upload_helper import UPLOAD_ROOT
 from org_context import UNSCOPED_COLLECTIONS
 
 router = APIRouter(prefix="/api")
@@ -275,14 +281,82 @@ async def export_organization(
             if rows:
                 data[name] = rows
                 total += len(rows)
-    await _audit(current_user.get("id"), "export", "organization", org_id, {"documents": total})
+    # Rows alone are not the whole organisation: logos, receipt scans and photos
+    # live in storage, and a move that left them behind would land on the other
+    # server with broken images everywhere.
+    files, files_bytes, missing = await _collect_files(data)
+    await _audit(current_user.get("id"), "export", "organization", org_id,
+                 {"documents": total, "files": len(files)})
     return {
         "format": "5812-org-export/v1",
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "organization": org,
         "collections": data,
         "document_count": total,
+        "files": files,
+        "file_count": len(files),
+        "file_bytes": files_bytes,
+        "files_missing": missing,
     }
+
+
+FILE_URL_RE = re.compile(r"/api/(?:storage|uploads)/([A-Za-z0-9._\-/]+)")
+MAX_EXPORT_FILE_BYTES = int(os.environ.get("ORG_EXPORT_MAX_FILE_BYTES", 150 * 1024 * 1024))
+
+
+async def _collect_files(collections: dict):
+    """Pull every uploaded file the exported rows point at, as base64.
+
+    Capped (ORG_EXPORT_MAX_FILE_BYTES): past the cap the paths are still listed
+    under `files_missing`, so the operator knows exactly what to copy by hand
+    rather than discovering it later."""
+    paths: list[str] = []
+    seen = set()
+
+    def walk(value):
+        if isinstance(value, str):
+            for m in FILE_URL_RE.finditer(value):
+                p = m.group(1)
+                if p not in seen:
+                    seen.add(p)
+                    paths.append(p)
+        elif isinstance(value, dict):
+            for v in value.values():
+                walk(v)
+        elif isinstance(value, list):
+            for v in value:
+                walk(v)
+
+    walk(collections)
+
+    files: dict[str, dict] = {}
+    total_bytes = 0
+    missing: list[str] = []
+    for path in paths:
+        if total_bytes >= MAX_EXPORT_FILE_BYTES:
+            missing.append(path)
+            continue
+        blob = None
+        content_type = "application/octet-stream"
+        try:
+            blob, content_type = await asyncio.to_thread(get_object, path)
+        except Exception:
+            local = os.path.join(UPLOAD_ROOT, path)
+            if os.path.isfile(local):
+                try:
+                    with open(local, "rb") as fh:
+                        blob = fh.read()
+                except OSError:
+                    blob = None
+        if not blob:
+            missing.append(path)
+            continue
+        total_bytes += len(blob)
+        files[path] = {
+            "content_type": content_type,
+            "data": base64.b64encode(blob).decode("ascii"),
+        }
+    return files, total_bytes, missing
 
 
 @router.post("/organizations/import")
@@ -302,17 +376,33 @@ async def import_organization(payload: dict, current_user: dict = Depends(requir
     # Record ids are globally unique, so a restore cannot reuse them while the
     # original still exists. Mint a fresh id for every row and rewrite any
     # field that referenced an old one, so internal links survive the copy.
+    # Uploaded files come back under this organisation's own storage prefix, and
+    # every row that pointed at the old path is rewritten to the new one.
+    file_map = await _restore_files(payload.get("files") or {}, new_id)
+
+    # Only generated row ids are re-minted. Singleton documents are addressed by
+    # a fixed name — the settings row is literally id "default" — and renaming
+    # those loses them: the copy came back with no branding at all.
+    UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
     id_map = {}
     for rows in collections.values():
         if not isinstance(rows, list):
             continue
         for r in rows:
-            if isinstance(r, dict) and isinstance(r.get("id"), str):
-                id_map[r["id"]] = str(uuid.uuid4())
+            rid = r.get("id") if isinstance(r, dict) else None
+            if isinstance(rid, str) and UUID_RE.match(rid):
+                id_map[rid] = str(uuid.uuid4())
 
     def _remap(value):
         if isinstance(value, str):
-            return id_map.get(value, value)
+            mapped = id_map.get(value)
+            if mapped is not None:
+                return mapped
+            for old_path, new_url in file_map.items():
+                if old_path in value:
+                    value = value.replace(f"/api/storage/{old_path}", new_url)
+                    value = value.replace(f"/api/uploads/{old_path}", new_url)
+            return value
         if isinstance(value, list):
             return [_remap(v) for v in value]
         if isinstance(value, dict):
@@ -356,9 +446,36 @@ async def import_organization(payload: dict, current_user: dict = Depends(requir
                     restored += len(docs)
                 except Exception as e:
                     logger.warning(f"Import: {name} partially failed: {e}")
-    await _audit(current_user.get("id"), "import", "organization", new_id, {"documents": restored, "slug": slug})
+    await _audit(current_user.get("id"), "import", "organization", new_id,
+                 {"documents": restored, "slug": slug, "files": len(file_map)})
     org.pop("_id", None)
-    return {"organization": org, "restored_documents": restored}
+    return {
+        "organization": org,
+        "restored_documents": restored,
+        "restored_files": len(file_map),
+        "files_not_in_export": payload.get("files_missing") or [],
+    }
+
+
+async def _restore_files(files: dict, org_id: str) -> dict:
+    """Write the exported files back and return {old path: new URL}."""
+    out: dict[str, str] = {}
+    for path, blob in (files or {}).items():
+        if not isinstance(blob, dict) or not blob.get("data"):
+            continue
+        try:
+            raw = base64.b64decode(blob["data"])
+        except Exception:
+            continue
+        filename = path.rsplit("/", 1)[-1]
+        try:
+            url = await save_upload(f"imported/{org_id}", filename, raw,
+                                    blob.get("content_type") or "application/octet-stream")
+        except Exception as e:
+            logger.warning(f"Import: could not restore file {path}: {e}")
+            continue
+        out[path] = url
+    return out
 
 
 @router.delete("/organizations/{org_id}")

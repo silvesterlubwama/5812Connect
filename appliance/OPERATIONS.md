@@ -213,6 +213,48 @@ OWNER_PASSWORD='a-long-passphrase' sudo -E bash install.sh
 The owner value is used **once**, only when no owner exists — it is not a standing
 reset, so an old `.env` cannot be used to take over a running server.
 
+## B7. Where the owner password lives, and moving an organisation
+
+**Setting or changing the owner password** — one file, one command:
+
+| Where | What |
+|---|---|
+| This server | `/opt/connect/appliance/.env` → `OWNER_PASSWORD` (plus `OWNER_EMAIL`, `OWNER_NAME`). Read **once**, on first boot, when no owner exists. |
+| Change it later | `sudo docker compose exec backend python scripts/create_super_admin.py --email <owner@…> --password '<new>'` |
+| See the owners | `sudo docker compose exec backend python scripts/create_super_admin.py --list` |
+| Emergent-hosted copy | the app key `OWNER_PASSWORD`, set from the chat's secure card |
+
+It is never in the code or the image. Keep `.env` at `chmod 600`.
+
+**Moving a whole organisation to another installation** — in the app, as the owner:
+
+1. **Organisations → Export** on the organisation. A JSON file downloads containing
+   every row *and* every uploaded file (logos, scans, photos).
+2. On the other installation: **Organisations → Import organisation** and choose
+   that file.
+3. The copy arrives as a **separate** organisation: new id, no web address, never the
+   default one, and its people sign in only once you assign it an address and they have
+   accounts there. The original is untouched — exporting never moves or deletes.
+4. Then delete the original if you are migrating: suspend it first, then delete and type
+   its slug to confirm. **Export again immediately before deleting** — a delete keeps no copy.
+
+A very large organisation produces a large file (58:12 Global is ~13 MB of rows plus its
+files). If an upload is rejected for size, raise the proxy body limit, or move the
+database and `./data/uploads` folder directly:
+
+```bash
+# on the old box
+sudo docker compose exec -T mongo mongodump --archive --gzip --db connect > move.archive.gz
+sudo tar czf uploads.tar.gz -C data uploads
+# on the new box, after installing
+sudo docker compose exec -T mongo mongorestore --archive --gzip --drop < move.archive.gz
+sudo tar xzf uploads.tar.gz -C data
+sudo docker compose restart backend
+```
+
+That moves **everything**, including all organisations; the export/import route is for
+moving **one** organisation out of several.
+
 ## C. Point each organisation at its own address
 
 Once the hostname reaches the box, tell the app which organisation owns it:

@@ -162,6 +162,25 @@ async def _resolve_login_org(user: dict, host_org: dict):
                 {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1}
             ).sort("name", 1).to_list(500)
         active = user.get("active_organization_id")
+        if len(orgs) == 1 and (not active or not any(o["id"] == active for o in orgs)):
+            # Nothing to choose between. Asking "which organisation?" with a
+            # single option — or with none at all, as a freshly upgraded
+            # deployment had — is a dead end, not a safeguard.
+            only = orgs[0]
+            if only.get("status") == "suspended":
+                raise HTTPException(status_code=403, detail=f"{only.get('name')} is suspended")
+            with org_bypass():
+                await raw_db.users.update_one(
+                    {"id": user["id"]}, {"$set": {"active_organization_id": only["id"]}}
+                )
+                org = await raw_db.organizations.find_one({"id": only["id"]}, {"_id": 0})
+            return only["id"], org or {}, None
+        if not orgs:
+            raise HTTPException(
+                status_code=503,
+                detail="This site has no organisation yet. It is created automatically when the "
+                       "server starts — please try again in a moment.",
+            )
         if not active or not any(o["id"] == active for o in orgs):
             return None, None, {"requires_org_selection": True, "organizations": orgs}
         with org_bypass():
@@ -172,10 +191,27 @@ async def _resolve_login_org(user: dict, host_org: dict):
 
     org_id = user.get("organization_id")
     if not org_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Your account is not attached to an organisation. Contact your administrator.",
-        )
+        # An account that predates organisations. Their credentials are valid and
+        # there is exactly one place they can belong to — the organisation this
+        # address maps to, or the default one. Refusing them with "contact your
+        # administrator" was wrong: there was nothing an administrator could do
+        # from inside the app.
+        fallback = host_org
+        if not fallback:
+            with org_bypass():
+                fallback = await raw_db.organizations.find_one(
+                    {"status": "active", "is_default": True}, {"_id": 0}
+                ) or await raw_db.organizations.find_one({"status": "active"}, {"_id": 0})
+        if not fallback:
+            raise HTTPException(
+                status_code=503,
+                detail="This site has no organisation yet. It is created automatically when the "
+                       "server starts — please try again in a moment.",
+            )
+        org_id = fallback["id"]
+        with org_bypass():
+            await raw_db.users.update_one({"id": user["id"]}, {"$set": {"organization_id": org_id}})
+        logger.info("Attached pre-organisation account %s to %s", user.get("email"), fallback.get("name"))
     if host_org and host_org["id"] != org_id:
         raise HTTPException(status_code=403, detail="This account does not belong to this site")
     with org_bypass():
