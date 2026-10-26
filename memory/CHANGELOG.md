@@ -2695,3 +2695,19 @@ untouched so the ledger is unchanged). 3 real campuses remain.
 
 **Note:** iter385's tests return 429 if the whole suite is run back to back — that is the
 login rate limiter, not a regression. Re-run that file on its own.
+
+## 2026-10-24 — Owner shown an empty "choose an organisation" screen (Ubuntu)
+- Cause: that server upgraded before the first-boot bootstrap existed, so it had
+  all its data but no row in `organizations`. The old build then rendered the
+  picker with nothing in it — exactly the blank card in the user's screenshot.
+- Login now self-heals instead of depending on startup alone: when no
+  organisation exists, `_resolve_login_org` calls `ensure_default_organization()`
+  (creating organisation #1 and adopting pre-organisation rows) and signs the
+  owner straight in. Same fallback for accounts that predate organisations.
+- Fixed `/api/health` reporting `unhealthy` — it pinged through the org-scoped
+  proxy (`'OrgScopedCollection' object is not callable`); it now uses `raw_db`.
+- Verified: owner + legacy login against an emptied `organizations` collection
+  both resolve to a newly created `58:12 Global`; preview picker renders both
+  organisations; health returns `healthy`.
+- The Ubuntu server still needs this code: `docker compose pull` only sees images
+  built from `main`/`master` or a `v*` tag, and this work is on branch `5812`.

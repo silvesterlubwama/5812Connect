@@ -81,7 +81,7 @@ async def health_check():
     # --- DB ping ---
     db_status = {"ok": False}
     try:
-        await asyncio.wait_for(db.command("ping"), timeout=2.0)
+        await asyncio.wait_for(raw_db.command("ping"), timeout=2.0)
         db_status = {"ok": True, "latency_ms": round((_time_mod.time() - started) * 1000, 1)}
     except Exception as e:
         db_status = {"ok": False, "error": str(e)[:200]}

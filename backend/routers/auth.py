@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pin_security import pin_digest, pin_query, pin_matches
 from deps import SECRET_KEY, db, raw_db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit, can_view_pay, is_super_admin, org_for_hostname, org_bypass, set_current_org
 from models import UserRegister, UserLogin
+from org_bootstrap import ensure_default_organization
 from datetime import datetime, timezone, timedelta
 import uuid
 
@@ -161,6 +162,15 @@ async def _resolve_login_org(user: dict, host_org: dict):
             orgs = await raw_db.organizations.find(
                 {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1}
             ).sort("name", 1).to_list(500)
+        if not orgs:
+            # A deployment upgraded before the first-boot bootstrap existed has
+            # data but no organisation, and the owner was shown an empty "choose
+            # an organisation" screen. Create organisation #1 here and carry on.
+            await ensure_default_organization()
+            with org_bypass():
+                orgs = await raw_db.organizations.find(
+                    {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1}
+                ).sort("name", 1).to_list(500)
         active = user.get("active_organization_id")
         if len(orgs) == 1 and (not active or not any(o["id"] == active for o in orgs)):
             # Nothing to choose between. Asking "which organisation?" with a
@@ -209,6 +219,12 @@ async def _resolve_login_org(user: dict, host_org: dict):
             fallback = await raw_db.organizations.find_one(
                 {"status": "active", "is_default": True}, {"_id": 0}
             ) or await raw_db.organizations.find_one({"status": "active"}, {"_id": 0})
+        if not fallback:
+            await ensure_default_organization()
+            with org_bypass():
+                fallback = await raw_db.organizations.find_one(
+                    {"status": "active", "is_default": True}, {"_id": 0}
+                ) or await raw_db.organizations.find_one({"status": "active"}, {"_id": 0})
         if not fallback:
             raise HTTPException(
                 status_code=503,
