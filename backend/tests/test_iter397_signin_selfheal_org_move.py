@@ -143,12 +143,14 @@ class TestPreTenancySignIn:
 
 
 class TestOwnerPicker:
-    def test_two_orgs_no_active_shows_picker(self, owner):
+    def test_main_address_opens_the_default_org(self, owner):
+        # The main web address belongs to the default organisation until a
+        # subdomain is set up, so the owner lands in it rather than facing a
+        # picker; switching happens from the Organisations console.
         _db().users.update_one({"email": OWNER["identifier"].lower()}, {"$set": {"active_organization_id": None}})
         j = _login(OWNER).json()
-        assert j.get("requires_org_selection") is True
-        ids = {o["id"] for o in j["organizations"]}
-        assert {ORG_A, ORG_B} <= ids
+        assert not j.get("requires_org_selection"), j
+        assert j["user"]["organization_id"] == ORG_A
 
     def test_owner_with_active_org_goes_straight_in(self, owner):
         _db().users.update_one({"email": OWNER["identifier"].lower()}, {"$set": {"active_organization_id": ORG_B}})

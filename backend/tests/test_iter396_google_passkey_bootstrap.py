@@ -301,17 +301,14 @@ class TestSignInRegression:
         assert d.users.find_one({"id": S["b_id"]})["organization_id"] == ORG_B
 
     def test_owner_org_selection_and_enter_one(self):
-        # an owner who never left an organisation is put straight back into it;
-        # start from "not entered" so the picker path is exercised (restored below)
+        # On the main address the owner lands in the default organisation, then
+        # moves between organisations one at a time from the console.
         orig = _db().users.find_one({"email": OWNER_EMAIL.lower()}, {"_id": 0, "active_organization_id": 1})
         _db().users.update_one({"email": OWNER_EMAIL.lower()}, {"$set": {"active_organization_id": None}})
         j = _login(OWNER)
-        assert j.get("requires_org_selection") is True
-        org_ids = [o["id"] for o in j["organizations"]]
-        assert ORG_A in org_ids and ORG_B in org_ids
+        assert not j.get("requires_org_selection"), j
+        assert j["user"]["organization_id"] == ORG_A
         tok = j["token"]
-        # picker-only token cannot read tenant data yet
-        assert requests.get(f"{API}/members", headers=H(tok), timeout=30).status_code in (401, 403)
         try:
             r = requests.post(f"{API}/organizations/{ORG_B}/enter", headers=H(tok), timeout=30)
             assert r.status_code == 200, r.text[:200]
@@ -444,17 +441,18 @@ def test_account_without_an_organisation_is_attached_on_sign_in():
         db.users.delete_many({"id": "legacy-iter397"})
 
 
-def test_owner_with_several_organisations_is_still_asked():
-    # Leave no organisation entered first, so this does not depend on whatever
-    # a previous test left behind.
+def test_owner_on_the_main_address_lands_in_the_default_org():
+    # Subdomains cannot be set up before an organisation exists, so the main web
+    # address belongs to the default organisation and never shows a picker.
     first = requests.post(f"{API}/auth/login", json=OWNER, timeout=30).json()
     if first.get("token"):
         requests.post(f"{API}/organizations/exit",
                       headers={"Authorization": f"Bearer {first['token']}"}, timeout=30)
     r = requests.post(f"{API}/auth/login", json=OWNER, timeout=30)
     assert r.status_code == 200, r.text
-    assert r.json().get("requires_org_selection") is True
-    assert len(r.json().get("organizations", [])) >= 2
+    j = r.json()
+    assert not j.get("requires_org_selection"), j
+    assert j["user"]["organization_id"] == ORG_A
 
 
 # ── iter397: moving a whole organisation between apps ───────────────────────

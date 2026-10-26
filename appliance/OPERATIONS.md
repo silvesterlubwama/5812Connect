@@ -300,3 +300,12 @@ Addresses you have **not** assigned fall back to the default organisation
 | Manual backup | see A2 |
 
 Never run `docker compose down -v` — the `-v` destroys the database.
+
+## Web addresses
+
+The main domain needs no setup: any address not claimed by an organisation is
+treated as the **default** organisation's address, so the owner signs in there
+and lands straight in it. Give an organisation its own subdomain later in
+*Organisations → Edit → Web addresses*, then route that hostname to `caddy:80`
+in the Cloudflare Tunnel. Once an address is claimed, only that organisation's
+own people can sign in on it.

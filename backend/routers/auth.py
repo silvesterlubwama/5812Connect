@@ -160,7 +160,7 @@ async def _resolve_login_org(user: dict, host_org: dict):
             return host_org["id"], host_org, None
         with org_bypass():
             orgs = await raw_db.organizations.find(
-                {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1}
+                {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1, "is_default": 1}
             ).sort("name", 1).to_list(500)
         if not orgs:
             # A deployment upgraded before the first-boot bootstrap existed has
@@ -169,7 +169,7 @@ async def _resolve_login_org(user: dict, host_org: dict):
             await ensure_default_organization()
             with org_bypass():
                 orgs = await raw_db.organizations.find(
-                    {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1}
+                    {}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "status": 1, "is_default": 1}
                 ).sort("name", 1).to_list(500)
         active = user.get("active_organization_id")
         if len(orgs) == 1 and (not active or not any(o["id"] == active for o in orgs)):
@@ -197,6 +197,19 @@ async def _resolve_login_org(user: dict, host_org: dict):
                        "server starts — please try again in a moment.",
             )
         if not active or not any(o["id"] == active for o in orgs):
+            # The main web address belongs to the default organisation until a
+            # subdomain is set up for one — and a subdomain cannot be set up
+            # before the organisation exists, so a picker here is a chicken and
+            # egg. Open the default one; the owner switches from the
+            # Organisations console, which is not organisation-scoped.
+            home = next((o for o in orgs if o.get("is_default") and o.get("status") != "suspended"), None)
+            if home:
+                with org_bypass():
+                    await raw_db.users.update_one(
+                        {"id": user["id"]}, {"$set": {"active_organization_id": home["id"]}}
+                    )
+                    org = await raw_db.organizations.find_one({"id": home["id"]}, {"_id": 0})
+                return home["id"], org or {}, None
             return None, None, {"requires_org_selection": True, "organizations": orgs}
         with org_bypass():
             org = await raw_db.organizations.find_one({"id": active}, {"_id": 0})
@@ -240,7 +253,22 @@ async def _resolve_login_org(user: dict, host_org: dict):
     with org_bypass():
         org = await raw_db.organizations.find_one({"id": org_id}, {"_id": 0})
     if not org:
-        raise HTTPException(status_code=403, detail="Organisation not found")
+        # Their organisation key points at something that no longer exists (an
+        # organisation deleted out from under them, or a half-finished import).
+        # Valid credentials should not end at "Organisation not found" — put them
+        # back in the default organisation.
+        with org_bypass():
+            org = await raw_db.organizations.find_one(
+                {"status": "active", "is_default": True}, {"_id": 0}
+            )
+        if not org:
+            raise HTTPException(status_code=403, detail="Organisation not found")
+        if host_org and host_org["id"] != org["id"]:
+            raise HTTPException(status_code=403, detail="This account does not belong to this site")
+        org_id = org["id"]
+        with org_bypass():
+            await raw_db.users.update_one({"id": user["id"]}, {"$set": {"organization_id": org_id}})
+        logger.info("Re-attached %s to the default organisation", user.get("email"))
     if org.get("status") == "suspended":
         raise HTTPException(
             status_code=403,

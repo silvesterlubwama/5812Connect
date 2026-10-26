@@ -2711,3 +2711,16 @@ login rate limiter, not a regression. Re-run that file on its own.
   organisations; health returns `healthy`.
 - The Ubuntu server still needs this code: `docker compose pull` only sees images
   built from `main`/`master` or a `v*` tag, and this work is on branch `5812`.
+
+## 2026-10-24 — The main web address is the default organisation's address
+- A subdomain cannot be set up before the organisation exists, so requiring one
+  was circular. An unclaimed address (the main domain, the preview URL, an IP)
+  now signs the owner straight into the **default** organisation instead of
+  showing a picker; switching stays in the Organisations console.
+- Accounts whose organisation key points at something that no longer exists are
+  re-attached to the default organisation instead of being refused with
+  "Organisation not found".
+- Tenant isolation unchanged: an organisation's own address still admits only
+  its own people, and a user's own organisation still wins over the address.
+- Tests updated to the new rule (the three that asserted a picker) —
+  36 passed / 1 skipped, plus 11 in the sign-in suite.
