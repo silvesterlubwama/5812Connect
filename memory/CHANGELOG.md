@@ -2724,3 +2724,44 @@ login rate limiter, not a regression. Re-run that file on its own.
   its own people, and a user's own organisation still wins over the address.
 - Tests updated to the new rule (the three that asserted a picker) —
   36 passed / 1 skipped, plus 11 in the sign-in suite.
+
+## 2026-10-26 — Both export/import tools made organisation-aware (and actually finishing)
+Reported: the System Settings data export/import "doesn't collect all information
+after the system changed to multi organizational", and the per-organisation JSON
+export/import "isn't working well".
+
+Two separate faults:
+1. **System Console → Data & Backup was never made multi-organisation.** It
+   dumped every collection and the whole uploads directory through the scoped
+   proxy, and `replace` mode called `drop()` — which would have deleted every
+   other organisation's rows in those collections. Rewritten (`routers/backup.py`):
+   every read filters on `organization_id`, the archive carries only the files
+   that organisation's rows point at, `replace` deletes only its own rows, import
+   re-stamps every row with the caller's organisation, snapshots are per
+   organisation, and another organisation's snapshot returns 404.
+2. **Both exports exceeded the gateway's 60-second limit and came back as a 502
+   HTML page.** 58:12 Global's media is ~830 MB. Both are now streamed as they
+   are built (tar for the backup tool, JSON for the owner export), files are
+   fetched in parallel batches, there is an "include uploaded files" choice, and
+   a size cap (200 MB backup / 150 MB owner export) with everything above it
+   listed by path instead of silently dropped.
+
+Also fixed from the testing agent's report (iteration_260):
+- An archive could name **any** storage path and overwrite another organisation's
+  logo or scans on import. Only paths referenced by the imported rows are
+  restored now.
+- The daily auto-backup was dead (it imported a function the rewrite removed) and
+  used to write one whole-database archive; it now writes one per organisation.
+- Restored files get a real content type instead of `application/octet-stream`.
+- The preview counted audit rows the default export leaves out; audit figures are
+  now reported separately so the summary matches the download.
+- A `replace` import can no longer lock the importing admin out of their own
+  organisation.
+- The owner export now distinguishes "could not be read" from "over the size
+  limit", and the Organisations page has an "Include files in export" toggle.
+
+Verified: 18/18 in `tests/test_iter399_org_backup_export_import.py`; Lubwamas
+admin sees 6 collections / 19 records / 0 linked files and downloads a valid
+gzip in the browser; 58:12 Global records-only = 155 collections / 14,584 rows in
+under a second, with files = 226 MB in 19s; owner export 248 MB in 10s; a
+replace import left 58:12 Global's counts untouched.

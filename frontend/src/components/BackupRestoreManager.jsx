@@ -33,6 +33,7 @@ export default function BackupRestoreManager() {
   const [preview, setPreview] = useState(null);
   const [snapshots, setSnapshots] = useState([]);
   const [includeAudit, setIncludeAudit] = useState(false);
+  const [includeFiles, setIncludeFiles] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importFile, setImportFile] = useState(null);
@@ -60,6 +61,7 @@ export default function BackupRestoreManager() {
     try {
       const fd = new FormData();
       fd.append('include_audit', includeAudit ? 'true' : 'false');
+      fd.append('include_files', includeFiles ? 'true' : 'false');
       const r = await api.post('/admin/backup/export', fd, { responseType: 'blob' });
       const blob = r.data instanceof Blob ? r.data : new Blob([r.data], { type: 'application/gzip' });
       const url = URL.createObjectURL(blob);
@@ -68,7 +70,7 @@ export default function BackupRestoreManager() {
       a.href = url;
       a.download = `5812connect-backup-${stamp}.tar.gz`;
       document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
       toast.success(`Backup downloaded (${_fmtBytes(blob.size)})`);
       load();
     } catch (e) {
@@ -80,7 +82,7 @@ export default function BackupRestoreManager() {
     if (!importFile) { toast.error('Select a .tar.gz file first'); return; }
     if (!importPassword) { toast.error('Re-enter your admin password'); return; }
     if (importMode === 'replace' && !dryRun && !window.confirm(
-      'REPLACE mode will DROP each collection in the backup before re-inserting its rows. ' +
+      'REPLACE mode deletes this organisation\'s existing rows in those collections before re-inserting them. ' +
       'A pre-restore snapshot will be auto-saved so you can roll back. Continue?'
     )) return;
     setImporting(true); setReport(null);
@@ -118,7 +120,7 @@ export default function BackupRestoreManager() {
       const a = document.createElement('a');
       a.href = url; a.download = filename;
       document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Snapshot download failed');
     }
@@ -133,7 +135,7 @@ export default function BackupRestoreManager() {
             <div>
               <p className="font-medium text-sm">Backup &amp; Restore</p>
               <p className="text-xs text-muted-foreground">
-                Export the full app (every collection + uploads) as a single .tar.gz, or restore one. Used to move data between preview / production / self-hosted deployments.
+                Export this organisation's data and the files it points at as a single .tar.gz, or restore one. Nothing belonging to another organisation is included.
               </p>
             </div>
           </div>
@@ -146,7 +148,7 @@ export default function BackupRestoreManager() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Database size={16} /> Backup &amp; Restore</DialogTitle>
             <DialogDescription className="text-xs">
-              Cross-environment data migration. Exports include every Mongo collection (in JSONL) and every file under <code>/uploads</code>. Restores re-ask for the admin password and auto-save a pre-restore snapshot.
+              Moves this organisation between deployments. The archive holds its rows (as JSONL) and the uploaded files they reference — never another organisation's data. Restores re-ask for the admin password and auto-save a pre-restore snapshot.
             </DialogDescription>
           </DialogHeader>
 
@@ -154,8 +156,16 @@ export default function BackupRestoreManager() {
           {preview && (
             <div className="grid grid-cols-3 gap-2 p-3 rounded-lg bg-muted/40 border text-center" data-testid="backup-preview-summary">
               <div><p className="text-2xl font-bold">{preview.total_collections}</p><p className="text-[10px] uppercase text-muted-foreground">Collections</p></div>
-              <div><p className="text-2xl font-bold">{preview.total_docs?.toLocaleString()}</p><p className="text-[10px] uppercase text-muted-foreground">Documents</p></div>
-              <div><p className="text-2xl font-bold">{_fmtBytes(preview.uploads_bytes)}</p><p className="text-[10px] uppercase text-muted-foreground">{preview.uploads_files} upload file{preview.uploads_files === 1 ? '' : 's'}</p></div>
+              <div>
+                <p className="text-2xl font-bold">{preview.total_docs?.toLocaleString()}</p>
+                <p className="text-[10px] uppercase text-muted-foreground">
+                  Records{preview.audit_docs ? ` · +${preview.audit_docs.toLocaleString()} audit` : ''}
+                </p>
+              </div>
+              <div>
+                <p className="text-2xl font-bold">{(includeAudit ? preview.uploads_files_with_audit : preview.uploads_files)?.toLocaleString() ?? 0}</p>
+                <p className="text-[10px] uppercase text-muted-foreground">Linked files</p>
+              </div>
             </div>
           )}
 
@@ -166,6 +176,21 @@ export default function BackupRestoreManager() {
               <input type="checkbox" checked={includeAudit} onChange={e => setIncludeAudit(e.target.checked)} data-testid="backup-include-audit" />
               <span>Include audit trail collections (recommended for compliance, increases file size)</span>
             </label>
+            <label className="flex items-center gap-2 text-xs cursor-pointer">
+              <input type="checkbox" checked={includeFiles} onChange={e => setIncludeFiles(e.target.checked)} data-testid="backup-include-files" />
+              <span>
+                Include uploaded files — photos, scans and logos
+                {(includeAudit ? preview?.uploads_files_with_audit : preview?.uploads_files)
+                  ? ` (${(includeAudit ? preview.uploads_files_with_audit : preview.uploads_files).toLocaleString()} linked)`
+                  : ''}.
+                Untick for a records-only archive, which downloads in seconds.
+              </span>
+            </label>
+            {includeFiles && preview?.max_file_bytes ? (
+              <p className="text-[11px] text-muted-foreground">
+                Up to {_fmtBytes(preview.max_file_bytes)} of files travels in one download; anything beyond that is listed in the archive's <code>manifest.json</code> so it can be copied separately.
+              </p>
+            ) : null}
             <Button onClick={handleExport} disabled={exporting} className="gap-2" data-testid="backup-export-btn">
               <Download size={14} /> {exporting ? 'Exporting…' : 'Download backup'}
             </Button>
@@ -183,7 +208,7 @@ export default function BackupRestoreManager() {
                 <Label className="text-xs">Mode</Label>
                 <select className="h-9 w-full rounded border bg-background px-2 text-sm" value={importMode} onChange={e => setImportMode(e.target.value)} data-testid="backup-import-mode">
                   <option value="merge">Merge — upsert per id (safest)</option>
-                  <option value="replace">Replace — drop target collections first</option>
+                  <option value="replace">Replace — clear this organisation's rows first</option>
                 </select>
               </div>
               <div className="space-y-1">
@@ -198,7 +223,7 @@ export default function BackupRestoreManager() {
             {importMode === 'replace' && !dryRun && (
               <div className="flex items-start gap-2 p-2 rounded bg-rose-100 dark:bg-rose-950/30 border border-rose-300 dark:border-rose-900/50 text-[11px] text-rose-900 dark:text-rose-200">
                 <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                Replace mode drops each collection in the backup before re-inserting its docs. A pre-restore snapshot will be auto-saved.
+                Replace mode deletes this organisation's rows in those collections before re-inserting them — other organisations are untouched. A pre-restore snapshot will be auto-saved.
               </div>
             )}
             <Button onClick={handleImport} disabled={importing || !importFile || !importPassword} className="gap-2" data-testid="backup-import-btn" variant={dryRun ? 'outline' : 'default'}>
@@ -253,7 +278,7 @@ export default function BackupRestoreManager() {
                       <p className="text-xs font-mono">{s.filename}</p>
                       <p className="text-[10px] text-muted-foreground">{new Date(s.modified_at).toLocaleString()} · {_fmtBytes(s.size_bytes)}</p>
                     </div>
-                    <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => downloadSnapshot(s.filename)}>
+                    <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => downloadSnapshot(s.filename)} data-testid={`backup-snapshot-download-${s.filename}`}>
                       <Download size={11} className="mr-1" /> Download
                     </Button>
                   </div>

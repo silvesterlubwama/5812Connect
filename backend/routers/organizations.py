@@ -5,11 +5,13 @@ single organisation by the scoped db proxy; these routes are the one place that
 legitimately reads across the registry (never across tenant *data*).
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime, timezone
 import asyncio
 import base64
+import json
 import os
 import re
 from pymongo.errors import DuplicateKeyError
@@ -25,10 +27,9 @@ from deps import (
     org_as,
     logger,
 )
-from storage import get_object
 from upload_helper import save_upload
-from upload_helper import UPLOAD_ROOT
 from org_context import UNSCOPED_COLLECTIONS
+from routers.backup import _walk_file_paths, _read_file
 
 router = APIRouter(prefix="/api")
 
@@ -263,20 +264,50 @@ async def set_status(
 
 @router.get("/organizations/{org_id}/export")
 async def export_organization(
-    org_id: str, current_user: dict = Depends(require_super_admin)
-) -> dict:
+    org_id: str,
+    include_files: bool = True,
+    current_user: dict = Depends(require_super_admin),
+):
     """Full JSON dump of one tenant — taken before a delete, and the same shape
-    that /organizations/import accepts back."""
+    that /organizations/import accepts back.
+
+    Streamed as it is built: an organisation with a few hundred photos and scans
+    runs to hundreds of megabytes, and assembling that before replying took
+    longer than the proxy allows, so the download arrived as an error page.
+    `include_files=false` exports the records alone, which is always quick.
+    """
     with org_bypass():
         org = await raw_db.organizations.find_one({"id": org_id}, {"_id": 0})
-        if not org:
-            raise HTTPException(status_code=404, detail="Organisation not found")
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    await _audit(current_user.get("id"), "export", "organization", org_id,
+                 {"include_files": include_files})
+    return StreamingResponse(
+        _stream_org_export(org_id, org, include_files),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{org.get("slug", org_id)}-export.json"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
+async def _stream_org_export(org_id: str, org: dict, include_files: bool):
+    def j(value):
+        return json.dumps(value, default=str)
+
+    yield ('{"format":"5812-org-export/v1",'
+           f'"exported_at":{j(datetime.now(timezone.utc).isoformat())},'
+           f'"organization":{j(org)},"collections":{{')
+    counts = {}
+    skipped = {}
+    total = 0
+    file_paths: list[str] = []
+    seen: set[str] = set()
+    first = True
+    with org_bypass():
         names = await raw_db.list_collection_names()
-        data = {}
-        counts = {}
-        total = 0
-        skipped = {}
-        for name in names:
+        for name in sorted(names):
             if name in UNSCOPED_COLLECTIONS:
                 # Platform plumbing (sessions, rate limits, the tenant registry).
                 # Reported rather than silently dropped, so "everything" is a
@@ -288,96 +319,65 @@ async def export_organization(
             expected = await raw_db[name].count_documents({"organization_id": org_id})
             if not expected:
                 continue
-            # Page through the whole collection. This used to stop at 100,000
-            # rows per collection and say nothing about the rest.
             rows = []
             cursor = raw_db[name].find({"organization_id": org_id}, {"_id": 0}).batch_size(2000)
             async for row in cursor:
                 rows.append(row)
+                _walk_file_paths(row, seen, file_paths)
             if len(rows) != expected:
                 logger.warning("Export %s: %s rows read but %s counted in %s",
                                org_id, len(rows), expected, name)
-            data[name] = rows
             counts[name] = len(rows)
             total += len(rows)
+            yield ("" if first else ",") + f"{j(name)}:{j(rows)}"
+            first = False
+    yield '},"files":{'
+
     # Rows alone are not the whole organisation: logos, receipt scans and photos
     # live in storage, and a move that left them behind would land on the other
     # server with broken images everywhere.
-    files, files_bytes, missing = await _collect_files(data)
-    await _audit(current_user.get("id"), "export", "organization", org_id,
-                 {"documents": total, "files": len(files)})
-    return {
-        "format": "5812-org-export/v1",
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-        "organization": org,
-        "collections": data,
-        "document_count": total,
-        "collection_counts": counts,
-        "platform_rows_not_moved": skipped,
-        "files": files,
-        "file_count": len(files),
-        "file_bytes": files_bytes,
-        "files_missing": missing,
-    }
+    file_count = 0
+    file_bytes = 0
+    missing: list[str] = []
+    over_cap: list[str] = []
+    first_file = True
+    if not include_files:
+        over_cap = list(file_paths)
+    else:
+        for i in range(0, len(file_paths), 8):
+            if file_bytes >= MAX_EXPORT_FILE_BYTES:
+                over_cap.extend(file_paths[i:])
+                break
+            batch = file_paths[i:i + 8]
+            for path, got in zip(batch, await asyncio.gather(*[_read_file(p) for p in batch])):
+                if not got or not got[0]:
+                    missing.append(path)
+                    continue
+                blob, content_type = got
+                entry = {
+                    "content_type": content_type or "application/octet-stream",
+                    "data": base64.b64encode(blob).decode("ascii"),
+                }
+                yield ("" if first_file else ",") + f"{j(path)}:{j(entry)}"
+                first_file = False
+                file_count += 1
+                file_bytes += len(blob)
+    yield ("}," + f'"document_count":{total},'
+           f'"collection_counts":{j(counts)},'
+           f'"platform_rows_not_moved":{j(skipped)},'
+           f'"file_count":{file_count},'
+           f'"file_bytes":{file_bytes},'
+           f'"files_missing":{j(missing + over_cap)},'
+           f'"files_unreadable":{j(missing)},'
+           f'"files_over_limit":{j(over_cap)},'
+           f'"include_files":{j(include_files)}}}')
+    logger.info("Export %s: %s documents, %s files (%s bytes), %s unreadable, %s over the limit",
+                org_id, total, file_count, file_bytes, len(missing), len(over_cap))
 
 
 FILE_URL_RE = re.compile(r"/api/(?:storage|uploads)/([A-Za-z0-9._\-/]+)")
 MAX_EXPORT_FILE_BYTES = int(os.environ.get("ORG_EXPORT_MAX_FILE_BYTES", 150 * 1024 * 1024))
 
-
-async def _collect_files(collections: dict):
-    """Pull every uploaded file the exported rows point at, as base64.
-
-    Capped (ORG_EXPORT_MAX_FILE_BYTES): past the cap the paths are still listed
-    under `files_missing`, so the operator knows exactly what to copy by hand
-    rather than discovering it later."""
-    paths: list[str] = []
-    seen = set()
-
-    def walk(value):
-        if isinstance(value, str):
-            for m in FILE_URL_RE.finditer(value):
-                p = m.group(1)
-                if p not in seen:
-                    seen.add(p)
-                    paths.append(p)
-        elif isinstance(value, dict):
-            for v in value.values():
-                walk(v)
-        elif isinstance(value, list):
-            for v in value:
-                walk(v)
-
-    walk(collections)
-
-    files: dict[str, dict] = {}
-    total_bytes = 0
-    missing: list[str] = []
-    for path in paths:
-        if total_bytes >= MAX_EXPORT_FILE_BYTES:
-            missing.append(path)
-            continue
-        blob = None
-        content_type = "application/octet-stream"
-        try:
-            blob, content_type = await asyncio.to_thread(get_object, path)
-        except Exception:
-            local = os.path.join(UPLOAD_ROOT, path)
-            if os.path.isfile(local):
-                try:
-                    with open(local, "rb") as fh:
-                        blob = fh.read()
-                except OSError:
-                    blob = None
-        if not blob:
-            missing.append(path)
-            continue
-        total_bytes += len(blob)
-        files[path] = {
-            "content_type": content_type,
-            "data": base64.b64encode(blob).decode("ascii"),
-        }
-    return files, total_bytes, missing
 
 
 @router.post("/organizations/import")

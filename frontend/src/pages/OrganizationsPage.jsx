@@ -31,6 +31,7 @@ export default function OrganizationsPage() {
   const [editing, setEditing] = useState(null);
   const [busyOrg, setBusyOrg] = useState(null);
   const [moving, setMoving] = useState(null);
+  const [exportFiles, setExportFiles] = useState(true);
 
   const load = async () => {
     setLoading(true);
@@ -83,7 +84,10 @@ export default function OrganizationsPage() {
       // Ask for the raw text: a big export is tens of MB and re-serialising the
       // parsed object (JSON.stringify with indentation) doubled the memory for
       // no benefit.
-      const res = await api.get(`/organizations/${org.id}/export`, { responseType: 'text' });
+      const res = await api.get(`/organizations/${org.id}/export`, {
+        params: { include_files: exportFiles },
+        responseType: 'text',
+      });
       const text = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
       let summary = {};
       try { summary = JSON.parse(text); } catch { summary = {}; }
@@ -113,8 +117,16 @@ export default function OrganizationsPage() {
         `${org.name}: ${summary.document_count ?? '?'} records and ${files} file${files === 1 ? '' : 's'} (${size})`,
         { duration: 8000 },
       );
-      if (summary.files_missing?.length) {
-        toast.warning(`${summary.files_missing.length} file(s) could not be read and are listed in the export`, { duration: 10000 });
+      if (summary.files_unreadable?.length) {
+        toast.warning(`${summary.files_unreadable.length} file(s) could not be read and are listed in the export`, { duration: 10000 });
+      }
+      if (summary.files_over_limit?.length) {
+        toast.warning(
+          exportFiles
+            ? `${summary.files_over_limit.length} file(s) are past the size limit for one download — their paths are listed in the export so they can be copied separately`
+            : `${summary.files_over_limit.length} file(s) were left out because "include files" is off — their paths are listed in the export`,
+          { duration: 10000 },
+        );
       }
     } catch (err) {
       toast.dismiss(preparing);
@@ -173,6 +185,15 @@ export default function OrganizationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer mr-1">
+            <input
+              type="checkbox"
+              checked={exportFiles}
+              onChange={(e) => setExportFiles(e.target.checked)}
+              data-testid="export-include-files"
+            />
+            <span>Include files in export</span>
+          </label>
           <label className="inline-flex">
             <input
               type="file"

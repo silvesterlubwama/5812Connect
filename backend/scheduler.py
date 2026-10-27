@@ -195,25 +195,36 @@ async def _fire_scheduled_customer_statements():
 
 
 async def _fire_auto_backup():
-    """Daily 00:00 UTC: snapshot the full app to /app/backend/backups/.
-    Keeps the last 30 daily backups, prunes older ones. Audit-included so
-    historical changes don't disappear from the rolling cold store."""
+    """Daily 00:00 UTC: one archive per organisation in /app/backend/backups/.
+    Keeps the last 30 days, prunes older ones. Audit included so historical
+    changes don't disappear from the rolling cold store; uploaded files are left
+    out, since they already live in storage and would make this enormous."""
     import os as _os
     BACKUPS_DIR = "/app/backend/backups"
     try:
-        from routers.backup import _build_tarball
+        from routers.backup import _stream_tarball
+        from deps import raw_db
+        from org_context import org_bypass
     except Exception as e:
         logger.error(f"auto-backup: backup module unavailable: {e}")
         return
     try:
         _os.makedirs(BACKUPS_DIR, exist_ok=True)
         system_user = {"id": "system_scheduler", "name": "System Auto-Backup"}
-        blob = await _build_tarball(include_audit=True, current_user=system_user)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        path = _os.path.join(BACKUPS_DIR, f"auto-daily-{stamp}.tar.gz")
-        with open(path, "wb") as f:
-            f.write(blob)
-        logger.info(f"Auto-backup written: {path} ({len(blob)} bytes)")
+        with org_bypass():
+            orgs = await raw_db.organizations.find(
+                {"status": {"$ne": "deleted"}}, {"_id": 0, "id": 1, "slug": 1}
+            ).to_list(500)
+        for org in orgs:
+            org_id = org["id"]
+            path = _os.path.join(BACKUPS_DIR, f"auto-daily-{org_id}-{stamp}.tar.gz")
+            written = 0
+            with open(path, "wb") as f:
+                async for chunk in _stream_tarball(org_id, True, system_user, include_files=False):
+                    f.write(chunk)
+                    written += len(chunk)
+            logger.info(f"Auto-backup written: {path} ({written} bytes)")
         # Prune anything older than 30 days
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         pruned = 0
