@@ -2765,3 +2765,57 @@ admin sees 6 collections / 19 records / 0 linked files and downloads a valid
 gzip in the browser; 58:12 Global records-only = 155 collections / 14,584 rows in
 under a second, with files = 226 MB in 19s; owner export 248 MB in 10s; a
 replace import left 58:12 Global's counts untouched.
+
+## 2026-10-30 — Server-to-server organisation transfer (no size limit)
+Asked for: bigger uploads/downloads between deployments, and faster.
+Chosen: one server pulls straight from the other, no size limit, nothing left
+on the server afterwards.
+
+- New `routers/org_transfer.py`. The source issues a one-time key (48h, one
+  organisation, stored only as a hash, shown once) and serves that organisation
+  in pages: `/api/transfer/manifest`, `/api/transfer/rows`, `/api/transfer/file`.
+  The target's `/api/organizations/pull` creates the organisation and pulls
+  everything in the background — 2,000 rows a request, 8 files at a time, with
+  backoff on 429 so an older source's rate limiter cannot kill it. Progress is
+  polled from `/api/organizations/pull/{job}`. No archive is ever built, so
+  there is no size cap and nothing to delete afterwards.
+- `/api/transfer/*` is exempt from the anonymous rate limiter — the key is the
+  gate — and a key may read ONLY the files its own organisation's rows point at
+  (recorded when the manifest is built). The testing agent proved the first cut
+  would serve any storage path: a Lubwamas key fetched a 58:12 Global photo.
+- **`id` is now unique per organisation, not globally.** 36 collections carried a
+  leftover global `id_1` unique index, which made copying an organisation onto a
+  server that already held it fail with duplicate keys. Replaced with
+  (organization_id, id) and the old indexes are dropped on startup.
+- Addresses and the default flag stay behind; a failed pull leaves the
+  organisation suspended with the reason, not live with half its data.
+- Source errors return 400 with a readable detail (a 502 body is replaced by the
+  ingress with its own HTML page, so the reason never reached the user).
+
+Verified: 14/14 in `tests/test_iter401_org_transfer.py` and 12/12 in the testing
+agent's adversarial `tests/test_iter402_transfer_security.py`; a full Lubwamas
+pull moved 177 rows and 26 files with 0 problems, ids and branding intact, source
+counts untouched; UI shows live progress and a clear error for a bad address.
+Known limit: each file is read into memory one at a time (8 concurrently), so a
+single file of several hundred MB is still better moved with a database dump.
+
+## 2026-10-31 — Overwrite an organisation that is already on the new server
+Asked for: "allow overriding data if the organization already exists on the new
+server."
+
+- The pull dialog now has **Where it lands here**: create it as a new
+  organisation (as before), or *Replace everything in “…”* for one already on
+  this server. Replacing needs the warning box ticked; the backend refuses
+  without `overwrite: true` (400) and for an unknown target (404).
+- An overwrite clears that organisation's rows across every tenant collection
+  first and reports how many were cleared, then pulls the copy in. The
+  organisation row itself survives: **its web addresses, slug and "main
+  organisation" flag stay with this server** — only the data inside is replaced.
+- A clashing web name now returns 409 naming the organisation that holds it and
+  pointing at the overwrite option, instead of a bare "slug taken".
+- A refused pull still creates nothing and does not burn the key.
+
+Verified: 19/19 in `tests/test_iter401_org_transfer.py` (including stale rows
+not surviving, no duplicated rows, the address kept, the source untouched, and
+non-owners refused) and 12/12 in `tests/test_iter402_transfer_security.py`; UI
+checked at 1920px and 390px.

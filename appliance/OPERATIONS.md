@@ -309,3 +309,31 @@ and lands straight in it. Give an organisation its own subdomain later in
 *Organisations → Edit → Web addresses*, then route that hostname to `caddy:80`
 in the Cloudflare Tunnel. Once an address is claimed, only that organisation's
 own people can sign in on it.
+
+## Moving one organisation to another server
+
+There is no file to build, upload or clean up: the two servers talk to each
+other directly, so the size of the organisation does not matter.
+
+1. On the **old** server, sign in as the owner → Organisations → the
+   organisation → **Move server** → *Create transfer key*. Copy the key and the
+   address shown. The key lasts 48 hours, covers that one organisation, and dies
+   the moment the transfer finishes.
+2. On the **new** server, sign in as the owner → Organisations → **Bring one
+   in** → paste the address and the key, then choose where it lands: a new
+   organisation, or *Replace everything in* one already on this server (which
+   clears that organisation's data first and needs the warning ticked). Then
+   *Start transfer*. Progress is shown live and keeps running if you close the
+   window.
+3. Afterwards, give it its web address under Organisations → Address, and point
+   that hostname at `caddy:80` in the Cloudflare Tunnel. Addresses and the
+   "main organisation" flag deliberately do not travel — two servers must never
+   claim the same hostname.
+
+The new server must be able to reach the old one over HTTPS. Records keep their
+ids, so everything inside the data still lines up, and uploaded files are written
+back to the same paths. If a transfer stops partway, the half-filled
+organisation is suspended with the reason on it: delete it and start again.
+
+A full-server move (every organisation at once) is still a database dump plus the
+uploads directory, as above.

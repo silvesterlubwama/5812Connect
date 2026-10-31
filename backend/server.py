@@ -159,6 +159,7 @@ RL_ANONYMOUS_PER_MIN = int(os.environ.get("RATE_LIMIT_ANONYMOUS_PER_MIN", "120")
 RL_AUTH_ROUTE_PER_MIN = int(os.environ.get("RATE_LIMIT_AUTH_ROUTES_PER_MIN", "20"))
 # Probes and the login flow's own guard shouldn't be throttled here.
 RL_EXEMPT_PATHS = {"/health", "/readyz", "/api/health"}
+RL_TRANSFER_PREFIX = "/api/transfer/"
 # Login/registration/reset — tight per-IP bucket regardless of token.
 RL_AUTH_PREFIXES = ("/api/auth/login", "/api/auth/register", "/api/auth/forgot-password",
                     "/api/auth/reset-password", "/api/auth/verify-2fa")
@@ -228,7 +229,10 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get("path") or ""
-        if path in RL_EXEMPT_PATHS:
+        if path in RL_EXEMPT_PATHS or path.startswith(RL_TRANSFER_PREFIX):
+            # A server-to-server organisation transfer is hundreds of requests
+            # back to back and carries no session, so the anonymous bucket would
+            # stop it dead. Its own one-time key is the gate.
             await self.app(scope, receive, send)
             return
 
@@ -512,6 +516,7 @@ try:
     from routers.programmes import router as programmes_router
     from routers.misc import router as misc_router
     from routers.organizations import router as organizations_router
+    from routers.org_transfer import router as org_transfer_router
     from routers.webauthn import router as webauthn_router
     from routers.boards import router as boards_router
     from routers.email import router as email_router
@@ -550,6 +555,7 @@ try:
     app.include_router(programmes_router)
     app.include_router(misc_router)
     app.include_router(organizations_router)
+    app.include_router(org_transfer_router)
     app.include_router(webauthn_router)
     app.include_router(boards_router)
     app.include_router(email_router)

@@ -22,6 +22,9 @@ UNSCOPED_COLLECTIONS = {
     "public_endpoint_hits",  # per-IP rate limiting
     "login_attempts",       # per-IP brute-force throttle (pre-auth)
     "org_audit_log",        # platform actions; must outlive any one tenant
+    "org_transfer_grants",  # one-time keys for a server-to-server move
+    "org_transfer_files",   # which files each key is allowed to read
+    "org_transfer_jobs",    # progress of a pull from another deployment
     "sessions",             # keyed by jti; resolved before org is known
     "password_reset_tokens",
 }

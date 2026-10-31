@@ -4,6 +4,8 @@ import gzip
 import io
 import json
 import os
+import subprocess
+import sys
 import tarfile
 import time
 
@@ -110,6 +112,14 @@ def gtok():
 @pytest.fixture(scope="module")
 def otok():
     time.sleep(2)
+    # The owner is a test-only account: create it if a previous clean-up removed
+    # it, so the suite never depends on leftover state.
+    if not db.users.find_one({"email": OWNER_CREDS[0]}):
+        subprocess.run(
+            [sys.executable, "scripts/create_super_admin.py",
+             "--email", OWNER_CREDS[0], "--name", "QA Owner", "--password", OWNER_CREDS[1]],
+            cwd="/app/backend", check=True, capture_output=True,
+        )
     return _login(OWNER_CREDS)
 
 

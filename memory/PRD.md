@@ -2383,3 +2383,28 @@ then the owner activity log; then the socket login check.
 - `5812uganda.org` / `www.5812uganda.org` still serve stale static content — both
   hostnames must be pointed at `caddy:80` as Cloudflare Tunnel public hostnames and
   any Pages/static custom-domain assignment removed. Untested since.
+
+## 2026-10-30 — Moving an organisation between deployments
+User request: "allow upload and download of bigger organisation files for
+transfer between deployments and allow for faster downloads and uploads."
+Chosen: **one server pulls straight from the other**, **no size limit**, and
+**nothing left on the server** when it is done.
+
+Implemented (see CHANGELOG 2026-10-30 for detail):
+- Source issues a one-time, single-organisation transfer key and serves that
+  organisation in pages (`/api/transfer/manifest|rows|file`).
+- Target pulls in the background with live progress
+  (`/api/organizations/pull`, `/api/organizations/pull/{job}`).
+- A key may read only the files its own organisation's rows reference.
+- `id` is unique per organisation now, so an organisation can be copied onto a
+  server that already holds a copy.
+- Web addresses and the default flag never travel.
+
+Still open: publish branch `5812` so the Ubuntu server can pull this, then
+verify in production.
+
+### 2026-10-31 — Overwriting an existing organisation
+The pull can now land in an organisation already on the new server, replacing
+its data (confirmation required). The organisation's web addresses, slug and
+default flag stay with the server it is on; only the contents are replaced.
+Re-running a move is therefore safe and repeatable.

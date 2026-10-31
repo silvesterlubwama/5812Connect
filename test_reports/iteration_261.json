@@ -1,0 +1,49 @@
+{
+  "summary": "Tested the new server-to-server organisation transfer (backend and UI) and re-ran the backup/export regression. Existing suites pass: iter401 (11/11) and iter399 (18/18). A new adversarial suite, test_iter402_transfer_security.py, passed 10 of 12. What works: only the owner can issue, list or revoke keys and see pulls (org admin and anonymous callers get 401/403). The key is stored only as a hash and shown once; reopening the dialog does not show it again. A forged secret on a real grant is refused (401), and so is a revoked key (401). A used key is refused (403). An expired key is refused, but with 403, not the 401 the brief asked for. Platform collections (organizations, sessions, org_audit_log, grants, jobs, password_reset_tokens, login_attempts, counters, app_config, system.*) return 400. The rows endpoint returns only the granted organisation's rows. '..' and leading '/' paths are refused. A taken slug gives 409, creates nothing and does not burn the key. After a pull, every collection count matches the source, ids are kept, branding comes across, there are no hostnames and no default flag, and the source and 58:12 counts are unchanged. The real admin@lubwamas.org still signs into the real Lubwamas. UI pull via Bring one in showed live progress 201/201 records and 27/27 files, the toast 'arrived', and the new card appeared. Org admins are redirected away from /organizations. Data & Backup preview is scoped (19 records + 182 audit). Two failures. CRITICAL: /api/transfer/file serves any storage path, so a Lubwamas key downloaded a 58:12 Global profile photo (1.2 MB, HTTP 200). MEDIUM: an unreachable or non-Connect source returns HTTP 502, and the preview ingress replaces 502 bodies with its own HTML page. The JSON detail is lost, so the UI shows no clear error.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "GET /api/transfer/file", "issue": "Tenant isolation breach. The endpoint only checks for '..' and a leading '/' and then calls get_object(path) for any path. Reproduced: a Lubwamas key fetched 'profile-photos/ac0c9bfe-974e-4409-bf06-4174b74e7363.jpeg', a 58:12 Global member photo (200, 1,221,198 bytes). Fix: only serve paths that appear in the granted organisation's rows, i.e. the manifest file list. Cache the set on the grant when the manifest is built, or re-walk the rows, and return 403/404 for anything else.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/organizations/pull", "issue": "Bad or unreachable source addresses return status 502 ('Could not reach …', '… answered 404 — check the address', 'Unexpected answer…'). The Kubernetes/Cloudflare ingress swaps 502 responses for an HTML error page, so the browser gets text/html and err.response.data.detail is undefined. The user only sees the generic 'Could not start the transfer', or no toast at all in my run. Use 400 or 422 (or 424) for these source errors."},
+      {"endpoint": "GET /api/transfer/*", "issue": "An expired key returns 403 ('This transfer key has expired'). The brief says expired keys should be refused with 401. It is refused either way; decide which status is intended."},
+      {"endpoint": "GET /api/transfer/file + _run_pull", "issue": "Each file is fully buffered in memory on both sides (get_object .content, Response(content=blob), rf.content). A large video of hundreds of MB, or 8 files at once (FILE_CONCURRENCY), could exhaust memory. Use StreamingResponse and httpx stream() for 'bigger files'."},
+      {"endpoint": "_run_pull", "issue": "If the background task fails partway through, the new organisation stays behind with partial data and the job shows 'failed'. There is no rollback or resume, and the source key is not burnt, so a retry needs a new slug or a manual delete."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Bring one in -> bad source address", "issue": "No clear error is shown because the backend's 502 JSON detail is replaced by the ingress HTML page (see backend minor issue).", "affected_selectors": ["[data-testid='pull-start']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter401_org_transfer.py",
+    "/app/backend/tests/test_iter399_org_backup_export_import.py",
+    "/app/backend/tests/test_iter402_transfer_security.py",
+    "/app/test_reports/pytest/iter401_transfer.xml",
+    "/app/test_reports/pytest/iter399_backup.xml",
+    "/app/test_reports/pytest/iter402_transfer_security.xml"
+  ],
+  "action_items": [
+    "CRITICAL: restrict /api/transfer/file to the granted organisation's own file paths (the manifest list) and return 403/404 for any other path.",
+    "Change the 502 statuses in start_pull (unreachable source, non-200 answer, non-Connect server) to 400/422/424 so the detail reaches the UI through the ingress.",
+    "Decide whether an expired key returns 401 or 403 (it is 403 now; the brief says 401).",
+    "Consider streaming files (StreamingResponse plus httpx stream) so very large media does not sit in memory.",
+    "Consider cleaning up or allowing resume of a half-pulled organisation when _run_pull fails."
+  ],
+  "critical_code_review_comments": [
+    "org_transfer.transfer_file: the grant is never used to scope the path. This is the root cause of the cross-tenant file read.",
+    "org_transfer.transfer_manifest walks every row of the organisation on each call. For 58:12 (~31k rows) that is heavy, and it can be called repeatedly while the key is open.",
+    "_run_pull: put_object writes to the same storage path as the source. On a target that already holds an object at that path it is overwritten silently. Paths are UUID-based, so the risk is low but worth a note.",
+    "test_iter401_org_transfer.py teardown runs db.org_transfer_grants.delete_many({}) and db.org_transfer_jobs.delete_many({}), which are broad predicates. They are safe in preview, but they would wipe real open keys or jobs if run against shared data. Scope them to the ids the test creates."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter402_transfer_security.py"],
+  "success_rate": {"backend": "93% (39/41 across the three suites)", "frontend": "100% of the flows tested work; the bad-source error message is lost because of the backend status code"},
+  "seed_data_creation": "Temporary only: owner qa-owner-iter401@test.local, transfer grants, and pulled organisations qa-iter402-copy and qa-ui-copy. All removed: only the 5812global and lubwamas organisations remain, org_transfer_grants and org_transfer_jobs are empty, and the owner is deleted. The protected admin accounts are untouched (1 each).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run tests/test_iter402_transfer_security.py. test_file_of_another_org_refused and test_unreachable_and_non_server_address should pass once fixed. The owner is created on demand via scripts/create_super_admin.py and removed in teardown. Pulling Lubwamas takes about 8 s (201 rows including audit_log, 27 tiny files). Do not pull 58:12. In preview, org_for_hostname returns {}, so admin@lubwamas.org login picks the original by password match, and it stayed on the real org after a pull.",
+  "rca of the issue": "Cross-tenant file read: transfer_file validates the key but passes the caller-supplied path straight to storage.get_object. Storage is one bucket shared by all organisations, and the paths carry no organisation prefix. Reproduce: issue a Lubwamas key, then GET /api/transfer/file?path=<any 58:12 path from members.photo_url> with the X-Transfer-Key header, and you get 200 with the bytes. Mitigation: check the path against the set returned by _walk_file_paths over the granted organisation's rows, stored on the grant when the manifest is built. Pull error UX: HTTPException(502) is rewritten by the ingress into an HTML page, so the frontend falls back to a generic message."
+}

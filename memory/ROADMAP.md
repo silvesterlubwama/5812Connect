@@ -68,6 +68,13 @@ built with server-side re-pricing.
 
 ## Approved backlog (user-requested only)
 
+- **Publish to the Ubuntu appliance** — branch `5812` must be merged to
+  `main`/`master` or tagged `v*` before `docker compose pull` can see any of the
+  multi-organisation work (bootstrap fix, export/import rewrite, server-to-server
+  transfer, per-organisation `id` indexes).
+- **Verify in production after that deploy** — Google sign-in, passkeys, the
+  first-boot organisation bootstrap and the two export tools.
+
 _(no items currently open)_
 
 Deferred, not requested — do NOT start without the user asking:

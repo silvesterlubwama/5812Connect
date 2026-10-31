@@ -9,11 +9,13 @@ import { Badge } from '../components/ui/badge';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '../components/ui/dialog';
-import { Building2, Plus, LogIn, PauseCircle, PlayCircle, Download, Upload, Trash2, Settings2, UserRoundCog } from 'lucide-react';
+import { Building2, Plus, LogIn, PauseCircle, PlayCircle, Download, Upload, Trash2, Settings2, UserRoundCog, Send, DownloadCloud } from 'lucide-react';
 import { toast } from 'sonner';
 import { OrgActivityLog } from '../components/organizations/OrgActivityLog';
 import { MovePersonDialog } from '../components/organizations/MovePersonDialog';
 import { EditOrgDialog } from '../components/organizations/EditOrgDialog';
+import { TransferKeyDialog } from '../components/organizations/TransferKeyDialog';
+import { PullOrgDialog } from '../components/organizations/PullOrgDialog';
 
 const blankOrg = {
   name: '', slug: '', hostnames: '', owner_name: '', owner_email: '', owner_password: '',
@@ -32,6 +34,8 @@ export default function OrganizationsPage() {
   const [busyOrg, setBusyOrg] = useState(null);
   const [moving, setMoving] = useState(null);
   const [exportFiles, setExportFiles] = useState(true);
+  const [transferring, setTransferring] = useState(null);
+  const [pulling, setPulling] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -184,7 +188,7 @@ export default function OrganizationsPage() {
             Nothing is shared, and you work inside one at a time.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
           <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer mr-1">
             <input
               type="checkbox"
@@ -206,6 +210,9 @@ export default function OrganizationsPage() {
               <span className="cursor-pointer gap-2 inline-flex items-center"><Upload size={15} /> Import</span>
             </Button>
           </label>
+          <Button variant="outline" onClick={() => setPulling(true)} className="gap-2" data-testid="pull-org-btn">
+            <DownloadCloud size={15} /> Bring one in
+          </Button>
           <Button onClick={() => setShowCreate(true)} className="gap-2" data-testid="new-org-btn">
             <Plus size={16} /> New organisation
           </Button>
@@ -268,6 +275,11 @@ export default function OrganizationsPage() {
                       <PauseCircle size={14} /> Suspend
                     </Button>
                   )}
+                  <Button size="sm" variant="outline" className="gap-1.5"
+                    onClick={() => setTransferring(org)}
+                    data-testid={`transfer-org-${org.slug}`}>
+                    <Send size={14} /> Move server
+                  </Button>
                   <Button size="sm" variant="outline" className="gap-1.5"
                     onClick={() => setEditing(org)} data-testid={`edit-org-${org.slug}`}>
                     <Settings2 size={14} /> Address
@@ -368,6 +380,13 @@ export default function OrganizationsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {transferring && (
+        <TransferKeyDialog org={transferring} onClose={() => setTransferring(null)} />
+      )}
+      {pulling && (
+        <PullOrgDialog onClose={() => setPulling(false)} onDone={load} />
+      )}
     </div>
   );
 }

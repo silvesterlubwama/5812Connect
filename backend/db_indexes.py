@@ -43,7 +43,7 @@ async def _ensure_people_indexes():
         logger.info("Dropped global users.email unique index (replaced by per-organisation index)")
     except Exception:
         pass  # already gone
-    await db.users.create_index("id", unique=True)
+    await db.users.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.users.create_index([("role", 1), ("status", 1)])
     await db.users.create_index([("location_id", 1), ("status", 1)])
     await db.users.create_index("location_ids")
@@ -51,7 +51,7 @@ async def _ensure_people_indexes():
     await db.users.create_index("pin_lookup", sparse=True)
     await db.members.create_index("pin_lookup", sparse=True)
 
-    await db.members.create_index("id", unique=True)
+    await db.members.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.members.create_index("email")
     await db.members.create_index("pin")
     await db.members.create_index([("location_id", 1), ("status", 1)])
@@ -62,13 +62,13 @@ async def _ensure_people_indexes():
     await db.members.create_index([("kind", 1), ("status", 1)])
     await db.members.create_index("resident_location_id")
 
-    await db.children.create_index("id", unique=True)
+    await db.children.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.children.create_index([("location_id", 1), ("status", 1)])
     await db.children.create_index("family_id")
     await db.children.create_index("resident_location_id")
 
     # Heavy read collection: dedup by email/phone, kiosk pin, campus scoping
-    await db.guests.create_index("id", unique=True)
+    await db.guests.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.guests.create_index([("location_id", 1), ("status", 1)])
     await db.guests.create_index("family_id")
     await db.guests.create_index("user_id")
@@ -77,7 +77,7 @@ async def _ensure_people_indexes():
     await db.guests.create_index("pin")
     await db.guests.create_index([("is_parent", 1), ("family_id", 1)])
 
-    await db.families.create_index("id", unique=True)
+    await db.families.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.families.create_index([("location_id", 1), ("family_name", 1)])
 
     await db.password_resets.create_index("token")
@@ -92,22 +92,22 @@ async def _ensure_people_indexes():
 
 async def _ensure_scheduling_indexes():
     """Events, check-ins, resources, venues, bookings, registrations."""
-    await db.events.create_index("id", unique=True)
+    await db.events.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.events.create_index([("date", 1), ("status", 1)])
     await db.events.create_index([("location_id", 1), ("date", 1)])
 
-    await db.checkins.create_index("id", unique=True)
+    await db.checkins.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.checkins.create_index([("event_id", 1), ("check_in_time", -1)])
     await db.checkins.create_index([("date", 1), ("location_id", 1)])
 
-    await db.resources.create_index("id", unique=True)
+    await db.resources.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.resources.create_index([("location_id", 1), ("name", 1)])
-    await db.venues.create_index("id", unique=True)
+    await db.venues.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.venues.create_index([("location_id", 1), ("name", 1)])
-    await db.bookings.create_index("id", unique=True)
+    await db.bookings.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.bookings.create_index([("resource_id", 1), ("start_time", 1)])
     await db.bookings.create_index([("location_id", 1), ("start_time", 1)])
-    await db.public_bookings.create_index("id", unique=True)
+    await db.public_bookings.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.public_bookings.create_index([("location_id", 1), ("date", -1)])
     await db.public_bookings.create_index("token")
 
@@ -115,20 +115,20 @@ async def _ensure_scheduling_indexes():
     await db.event_registrations.create_index("member_id")
     await db.enrollments.create_index([("location_id", 1), ("status", 1)])
     await db.enrollments.create_index("member_id")
-    await db.conferences.create_index("id", unique=True)
+    await db.conferences.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.conferences.create_index([("location_id", 1), ("start_date", -1)])
 
 
 async def _ensure_task_indexes():
     """Tasks, boards (both collection names), and the director digest."""
-    await db.tasks.create_index("id", unique=True)
+    await db.tasks.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.tasks.create_index([("board_id", 1), ("list_id", 1), ("position", 1)])
     await db.tasks.create_index([("assignees", 1), ("due_date", 1)])
     await db.tasks.create_index([("due_date", 1), ("is_archived", 1), ("status", 1)])
-    await db.boards.create_index("id", unique=True)
+    await db.boards.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.boards.create_index([("location_id", 1), ("is_global", 1)])
     # Some code paths use kanban_boards, some boards
-    await db.kanban_boards.create_index("id", unique=True)
+    await db.kanban_boards.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.kanban_boards.create_index([("location_id", 1), ("is_global", 1)])
     # One digest row per user per date, 90-day TTL
     await db.task_director_digests.create_index(
@@ -165,10 +165,10 @@ async def _ensure_access_indexes():
     await db.residents.create_index([("member_id", 1), ("status", 1)])
     await db.residents.create_index([("location_id", 1), ("status", 1)])
 
-    await db.guest_passes.create_index("id", unique=True)
+    await db.guest_passes.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.guest_passes.create_index([("location_id", 1), ("status", 1), ("valid_from", -1)])
     await db.guest_passes.create_index("code")
-    await db.guest_access_requests.create_index("id", unique=True)
+    await db.guest_access_requests.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.guest_access_requests.create_index([("location_id", 1), ("status", 1), ("created_at", -1)])
     # Rate-limit window scan
     await db.guest_access_requests.create_index([("client_ip", 1), ("created_at", -1)])
@@ -209,7 +209,7 @@ async def _ensure_finance_indexes():
     await db.financial.create_index([("type", 1), ("date", -1)])
 
     # Balance rollups aggregate across these five scoped by account_id
-    await db.chart_accounts.create_index("id", unique=True)
+    await db.chart_accounts.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.chart_accounts.create_index([("location_id", 1), ("active", 1)])
     await db.chart_accounts.create_index("assigned_user_ids")
     await db.donations.create_index("deposit_to_account_id")
@@ -226,18 +226,18 @@ async def _ensure_finance_indexes():
     await db.sales.create_index([("deposit_to_account_id", 1), ("voided", 1)])
     # iter346 online checkout: settlement looks a sale up by provider tx_ref
     await db.sales.create_index("tx_ref")
-    await db.payment_webhook_events.create_index("id", unique=True)
+    await db.payment_webhook_events.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
 
     await db.accounting_entries.create_index([("auto_generated_from", 1), ("source_id", 1)])
     await db.accounting_entries.create_index([("status", 1), ("is_reversed", 1)])
 
-    await db.finance_journal_entries.create_index("id", unique=True)
+    await db.finance_journal_entries.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.finance_journal_entries.create_index([("location_id", 1), ("reversed", 1), ("date", -1)])
     await db.finance_journal_entries.create_index([("source", 1), ("reference", 1)])
     await db.finance_journal_entries.create_index("lines.account_id")
     await db.finance_journal_entries.create_index([("date", -1)])
 
-    await db.finance_chart_of_accounts.create_index("id", unique=True)
+    await db.finance_chart_of_accounts.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     # iter392 — account codes are unique within an organisation, not globally:
     # every tenant has its own "2200 Taxes Payable".
     await _recreate_index(
@@ -249,32 +249,32 @@ async def _ensure_finance_indexes():
         pass
     await db.finance_chart_of_accounts.create_index([("type", 1), ("active", 1)])
 
-    await db.bank_accounts.create_index("id", unique=True)
+    await db.bank_accounts.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.bank_accounts.create_index([("location_id", 1), ("closed", 1)])
     await db.bank_accounts.create_index("linked_account_id")
-    await db.bank_transactions.create_index("id", unique=True)
+    await db.bank_transactions.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.bank_transactions.create_index([("bank_account_id", 1), ("date", -1)])
     await db.bank_transactions.create_index([("status", 1), ("date", -1)])
     await db.reconciliation_rules.create_index([("location_id", 1), ("active", 1), ("priority", 1)])
 
-    await db.vendors.create_index("id", unique=True)
+    await db.vendors.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.vendors.create_index([("location_id", 1), ("name", 1)])
     await db.vendors.create_index("email")
-    await db.bills.create_index("id", unique=True)
+    await db.bills.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.bills.create_index([("location_id", 1), ("status", 1), ("bill_date", -1)])
     await db.bills.create_index("vendor_id")
     await db.bills.create_index("bill_number")
 
     # Scheduler ticks hourly on {active: True, next_run_date: {$lte: today}}
-    await db.recurring_entries.create_index("id", unique=True)
+    await db.recurring_entries.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.recurring_entries.create_index([("active", 1), ("next_run_date", 1)])
     await db.recurring_entries.create_index("location_id")
 
-    await db.customer_accounts.create_index("id", unique=True)
+    await db.customer_accounts.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.customer_accounts.create_index("user_id")
     await db.customer_accounts.create_index("customer_id")
     await db.customer_accounts.create_index([("location_id", 1), ("name", 1)])
-    await db.donors.create_index("id", unique=True)
+    await db.donors.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.donors.create_index([("location_id", 1), ("name", 1)])
     await db.donors.create_index("email")
 
@@ -300,13 +300,13 @@ async def _ensure_journal_idempotency_index():
 
 async def _ensure_hr_indexes():
     """Employees, contracts, payslips, timesheets, salaries, time off."""
-    await db.hr_employees.create_index("id", unique=True)
+    await db.hr_employees.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.hr_employees.create_index([("location_id", 1), ("status", 1)])
     await db.hr_employees.create_index("user_id")
     await db.hr_contracts.create_index([("employee_id", 1), ("start_date", -1)])
     # `hr_payslips` is canonical (routers/hr.py); the legacy `payslips` name
     # was never read or written, so it is deliberately not indexed.
-    await db.hr_payslips.create_index("id", unique=True)
+    await db.hr_payslips.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.hr_payslips.create_index([("staff_id", 1), ("period", -1)])
     await db.hr_payslips.create_index([("location_id", 1), ("period", -1)])
     await db.hr_payslips.create_index([("status", 1), ("period", -1)])
@@ -321,29 +321,29 @@ async def _ensure_hr_indexes():
 
 async def _ensure_operations_indexes():
     """Locations, shipments, products, social work, approvals, documents."""
-    await db.locations.create_index("id", unique=True)
+    await db.locations.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.locations.create_index([("parent_id", 1), ("type", 1)])
 
-    await db.shipments.create_index("id", unique=True)
+    await db.shipments.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.shipments.create_index([("status", 1), ("created_at", -1)])
     await db.shipments.create_index([("location_id", 1), ("created_at", -1)])
     await db.shipments.create_index("passengers.portal_token")
 
-    await db.products.create_index("id", unique=True)
+    await db.products.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.products.create_index([("location_id", 1), ("name", 1)])
     await db.products.create_index("name")
     await db.products.create_index("barcode")
     await db.products.create_index("variants.barcode")
 
-    await db.social_cases.create_index("id", unique=True)
+    await db.social_cases.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.social_cases.create_index("subject_id")
     await db.social_cases.create_index([("location_id", 1), ("status", 1), ("created_at", -1)])
-    await db.social_review_forms.create_index("id", unique=True)
+    await db.social_review_forms.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.social_review_forms.create_index([("child_id", 1), ("review_date", -1)])
     await db.social_review_forms.create_index([("location_id", 1), ("review_date", -1)])
     await db.case_notes.create_index([("case_id", 1), ("created_at", -1)])
 
-    await db.approval_requests.create_index("id", unique=True)
+    await db.approval_requests.create_index([("organization_id", 1), ("id", 1)], name="org_id_unique", unique=True)
     await db.approval_requests.create_index([("subject_kind", 1), ("status", 1), ("created_at", -1)])
     await db.approval_requests.create_index([("location_id", 1), ("status", 1)])
 
@@ -387,10 +387,46 @@ async def _ensure_organization_indexes():
                           unique=True, sparse=True)
     await db.organizations.create_index("slug", unique=True)
     await db.organizations.create_index([("status", 1), ("is_default", -1)])
+    # A transfer key may only read the files listed when its manifest was built.
+    from deps import raw_db as _raw
+    await _raw.org_transfer_files.create_index([("grant_id", 1), ("path", 1)], unique=True)
+    await _raw.org_transfer_grants.create_index("id", unique=True)
+    await _raw.org_transfer_jobs.create_index("id", unique=True)
+
+
+async def _drop_global_id_indexes():
+    """`id` must be unique per organisation, not across the whole database.
+
+    A global `id_1` unique index is a leftover from before multi-organisation:
+    it stopped the same organisation being copied onto a server that already
+    holds it, which is exactly what a transfer between deployments does. The
+    replacement — (organization_id, id) — is created alongside the rest.
+    """
+    from deps import raw_db
+    from org_context import org_bypass
+    dropped = 0
+    with org_bypass():
+        for name in await raw_db.list_collection_names():
+            if name.startswith("system."):
+                continue
+            try:
+                info = await raw_db[name].index_information()
+            except Exception:
+                continue
+            for idx_name, spec in info.items():
+                if spec.get("unique") and spec.get("key") == [("id", 1)]:
+                    try:
+                        await raw_db[name].drop_index(idx_name)
+                        dropped += 1
+                    except Exception as e:
+                        logger.warning(f"could not drop {name}.{idx_name}: {e}")
+    if dropped:
+        logger.info("Dropped %s global id unique index(es) — id is unique per organisation now", dropped)
 
 
 _INDEX_GROUPS = (
     ("organizations", _ensure_organization_indexes),
+    ("id.per-organisation", _drop_global_id_indexes),
     ("people", _ensure_people_indexes),
     ("scheduling", _ensure_scheduling_indexes),
     ("tasks", _ensure_task_indexes),
