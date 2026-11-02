@@ -43,7 +43,7 @@ export class ErrorBoundary extends React.Component {
                 Try Again
               </button>
               <button
-                onClick={() => window.location.href = '/dashboard'}
+                onClick={() => window.location.href = `${window.location.pathname.split('/')[1] ? `/${window.location.pathname.split('/')[1]}` : ''}/dashboard`}
                 className="px-4 py-2 rounded-lg bg-secondary text-foreground text-sm font-medium hover:bg-secondary/80"
               >
                 Go to Dashboard

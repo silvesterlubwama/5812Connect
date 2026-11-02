@@ -2408,3 +2408,10 @@ The pull can now land in an organisation already on the new server, replacing
 its data (confirmation required). The organisation's web addresses, slug and
 default flag stay with the server it is on; only the contents are replaced.
 Re-running a move is therefore safe and repeatable.
+
+### 2026-11-02 — Addresses are paths, and payroll's default month
+- Organisations are addressed as `main-domain/web-name` (e.g. `/lub`), with the
+  app's pages underneath. Subdomains are no longer used for routing; the web
+  name is editable per organisation and needs no DNS.
+- The payslip generator opens on the month payroll is working on: the month just
+  gone until five days before month end, then the current month.

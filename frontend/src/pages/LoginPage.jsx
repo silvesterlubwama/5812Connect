@@ -10,6 +10,7 @@ import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { webAuthnApi } from '../services/api';
 import { landingRouteFor } from '../components/RouteGuards';
+import { goToOrg, getOrgSlug } from '../orgRoute';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
@@ -45,6 +46,12 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const me = await enterOrganization(org.id);
+      // That organisation has its own address; if it is not the one we are on,
+      // open it there so every link afterwards stays inside it.
+      if (org.slug && org.slug !== getOrgSlug()) {
+        goToOrg(org.slug, landingRouteFor(me));
+        return;
+      }
       navigate(landingRouteFor(me));
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Could not open that organisation');
@@ -244,7 +251,7 @@ export default function LoginPage() {
               <div className="relative flex justify-center text-xs uppercase"><span className="bg-card px-2 text-muted-foreground">Quick Access</span></div>
             </div>
 
-            <Button variant="outline" className="w-full gap-2 border-primary/20 hover:bg-primary/5" type="button" onClick={() => window.location.href = '/portal'}>
+            <Button variant="outline" className="w-full gap-2 border-primary/20 hover:bg-primary/5" type="button" onClick={() => navigate('/portal')}>
               <Users size={16} /> Guest & Parent Portal
             </Button>
 

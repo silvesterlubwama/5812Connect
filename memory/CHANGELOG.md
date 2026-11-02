@@ -2819,3 +2819,54 @@ Verified: 19/19 in `tests/test_iter401_org_transfer.py` (including stale rows
 not surviving, no duplicated rows, the address kept, the source untouched, and
 non-owners refused) and 12/12 in `tests/test_iter402_transfer_security.py`; UI
 checked at 1920px and 390px.
+
+## 2026-11-02 — Organisations addressed by path, not subdomain
+Asked for: "could we just use / instead of subdomain", with the web name first
+and the app's pages after it, and subdomains dropped.
+
+- Every organisation now lives under its own web name: `5812uganda.org/lub`, with
+  its pages beneath it (`/lub/members`). The router runs with that name as its
+  basename, so every link in the app stayed written as `/members`.
+- `GET /api/public/org-route?segment=` tells the app which organisation an
+  address belongs to before it renders. An old link (`/members`) or the bare
+  domain is moved under the default organisation, keeping the rest of the path.
+- Requests carry the web name as `X-Org-Slug`; the middleware and
+  `org_for_hostname` resolve from it (then `?org=`), no longer from the Host
+  header. Sign-in is still bound to the address: a Lubwamas account is refused
+  under `/5812global`, and a signed-in user on another organisation's address is
+  sent back to their own.
+- Suspended organisations return 403 on their address; an unknown web name falls
+  back to the default, never to the one asked for.
+- `PUT /organizations/{id}` accepts `slug` (validated, unique, 409 naming the
+  holder). The Organisations console edits the web name instead of hostnames and
+  shows the resulting link; the create form lost the hostnames field.
+- `/auth/me` now returns `organization_slug` so the app can keep every link
+  inside the right organisation.
+
+Verified: 11/11 in `tests/test_iter403_path_addresses.py`, plus 34 and 47 in the
+existing isolation/bootstrap suites after rewriting their Host-header cases; in
+the browser `/lubwamas/login` shows Lubwamas branding, signing in lands on
+`/lubwamas/dashboard`, the nav links carry the prefix and a reload deep inside
+still works.
+
+## 2026-11-02 — Payslips open on the month payroll is actually working on
+Asked for: at the start of a month the generator should be for the previous
+month; from about five days before month end, for the current month.
+
+- `_payroll_month_in_hand()` (routers/hr.py): from five days before month end to
+  month end → this month; the rest of the month → the month just gone. Used by
+  `/hr/pay-periods` (`current` / `is_current`), `/hr/payslips/upcoming-paydays`
+  (new `period_in_hand`), and as the default for `/payslips/generate|preview`
+  when no period is given.
+- A monthly payday now settles the right month: paid on or before the 15th → the
+  month just gone; later → the month it falls in. The nightly payday run used the
+  calendar month of the run, so a payday on the 2nd drafted payslips for a month
+  that had barely started.
+- The payday list keeps the payday just gone, because early in a month that is
+  the one settling the month being worked on, and the generator now opens on it.
+  Monthly options read "October 2026 · paid Sat 7 Nov 2026".
+- Weekly and biweekly cycles are untouched — they are anchored, not calendar.
+
+Verified: 19/19 in `tests/test_iter404_payslip_period.py`. On 2 November a
+monthly campus reports `period_in_hand 2026-10`, its 7 Nov payday is shown as
+settling 2026-10, and a preview with no period given returns 2026-10.

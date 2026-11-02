@@ -8,21 +8,27 @@ import { toast } from 'sonner';
 
 export const EditOrgDialog = ({ org, onClose, onSaved }) => {
   const [name, setName] = useState('');
-  const [hostnames, setHostnames] = useState('');
+  const [slug, setSlug] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!org) return;
     setName(org.name || '');
-    setHostnames((org.hostnames || []).join(', '));
+    setSlug(org.slug || '');
   }, [org]);
 
+  const cleanSlug = slug.trim().toLowerCase();
+  const changedSlug = cleanSlug && cleanSlug !== org?.slug;
+
   const save = async () => {
+    if (changedSlug && !window.confirm(
+      `Anyone using ${window.location.origin}/${org.slug} will have to be given the new address `
+      + `${window.location.origin}/${cleanSlug}. Change it?`)) return;
     setBusy(true);
     try {
       await api.put(`/organizations/${org.id}`, {
         name: name.trim(),
-        hostnames: hostnames.split(',').map(h => h.trim()).filter(Boolean),
+        slug: cleanSlug || undefined,
       });
       toast.success('Saved');
       onSaved?.();
@@ -41,22 +47,33 @@ export const EditOrgDialog = ({ org, onClose, onSaved }) => {
             <Label htmlFor="edit-org-name">Name</Label>
             <Input id="edit-org-name" value={name} onChange={e => setName(e.target.value)}
               data-testid="edit-org-name-input" />
+            <p className="text-xs text-muted-foreground">
+              What staff see on screen. Changing it breaks nothing.
+            </p>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="edit-org-hosts">Web addresses</Label>
-            <Input id="edit-org-hosts" value={hostnames} onChange={e => setHostnames(e.target.value)}
-              placeholder="new.lubwamas.org, personal.5812uganda.org"
-              data-testid="edit-org-hostnames-input" />
+            <Label htmlFor="edit-org-slug">Web name</Label>
+            <Input id="edit-org-slug" value={slug} onChange={e => setSlug(e.target.value)}
+              placeholder="lub" data-testid="edit-org-slug-input" />
             <p className="text-xs text-muted-foreground">
-              Comma separated. Point the address at this server (an A record or CNAME to the same
-              host as the main site) and it opens straight into {org?.name} with its own logo,
-              colours and sign-in screen. Each address can only belong to one organisation.
+              This organisation opens at{' '}
+              <span className="font-mono break-all">
+                {window.location.origin}/{cleanSlug || '…'}
+              </span>{' '}
+              — its own sign-in screen, logo and colours, with its pages underneath
+              (<span className="font-mono">/{cleanSlug || '…'}/members</span>). Letters, numbers and
+              dashes; keep it short. No DNS or certificate to set up.
             </p>
+            {changedSlug ? (
+              <p className="text-xs text-amber-600" data-testid="edit-org-slug-warning">
+                Links to the old address stop working — everyone will need the new one.
+              </p>
+            ) : null}
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} disabled={busy || !name.trim()} data-testid="edit-org-submit">
+          <Button onClick={save} disabled={busy || !name.trim() || !cleanSlug} data-testid="edit-org-submit">
             {busy ? 'Saving…' : 'Save'}
           </Button>
         </DialogFooter>

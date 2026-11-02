@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { publicApi } from '../services/api';
 import api from '../services/api';
+import { getOrgSlug } from '../orgRoute';
 import { toast } from 'sonner';
 
 const formatDate = (d) => new Date(d).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
@@ -72,7 +73,7 @@ export default function PublicBookingsPage() {
 
   // Which checkout buttons to show + the outcome banner after a redirect back.
   useEffect(() => {
-    fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/system-settings/public`)
+    fetch(`${process.env.REACT_APP_BACKEND_URL}/api/admin/system-settings/public?org=${encodeURIComponent(getOrgSlug())}`)
       .then(r => r.json())
       .then(d => {
         const p = d?.payments || {};
@@ -125,7 +126,7 @@ export default function PublicBookingsPage() {
   // Load policies
   useEffect(() => {
     if (showPolicies && !policies) {
-      fetch(`${process.env.REACT_APP_BACKEND_URL}/api/public/policies`)
+      fetch(`${process.env.REACT_APP_BACKEND_URL}/api/public/policies?org=${encodeURIComponent(getOrgSlug())}`)
         .then(r => r.json()).then(setPolicies).catch(() => {});
     }
   }, [showPolicies, policies]);

@@ -6,6 +6,7 @@ import { I18nProvider } from './context/I18nContext';
 import { BrandingProvider } from './context/BrandingContext';
 import { Toaster } from './components/ui/sonner';
 import OfflineBanner from './components/OfflineBanner';
+import { resolveOrgRoute, getOrgSlug, goToOrg } from './orgRoute';
 import './App.css';
 
 import LoginPage from './pages/LoginPage';
@@ -124,7 +125,17 @@ function ConditionalSoftphone() {
 
 function AppRoutes() {
   const location = useLocation();
+  const { user } = useAuth();
   usePwaOfflinePrefetch();
+  // Someone signed in to one organisation but on another's address — their
+  // session belongs to theirs, so take them to it rather than showing their
+  // data under the wrong name.
+  React.useEffect(() => {
+    const mine = user?.organization_slug;
+    if (mine && mine !== getOrgSlug()) {
+      goToOrg(mine, location.pathname + location.search);
+    }
+  }, [user, location.pathname, location.search]);
   // Check URL fragment for session_id from Google Auth callback
   if (location.hash?.includes('session_id=')) {
     return <AuthCallback />;
@@ -234,6 +245,35 @@ function AppRoutes() {
 }
 
 function App() {
+  // The organisation's web name sits at the front of every address
+  // (5812uganda.org/lub/members), so it has to be resolved before the router
+  // mounts — it becomes the router's basename, which is why every link inside
+  // the app can stay written as /members.
+  const [slug, setSlug] = React.useState(null);
+  const [routeError, setRouteError] = React.useState(null);
+
+  React.useEffect(() => {
+    resolveOrgRoute()
+      .then((s) => { if (s) setSlug(s); })
+      .catch((e) => setRouteError(e.message || 'Could not reach the server'));
+  }, []);
+
+  if (routeError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 text-center">
+        <div>
+          <p className="text-lg font-medium">{routeError}</p>
+          <p className="text-sm text-muted-foreground mt-2">
+            Check the address, or try again in a moment.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (!slug) {
+    return <div className="min-h-screen" aria-busy="true" />;
+  }
+
   return (
     <ErrorBoundary>
       <I18nProvider>
@@ -241,7 +281,7 @@ function App() {
         <AuthProvider>
           <WebSocketProvider>
             <VoipProvider>
-              <BrowserRouter>
+              <BrowserRouter basename={`/${slug}`}>
                 <OfflineBanner />
                 <ErrorBoundary>
                   <AppRoutes />

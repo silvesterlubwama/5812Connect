@@ -414,6 +414,17 @@ async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
     user_out = {k: v for k, v in current_user.items() if k not in ("password_hash", "_id")}
     # Computed capability flags the UI needs up front (no extra round-trip).
     user_out["can_view_pay"] = can_view_pay(current_user)
+    # The organisation's web name: the app lives under it (5812uganda.org/lub)
+    # and needs it to keep every link inside the right organisation.
+    org_key = user_out.get("active_organization_id") or user_out.get("organization_id")
+    if org_key:
+        with org_bypass():
+            org = await raw_db.organizations.find_one(
+                {"id": org_key}, {"_id": 0, "slug": 1, "name": 1}
+            )
+        if org:
+            user_out["organization_slug"] = org.get("slug")
+            user_out["organization_name"] = org.get("name")
     # Enrich with location name for campus display
     if user_out.get("location_id"):
         loc = await db.locations.find_one({"id": user_out["location_id"]}, {"_id": 0, "name": 1})

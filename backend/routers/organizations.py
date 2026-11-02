@@ -65,6 +65,7 @@ class OrganizationIn(BaseModel):
 
 class OrganizationUpdate(BaseModel):
     name: Optional[str] = None
+    slug: Optional[str] = None
     hostnames: Optional[List[str]] = None
 
 
@@ -198,6 +199,25 @@ async def update_organization(
     updates = {}
     if data.name is not None:
         updates["name"] = data.name.strip()
+    if data.slug is not None:
+        slug = data.slug.strip().lower()
+        if not SLUG_RE.match(slug):
+            raise HTTPException(
+                status_code=400,
+                detail="A web name may use letters, numbers and dashes only",
+            )
+        with org_bypass():
+            clash = await raw_db.organizations.find_one(
+                {"slug": slug, "id": {"$ne": org_id}}, {"_id": 0, "name": 1}
+            )
+        if clash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"'{slug}' is already the web name of {clash.get('name')}",
+            )
+        # Anyone holding a link to the old web name will have to be told the new
+        # one — it is the organisation's address.
+        updates["slug"] = slug
     if data.hostnames is not None:
         hostnames = _clean_hostnames(data.hostnames)
         with org_bypass():
@@ -229,6 +249,37 @@ async def update_organization(
         raise HTTPException(status_code=404, detail="Organisation not found")
     await _audit(current_user.get("id"), "update", "organization", org_id, updates)
     return {"message": "Updated", "updates": updates}
+
+
+@router.get("/public/org-route")
+async def public_org_route(segment: str = "") -> dict:
+    """Which organisation a web address belongs to — called by the app before it
+    renders anything, with the first part of the path (5812uganda.org/**lub**).
+
+    Public on purpose: it answers for one web name at a time and returns nothing
+    but that organisation's display name, so it reveals no more than the sign-in
+    screen already does. It never lists the organisations on this server.
+    """
+    seg = (segment or "").strip().strip("/").lower()
+    with org_bypass():
+        default = await raw_db.organizations.find_one(
+            {"status": "active", "is_default": True}, {"_id": 0, "slug": 1, "name": 1}
+        ) or await raw_db.organizations.find_one(
+            {"status": "active"}, {"_id": 0, "slug": 1, "name": 1}, sort=[("created_at", 1)]
+        )
+        org = None
+        if seg:
+            org = await raw_db.organizations.find_one(
+                {"slug": seg}, {"_id": 0, "slug": 1, "name": 1, "status": 1}
+            )
+    return {
+        "found": bool(org),
+        "slug": (org or {}).get("slug"),
+        "name": (org or {}).get("name"),
+        "suspended": (org or {}).get("status") == "suspended",
+        "default_slug": (default or {}).get("slug"),
+        "default_name": (default or {}).get("name"),
+    }
 
 
 @router.post("/organizations/{org_id}/status")

@@ -343,69 +343,60 @@ class TestIsolationRegression:
 
 # ── iter396: one web address, one organisation ──────────────────────────────
 
-def test_hostname_is_normalised_and_www_twin_added():
-    """Whatever the owner types, the stored address is what a browser sends —
-    and the www form lands in the same organisation."""
+def test_web_name_serves_that_organisations_branding():
+    """The web name in the address decides whose sign-in screen and branding a
+    visitor sees, before anybody has signed in."""
     h = H(_login(OWNER)["token"])
     orgs = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
     lub = next(o for o in orgs if o["name"] == "Lubwamas")
-    original = lub.get("hostnames") or []
-    try:
-        r = requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
-                         json={"hostnames": ["https://Probe396.Lubwamas.org/"]})
-        assert r.status_code == 200, r.text
-        saved = r.json()["updates"]["hostnames"]
-        assert "probe396.lubwamas.org" in saved
-        assert "www.probe396.lubwamas.org" in saved
-        for host in ("probe396.lubwamas.org", "www.probe396.lubwamas.org"):
-            b = requests.get(f"{LOCAL}/api/admin/system-settings/public",
-                             headers={"Host": host}, timeout=30)
-            assert b.status_code == 200
-    finally:
-        requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
-                     json={"hostnames": original})
+    glob = next(o for o in orgs if o["name"] == "58:12 Global")
+    seen = {}
+    for org in (lub, glob):
+        b = requests.get(f"{LOCAL}/api/admin/system-settings/public",
+                         headers={"X-Org-Slug": org["slug"]}, timeout=30)
+        assert b.status_code == 200, b.text
+        seen[org["slug"]] = (b.json().get("branding") or {}).get("app_name")
+    assert seen[lub["slug"]] != seen[glob["slug"]], f"both addresses showed {seen}"
+    # an unknown web name falls back to the default organisation, never to the
+    # one asked for
+    unknown = requests.get(f"{LOCAL}/api/admin/system-settings/public",
+                           headers={"X-Org-Slug": "no-such-org"}, timeout=30)
+    assert unknown.status_code == 200
+    assert (unknown.json().get("branding") or {}).get("app_name") != seen[lub["slug"]]
 
 
-def test_two_organisations_cannot_share_one_address():
+def test_two_organisations_cannot_share_one_web_name():
     h = H(_login(OWNER)["token"])
     orgs = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
     lub = next(o for o in orgs if o["name"] == "Lubwamas")
     other = next(o for o in orgs if o["id"] != lub["id"])
-    taken = (lub.get("hostnames") or ["new.lubwamas.org"])[0]
-    original = other.get("hostnames") or []
     r = requests.put(f"{API}/organizations/{other['id']}", headers=h, timeout=30,
-                     json={"hostnames": [taken]})
+                     json={"slug": lub["slug"]})
     assert r.status_code == 409, r.text
-    assert "already belongs" in r.json()["detail"]
-    # and the loser's own addresses are untouched
+    assert lub["name"] in r.json()["detail"]
+    # and the loser keeps its own web name
     after = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
-    assert (next(o for o in after if o["id"] == other["id"]).get("hostnames") or []) == original
+    assert next(o for o in after if o["id"] == other["id"])["slug"] == other["slug"]
 
 
-def test_clearing_addresses_twice_does_not_collide():
-    """Two organisations with no address at all must both be allowed — the
-    unique index treats an empty array as a value, so they are stored as absent."""
+def test_a_web_name_must_be_usable_in_an_address():
     h = H(_login(OWNER)["token"])
     orgs = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
     lub = next(o for o in orgs if o["name"] == "Lubwamas")
-    original = lub.get("hostnames") or []
-    try:
-        for _ in range(2):
-            r = requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
-                             json={"hostnames": []})
-            assert r.status_code == 200, r.text
-    finally:
-        requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
-                     json={"hostnames": original})
+    for bad in ("has space", "UPPER/slash", "wrong!"):
+        r = requests.put(f"{API}/organizations/{lub['id']}", headers=h, timeout=30,
+                         json={"slug": bad})
+        assert r.status_code == 400, f"{bad!r} accepted: {r.text}"
+    after = requests.get(f"{API}/organizations", headers=h, timeout=30).json()["organizations"]
+    assert next(o for o in after if o["id"] == lub["id"])["slug"] == lub["slug"]
 
 
 def test_signing_in_on_another_organisations_address_is_refused():
-    lub_host = "new.lubwamas.org"
-    wrong = requests.post(f"{LOCAL}/api/auth/login", headers={"Host": lub_host}, timeout=30,
+    wrong = requests.post(f"{LOCAL}/api/auth/login", headers={"X-Org-Slug": "lubwamas"}, timeout=30,
                           json={"identifier": A_ADMIN["identifier"],
                                 "password": A_ADMIN["password"]})
     assert wrong.status_code == 401, wrong.text
-    right = requests.post(f"{LOCAL}/api/auth/login", headers={"Host": lub_host}, timeout=30,
+    right = requests.post(f"{LOCAL}/api/auth/login", headers={"X-Org-Slug": "lubwamas"}, timeout=30,
                           json={"identifier": B_ADMIN["identifier"],
                                 "password": B_ADMIN["password"]})
     assert right.status_code == 200, right.text

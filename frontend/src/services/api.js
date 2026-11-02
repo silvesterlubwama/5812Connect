@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { secureStorage } from './secureStorage';
+import { getOrgSlug } from '../orgRoute';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const api = axios.create({ baseURL: `${BACKEND_URL}/api` });
@@ -7,6 +8,11 @@ const api = axios.create({ baseURL: `${BACKEND_URL}/api` });
 api.interceptors.request.use(config => {
   const token = secureStorage.getToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // Which organisation's address the visitor is on. The server needs this
+  // before anyone has signed in — the shop, booking links, the sign-in screen
+  // and its branding all belong to one organisation.
+  const slug = getOrgSlug();
+  if (slug) config.headers['X-Org-Slug'] = slug;
   return config;
 });
 
@@ -39,7 +45,7 @@ api.interceptors.response.use(
       if (!isLoginPath) {
         secureStorage.removeToken();
         secureStorage.removeUser();
-        window.location.href = '/login';
+        window.location.href = `/${getOrgSlug()}/login`;
       }
     }
     return Promise.reject(err);

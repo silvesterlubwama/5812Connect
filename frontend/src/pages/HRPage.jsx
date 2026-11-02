@@ -469,7 +469,14 @@ export default function HRPage() {
         const list = r.data?.paydays || [];
         setUpcomingPaydays(list);
         setPaydayFrequency(r.data?.frequency || 'monthly');
-        setSelectedPayday(prev => (list.find(p => p.period === prev) ? prev : (list[0]?.period || '')));
+        // Open on the period payroll is actually working on: early in a month
+        // that is the month just gone, not the one that has barely started.
+        const inHand = r.data?.period_in_hand;
+        setSelectedPayday(prev => {
+          if (list.find(p => p.period === prev)) return prev;
+          if (inHand && list.find(p => p.period === inHand)) return inHand;
+          return list[0]?.period || '';
+        });
       })
       .catch(() => {
         setUpcomingPaydays([]);
@@ -1280,10 +1287,16 @@ export default function HRPage() {
                   <SelectContent>
                     {upcomingPaydays.map(p => {
                       const d = new Date(p.date + 'T00:00:00');
-                      const label = d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+                      const paid = d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+                      // On a monthly cycle the month being paid is what matters —
+                      // the payday for it can fall in the following month.
+                      const monthLabel = /^\d{4}-\d{2}$/.test(p.period)
+                        ? new Date(`${p.period}-01T00:00:00`).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+                        : '';
                       return (
                         <SelectItem key={p.period} value={p.period} data-testid={`payday-opt-${p.date}`}>
-                          {label}{paydayFrequency !== 'monthly' ? ` · ${p.period.split(' ')[1] || ''}` : ''}
+                          {monthLabel ? `${monthLabel} · paid ${paid}` : paid}
+                          {paydayFrequency !== 'monthly' ? ` · ${p.period.split(' ')[1] || ''}` : ''}
                         </SelectItem>
                       );
                     })}

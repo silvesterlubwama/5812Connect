@@ -341,7 +341,8 @@ app.add_middleware(SecurityHeadersASGI)
 # Authenticated traffic is pinned authoritatively in get_current_user from the
 # user record. This middleware covers the rest: public pages (the shop, booking
 # links, shared calendars) which have no user to resolve. Those are pinned from
-# the request hostname, an explicit ?org=<slug>, or the default organisation.
+# the organisation whose web name is in the address the browser is on, sent as
+# X-Org-Slug, or an explicit ?org=<slug>, or the default organisation.
 # ============================================================
 class OrgContextASGI:
     def __init__(self, app):
@@ -354,12 +355,20 @@ class OrgContextASGI:
         token = None
         try:
             headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-            host = (headers.get("host") or "").split(":")[0].strip().lower()
             org_id = None
-            if host:
+            # Each organisation lives under its own web name — 5812uganda.org/lub —
+            # so the app tells us which one the visitor is in. One address, one
+            # certificate, no DNS to wire up per organisation.
+            slug = (headers.get("x-org-slug") or "").strip().lower()
+            if not slug:
+                qs = scope.get("query_string") or b""
+                if b"org=" in qs:
+                    from urllib.parse import parse_qs
+                    slug = (parse_qs(qs.decode()).get("org") or [""])[0].strip().lower()
+            if slug:
                 with org_bypass():
                     org = await raw_db.organizations.find_one(
-                        {"hostnames": host}, {"_id": 0, "id": 1, "status": 1}
+                        {"slug": slug}, {"_id": 0, "id": 1, "status": 1}
                     )
                 if org:
                     if org.get("status") == "suspended":
@@ -370,25 +379,10 @@ class OrgContextASGI:
                         return
                     org_id = org["id"]
             if not org_id:
-                # An explicit ?org=<slug> lets a tenant share public links
-                # before its own hostname is wired up.
-                qs = scope.get("query_string") or b""
-                slug = ""
-                if b"org=" in qs:
-                    from urllib.parse import parse_qs
-                    slug = (parse_qs(qs.decode()).get("org") or [""])[0].strip().lower()
-                if slug:
-                    with org_bypass():
-                        org = await raw_db.organizations.find_one(
-                            {"slug": slug, "status": "active"}, {"_id": 0, "id": 1}
-                        )
-                    if org:
-                        org_id = org["id"]
-            if not org_id:
-                # Last resort for public pages on an unclaimed hostname (the
-                # preview URL, localhost): the default organisation. This only
-                # decides WHOSE published content shows — the request is still
-                # pinned to exactly one tenant, so nothing crosses over.
+                # No web name in the address (the bare domain, the preview URL,
+                # localhost): the default organisation. This only decides WHOSE
+                # published content shows — the request is still pinned to
+                # exactly one tenant, so nothing crosses over.
                 with org_bypass():
                     fallback = await raw_db.organizations.find_one(
                         {"status": "active", "is_default": True}, {"_id": 0, "id": 1}

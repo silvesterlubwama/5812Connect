@@ -250,7 +250,7 @@ class TestPasskeyFullFlow:
         try:
             ch = _begin({"email": "admin@5812uganda.org", "rpId": RP}).json()["challenge"]
             r = requests.post(f"{API}/webauthn/authenticate/complete", json=key.assertion(ch),
-                              headers={"Host": "new.lubwamas.org"}, timeout=30)
+                              headers={"X-Org-Slug": "lubwamas"}, timeout=30)
             assert r.status_code in (401, 403), (r.status_code, r.text[:200])
             assert "token" not in r.text
         finally:
@@ -265,13 +265,10 @@ class TestPasskeyFullFlow:
         r = requests.get(f"{API}/members/{a_mem['id']}", headers=H(tok), timeout=30)
         assert r.status_code in (403, 404), (r.status_code, r.text[:200])
 
-    def test_org_b_passkey_refused_on_org_a_host(self, b_passkey):
-        hosts = _db().organizations.find_one({"id": ORG_A}, {"_id": 0, "hostnames": 1}).get("hostnames") or []
-        if not hosts:
-            pytest.skip("org A has no hostname")
+    def test_org_b_passkey_refused_on_org_a_address(self, b_passkey):
         ch = _begin({"email": "admin@lubwamas.org", "rpId": RP}).json()["challenge"]
         r = requests.post(f"{API}/webauthn/authenticate/complete", json=b_passkey.assertion(ch),
-                          headers={"Host": hosts[0]}, timeout=30)
+                          headers={"X-Org-Slug": "5812global"}, timeout=30)
         assert r.status_code == 403, (r.status_code, r.text[:200])
 
 
@@ -321,7 +318,7 @@ class TestSignInRegression:
                                    {"$set": {"active_organization_id": orig.get("active_organization_id")}})
 
     def test_a_admin_refused_on_lubwamas_host(self):
-        _login(A_ADMIN, headers={"Host": "new.lubwamas.org"}, expect=401)
+        _login(A_ADMIN, headers={"X-Org-Slug": "lubwamas"}, expect=401)
 
 
 # ── A deployment that predates organisations must adopt its own data ─────────
@@ -525,7 +522,7 @@ def test_owner_can_sign_in_on_a_tenant_address_and_lands_in_it():
     """The owner belongs to no organisation, so the hostname filter excluded
     them and every organisation's own address refused the one account that is
     allowed to enter all of them."""
-    r = requests.post(f"{LOCAL}/api/auth/login", headers={"Host": "new.lubwamas.org"},
+    r = requests.post(f"{LOCAL}/api/auth/login", headers={"X-Org-Slug": "lubwamas"},
                       json=OWNER, timeout=30)
     assert r.status_code == 200, r.text
     body = r.json()
@@ -537,7 +534,7 @@ def test_owner_can_sign_in_on_a_tenant_address_and_lands_in_it():
     lub = db.organizations.find_one({"name": "Lubwamas"}, {"_id": 0, "id": 1})
     assert me.get("active_organization_id") == lub["id"]
     # a tenant admin is still refused on another tenant's address
-    w = requests.post(f"{LOCAL}/api/auth/login", headers={"Host": "new.lubwamas.org"},
+    w = requests.post(f"{LOCAL}/api/auth/login", headers={"X-Org-Slug": "lubwamas"},
                       json=A_ADMIN, timeout=30)
     assert w.status_code == 401
 

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from deps import db, get_current_user, require_staff, require_manager, require_director, require_admin, _audit, logger, get_campus_filter, get_role_level, require_hr_view, can_view_pay, require_pay_view
 from datetime import datetime, timezone, date as dt_date, timedelta as td
 from typing import Optional, List, Tuple
+import calendar
 import uuid
 
 from routers.payroll_engine import (
@@ -148,14 +149,39 @@ def _period_containing(pay_frequency: str, anchor_iso: str, d: dt_date) -> str:
     return _biweekly_period(start, step)
 
 
+def _payroll_month_in_hand(d: dt_date) -> str:
+    """Which month payroll is working on today — monthly cycles only.
+
+    A month's pay is run at its end and finished off in the first days of the
+    next one, so on the 2nd of November the payslips being made are October's,
+    not November's. From five days before month end onwards the month in hand is
+    the current one.
+    """
+    last_day = calendar.monthrange(d.year, d.month)[1]
+    if d.day >= last_day - 4:
+        return d.strftime("%Y-%m")
+    return (d.replace(day=1) - td(days=1)).strftime("%Y-%m")
+
+
+def _period_in_hand(pay_frequency: str, anchor_iso: str, d: dt_date) -> str:
+    """The period payroll is working on — what every generator defaults to."""
+    if _cycle_step_days(pay_frequency) is None:
+        return _payroll_month_in_hand(d)
+    return _period_containing(pay_frequency, anchor_iso, d)
+
+
 def _period_for_payday(pay_frequency: str, anchor_iso: str, payday: dt_date) -> str:
     """The period whose work a given payday settles.
 
-    Monthly → the calendar month of the payday. Weekly/biweekly → the window
-    that CLOSED on or before the payday (you are paid after working, so the
-    payday itself belongs to the next window).
+    Monthly → a payday in the first half of a month is settling the month just
+    gone (paid on the 2nd, you are being paid for last month); from mid-month
+    onwards it settles the month it falls in. Weekly/biweekly → the window that
+    CLOSED on or before the payday (you are paid after working, so the payday
+    itself belongs to the next window).
     """
     if _cycle_step_days(pay_frequency) is None:
+        if payday.day <= 15:
+            return (payday.replace(day=1) - td(days=1)).strftime("%Y-%m")
         return payday.strftime("%Y-%m")
     return _period_containing(pay_frequency, anchor_iso, payday - td(days=1))
 
@@ -958,6 +984,21 @@ async def upcoming_paydays(
         d = anchor_d
         while d < today:
             d = _next_payday_after("monthly", d)
+        # The payday just gone is kept on the list: early in a month the
+        # payslips being made are last month's, and that is the payday which
+        # settles them.
+        prev = d
+        for _ in range(2):
+            candidate = prev.replace(day=1) - td(days=1)
+            try:
+                candidate = candidate.replace(day=d.day)
+            except ValueError:
+                pass
+            if candidate < d:
+                prev = candidate
+                break
+        if prev < d:
+            paydays.append(prev)
         paydays.append(d)
         for _ in range(count - 1):
             paydays.append(_next_payday_after("monthly", paydays[-1]))
@@ -981,6 +1022,9 @@ async def upcoming_paydays(
     return {
         "frequency": freq,
         "payday_weekday": payday_weekday,
+        # What payroll is working on right now, so the generator opens on it:
+        # last month until the last five days of this one.
+        "period_in_hand": _period_in_hand(freq, _cycle_anchor_iso(s), today),
         "paydays": [
             {"date": p.isoformat(), "period": _period_label(freq, p, _cycle_anchor_iso(s))}
             for p in paydays
@@ -997,7 +1041,9 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
       pto_days_override?: {staff_id: days},
       use_timesheets?: bool  (default true — pulls approved timesheets for the period)
     }"""
-    period = data.get("period") or datetime.now(timezone.utc).strftime("%Y-%m")
+    # No period given: the month payroll is working on, which in the first
+    # weeks of a month is the one just gone.
+    period = data.get("period") or _payroll_month_in_hand(datetime.now(timezone.utc).date())
     location_id = data.get("location_id")
     days_worked = dict(data.get("days_worked_override") or {})
     pto_days = dict(data.get("pto_days_override") or {})
@@ -1027,7 +1073,9 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
             already_generated (bool) }
       ] }
     """
-    period = data.get("period") or datetime.now(timezone.utc).strftime("%Y-%m")
+    # No period given: the month payroll is working on, which in the first
+    # weeks of a month is the one just gone.
+    period = data.get("period") or _payroll_month_in_hand(datetime.now(timezone.utc).date())
     location_id = data.get("location_id")
     days_worked_override = dict(data.get("days_worked_override") or {})
     pto_days_override = dict(data.get("pto_days_override") or {})
@@ -3961,7 +4009,10 @@ async def list_pay_periods(
         for i in range(past + future + 1):
             dates.append(base + td(days=step * i))
 
-    current = _period_containing(freq, anchor, today)
+    # `current` is the period payroll is WORKING ON, which is what every
+    # generator should open on. On a monthly cycle that is last month until the
+    # last five days of this one.
+    current = _period_in_hand(freq, anchor, today)
     periods = []
     seen = set()
     for d in dates:

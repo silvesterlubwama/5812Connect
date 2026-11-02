@@ -16,9 +16,10 @@ import { MovePersonDialog } from '../components/organizations/MovePersonDialog';
 import { EditOrgDialog } from '../components/organizations/EditOrgDialog';
 import { TransferKeyDialog } from '../components/organizations/TransferKeyDialog';
 import { PullOrgDialog } from '../components/organizations/PullOrgDialog';
+import { goToOrg, getOrgSlug } from '../orgRoute';
 
 const blankOrg = {
-  name: '', slug: '', hostnames: '', owner_name: '', owner_email: '', owner_password: '',
+  name: '', slug: '', owner_name: '', owner_email: '', owner_password: '',
 };
 
 export default function OrganizationsPage() {
@@ -56,7 +57,6 @@ export default function OrganizationsPage() {
       await api.post('/organizations', {
         name: form.name.trim(),
         slug: form.slug.trim().toLowerCase(),
-        hostnames: form.hostnames.split(',').map(h => h.trim()).filter(Boolean),
         owner_name: form.owner_name.trim() || undefined,
         owner_email: form.owner_email.trim() || undefined,
         owner_password: form.owner_password || undefined,
@@ -168,7 +168,9 @@ export default function OrganizationsPage() {
   const enter = async (org) => {
     try {
       await enterOrganization(org.id);
-      window.location.href = '/dashboard';
+      // Each organisation has its own address, so opening one is a full load
+      // into it: 5812uganda.org/lub/dashboard.
+      goToOrg(org.slug, '/dashboard');
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Could not open that organisation');
     }
@@ -237,16 +239,19 @@ export default function OrganizationsPage() {
                     : <Badge variant="secondary" data-testid={`org-status-${org.slug}`}>Active</Badge>}
                 </div>
                 <p className="text-xs text-muted-foreground font-mono">{org.slug}</p>
-              </CardHeader>
-              <CardContent className="space-y-4">
+              </CardHeader>              <CardContent className="space-y-4">
                 <div className="flex gap-4 text-sm">
                   <span><strong>{org.stats?.users ?? 0}</strong> <span className="text-muted-foreground">{org.stats?.users === 1 ? 'user' : 'users'}</span></span>
                   <span><strong>{org.stats?.members ?? 0}</strong> <span className="text-muted-foreground">{org.stats?.members === 1 ? 'person' : 'people'}</span></span>
                   <span><strong>{org.stats?.campuses ?? 0}</strong> <span className="text-muted-foreground">{org.stats?.campuses === 1 ? 'campus' : 'campuses'}</span></span>
                 </div>
-                {(org.hostnames || []).length > 0 && (
-                  <p className="text-xs text-muted-foreground break-all">{org.hostnames.join(', ')}</p>
-                )}
+                <a
+                  href={`/${org.slug}`}
+                  className="text-xs text-primary hover:underline break-all block"
+                  data-testid={`org-address-${org.slug}`}
+                >
+                  {window.location.host}/{org.slug}
+                </a>
                 {org.suspend_reason && (
                   <p className="text-xs text-destructive">Reason: {org.suspend_reason}</p>
                 )}
@@ -282,7 +287,7 @@ export default function OrganizationsPage() {
                   </Button>
                   <Button size="sm" variant="outline" className="gap-1.5"
                     onClick={() => setEditing(org)} data-testid={`edit-org-${org.slug}`}>
-                    <Settings2 size={14} /> Address
+                    <Settings2 size={14} /> Rename / address
                   </Button>
                   <Button size="sm" variant="outline" className="gap-1.5"
                     onClick={() => setMoving(org)} data-testid={`move-person-${org.slug}`}>
@@ -320,19 +325,14 @@ export default function OrganizationsPage() {
                 onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Lubwamas" />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="org-slug">Short code</Label>
+              <Label htmlFor="org-slug">Web name</Label>
               <Input id="org-slug" value={form.slug} data-testid="org-slug-input"
                 onChange={e => setForm({ ...form, slug: e.target.value.toLowerCase() })}
-                placeholder="lubwamas" />
-              <p className="text-xs text-muted-foreground">Lowercase letters, numbers and hyphens.</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="org-hosts">Web addresses</Label>
-              <Input id="org-hosts" value={form.hostnames} data-testid="org-hostnames-input"
-                onChange={e => setForm({ ...form, hostnames: e.target.value })}
-                placeholder="new.lubwamas.org, personal.5812uganda.org" />
+                placeholder="lub" />
               <p className="text-xs text-muted-foreground">
-                Comma separated. Point each one at this server and it opens straight into this organisation.
+                It opens at <span className="font-mono break-all">{window.location.host}/{form.slug || '…'}</span>,
+                with its pages underneath. Letters, numbers and dashes; keep it short. Nothing to
+                set up in DNS.
               </p>
             </div>
             <div className="pt-2 border-t border-border space-y-4">

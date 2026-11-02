@@ -484,7 +484,10 @@ async def _fire_payday_payslip_generation():
         today = datetime.now(timezone.utc)
         today_iso = today.strftime("%Y-%m-%d")
         today_day = today.day
-        period = f"{today.year:04d}-{today.month:02d}"
+        # A payday early in the month settles the month just gone — a run on the
+        # 2nd used to draft payslips for the month it had barely started.
+        from routers.hr import _period_for_payday
+        period = _period_for_payday("monthly", "", today.date())
         # Match the same logic as POST /hr/payslips/generate-payday
         settings = await db.hr_settings.find({
             "hr_enabled": True,

@@ -316,27 +316,23 @@ def test_registry_is_super_admin_only():
         assert r.status_code == 403, f"{method} {path} -> {r.status_code}"
 
 
-def test_hostname_binds_a_site_to_one_tenant():
-    """Requests arriving on a tenant's own hostname only accept that tenant's
-    accounts, so personal.5812uganda.org cannot be used to reach another org."""
+def test_web_name_binds_a_site_to_one_tenant():
+    """Requests arriving under a tenant's own web name (5812uganda.org/lub) only
+    accept that tenant's accounts, so one organisation's address cannot be used
+    to reach another."""
     sh = _super_headers()
     org, _, body = _make_org(sh, "host")
-    host = f"{org['slug']}.example.test"
+    slug = org["slug"]
     try:
-        requests.put(f"{API}/organizations/{org['id']}", headers=sh, timeout=30,
-                     json={"hostnames": [host]})
-
-        # the tenant's own admin is accepted on that host
-        ok = requests.post(f"{API}/auth/login", timeout=30, headers={"Host": host},
+        # the tenant's own admin is accepted under its web name
+        ok = requests.post(f"{API}/auth/login", timeout=30, headers={"X-Org-Slug": slug},
                            json={"identifier": body["owner_email"],
                                  "password": body["owner_password"]})
-        assert ok.status_code in (200, 403), ok.text  # 403 only if proxy rewrote Host
+        assert ok.status_code == 200, ok.text
 
         # 58:12's admin is not
-        bad = requests.post(f"{API}/auth/login", timeout=30, headers={"Host": host},
+        bad = requests.post(f"{API}/auth/login", timeout=30, headers={"X-Org-Slug": slug},
                             json=ORG_A_ADMIN)
         assert bad.status_code in (401, 403), bad.text
     finally:
-        requests.put(f"{API}/organizations/{org['id']}", headers=sh, timeout=30,
-                     json={"hostnames": []})
         _cleanup(sh, org["id"], org["slug"])

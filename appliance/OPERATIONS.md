@@ -303,12 +303,15 @@ Never run `docker compose down -v` — the `-v` destroys the database.
 
 ## Web addresses
 
-The main domain needs no setup: any address not claimed by an organisation is
-treated as the **default** organisation's address, so the owner signs in there
-and lands straight in it. Give an organisation its own subdomain later in
-*Organisations → Edit → Web addresses*, then route that hostname to `caddy:80`
-in the Cloudflare Tunnel. Once an address is claimed, only that organisation's
-own people can sign in on it.
+Each organisation is reached by its **web name** on the main address —
+`5812uganda.org/lub` — with its pages underneath (`/lub/members`). Set or change
+it in *Organisations → Rename / address*. There is no DNS, no subdomain and no
+extra certificate: one address serves them all, and the bare domain opens the
+default organisation.
+
+Only that organisation's own people can sign in under its web name, and the
+owner is sent to whichever organisation they open. Changing a web name changes
+the address, so anyone holding the old link needs the new one.
 
 ## Moving one organisation to another server
 

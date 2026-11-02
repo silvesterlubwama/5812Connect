@@ -156,20 +156,22 @@ async def run_for_every_org(fn, *args, **kwargs):
 
 
 async def org_for_hostname(request) -> dict:
-    """Resolve an organisation from the request hostname.
+    """Resolve the organisation whose web name is in the address being used.
 
-    This is what makes personal.5812uganda.org and new.lubwamas.org work off a
-    single deployment. Returns {} when the hostname isn't claimed by anyone
-    (the shared preview URL, localhost, direct IP), in which case the signed-in
-    user's own organisation decides."""
+    Each organisation lives under its own path — 5812uganda.org/lub — and the
+    app sends that web name as X-Org-Slug. Returns {} on the bare domain (the
+    preview URL, localhost, a direct IP), in which case the signed-in user's own
+    organisation decides."""
     try:
-        host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+        slug = (request.headers.get("x-org-slug") or "").strip().lower()
+        if not slug:
+            slug = (request.query_params.get("org") or "").strip().lower()
     except Exception:
         return {}
-    if not host:
+    if not slug:
         return {}
     with org_bypass():
-        return await raw_db.organizations.find_one({"hostnames": host}, {"_id": 0}) or {}
+        return await raw_db.organizations.find_one({"slug": slug}, {"_id": 0}) or {}
 
 
 async def require_super_admin(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
