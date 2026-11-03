@@ -2415,3 +2415,12 @@ Re-running a move is therefore safe and repeatable.
   name is editable per organisation and needs no DNS.
 - The payslip generator opens on the month payroll is working on: the month just
   gone until five days before month end, then the current month.
+
+### 2026-11-02 — Sign-in and chat fixes
+- Google sign-in returns to the organisation's own address and can never create
+  a second account for someone who already belongs to an organisation.
+- Chat: the softphone pill no longer covers Send; on phones the conversation list
+  and the open conversation take turns.
+- Open: a 500 on password sign-in reported on the user's Ubuntu server, not
+  reproducible in preview (that server runs older code). Sign-in now reports
+  which step failed instead of a bare 500 — need the message or the log line.

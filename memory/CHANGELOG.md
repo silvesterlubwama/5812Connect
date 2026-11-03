@@ -2870,3 +2870,42 @@ month; from about five days before month end, for the current month.
 Verified: 19/19 in `tests/test_iter404_payslip_period.py`. On 2 November a
 monthly campus reports `period_in_hand 2026-10`, its 7 Nov payday is shown as
 settling 2026-10, and a preview with no period given returns 2026-10.
+
+## 2026-11-02 — Google sign-in no longer cuts people off from their organisation
+Reported: "users with an existing organization are disassociated with their
+organization when they sign in with google", plus a 500 on password sign-in on
+the Ubuntu server, plus "comms and chat aren't working correctly".
+
+**Google (fixed, verified).** Two faults, both now closed:
+- The Google button sent people back to `origin + '/dashboard'`, dropping the
+  organisation's web name. They landed on the bare domain, so the session was
+  exchanged against the DEFAULT organisation, their own account was filtered out
+  as "not found", and they were handed a brand-new pending guest account — the
+  disassociation. The return address now carries the web name (login and kiosk).
+- Backstop in `google_auth_session`: if the email exists in another organisation
+  but not this one, it now refuses with 409 naming that organisation and its
+  address instead of creating a guest. A genuinely new person is still welcomed,
+  and their organisation is now pinned explicitly rather than taken from whatever
+  the request happened to resolve (with nothing pinned that raised and came back
+  as "Google authentication failed").
+
+**Chat (real bug found and fixed).** The fixed "No softphone" pill sat on top of
+the chat Send button, so a mouse click opened the dialer instead of sending —
+only Enter worked. The pill and its popovers moved up out of the corner. On a
+phone the chat was unusable for different reasons: the sidebar and chat pane were
+side by side, squeezing the composer to ~26px; the list and the conversation now
+take turns with a back arrow. The dialer keypad also collapsed to one column
+(global mobile rule in index.css:186) — the keypads opt out with sm:grid-cols-3,
+and popovers are capped to the viewport.
+
+**Password 500 (not reproduced).** It does not happen in preview: password
+sign-in passes 6/6 over the public URL. Their Ubuntu server runs older code. So
+that sign-in cannot fail silently again, the organisation step and the session
+step now return 503 with a sentence naming the step that failed, and the server
+logs a full traceback; Google errors log a traceback and return their reason.
+
+Verified by the testing agent across iterations 262-265: Google org binding 4/4
+(tests/test_iter405_google_org_binding.py, Google exchange faked in-process),
+redirect carries the web name, password sign-in 6/6 with no 500s, desktop and
+mobile chat send by mouse click, dialer on screen at both sizes, websocket
+connecting, no console errors.

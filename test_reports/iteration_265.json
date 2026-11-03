@@ -1,0 +1,21 @@
+{
+  "summary": "Frontend-only regression check of three cosmetic changes to the CommsPage chat layout. All checks passed. Login worked on the first try in both runs, with no 429. MOBILE 390x844, no conversation open: only the list is visible. The 'Select a conversation' empty state has 0x0 size (hidden), document scrollWidth is 390 (equal to the viewport), and no element extends past the viewport. The Announcements badge is clear. Opening a DM shows the chat pane with chat-back-btn, and back returns to the list (chat-input hidden, new-conversation-btn visible). page.mouse.click on send-message-btn (elementFromPoint confirmed it is the top element) sent TEST_mobile_msg_265 and a 72-character unbroken token, and both appeared. The long token wrapped onto 4 lines (bubble right edge 321 < 390, scrollWidth == clientWidth, so no clipping). The header wraps cleanly: title 36-231, Conference button 238-354, status select on a second row 231-354; no overflow. DESKTOP 1920x1080: list and chat sit side by side (the sidebar stays visible when a room is open, no back button). The empty state shows when no room is selected. The header sits on one row (Conference 1612-1728, status 1736-1896). A mouse click on Send delivered TEST_desktop_msg_265.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Comms sidebar (out of scope, minor)", "issues": ["The 'Search chats...' input does not filter the Organization staff list. With 'Katelyn' typed, the first org-user-* entry is still 'Admin' (the signed-in user). Clicking it opens a DM with yourself ('Admin, 2 participants'). Consider filtering the org chart by the search and hiding the current user from it."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": ["CommsPage.jsx is well over 700 lines and should be split into smaller components: sidebar, chat pane, thread panel, dialogs."],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100%"},
+  "test_credentials": "admin@5812global.org / Admin@1234 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Sent three messages into the admin self-DM: TEST_mobile_msg_265, TEST_long_token_abcdefghijklmnopqrstuvwxyz0123456789_abcdefghijklmnop_265, TEST_desktop_msg_265.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Use /5812global/comms. Log in through the UI first; page.goto then works because the token is in localStorage. Note that the first org-user-* entry is the admin itself, because search does not filter the org chart. Pick a specific org-user id if you need a DM with Katelyn. Mobile and desktop Send were verified with elementFromPoint plus page.mouse.click."
+}
