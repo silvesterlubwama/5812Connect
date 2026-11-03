@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall, ChevronRight, Trash2, Settings, Voicemail } from 'lucide-react';
+import { MessageSquare, Plus, Send, Bot, Megaphone, Users, Search, Hash, Reply, Check, CheckCheck, X, Circle, Phone, Video, Smile, PhoneCall, ChevronRight, ChevronLeft, Trash2, Settings, Voicemail } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -671,8 +671,9 @@ export default function CommsPage() {
       </div>
 
       <div className="flex h-[calc(100%-3.5rem)] gap-0 border border-border rounded-xl overflow-hidden bg-card">
-        {/* Sidebar */}
-        <div className="w-72 border-r border-border flex flex-col shrink-0">
+        {/* Sidebar — on a phone there is not room for both: show the list, or
+            the conversation with a way back to it. */}
+        <div className={`w-full md:w-72 border-r border-border flex-col shrink-0 ${selectedRoom ? 'hidden md:flex' : 'flex'}`}>
           <div className="p-3 border-b border-border space-y-2">
             <div className="relative">
               <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -810,6 +811,16 @@ export default function CommsPage() {
         <div className="flex-1 flex flex-col min-w-0">
           {selectedRoom && (
             <div className="p-3 border-b border-border flex items-center gap-3 shrink-0">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 md:hidden shrink-0"
+                onClick={() => setSelectedRoom(null)}
+                data-testid="chat-back-btn"
+                aria-label="Back to conversations"
+              >
+                <ChevronLeft size={18} />
+              </Button>
               <div className="p-1.5 rounded-lg bg-secondary">
                 {selectedRoom.id === '__ai__' ? <Bot size={16} className="text-primary" /> :
                  selectedRoom.id === '__announcements__' ? <Megaphone size={16} className="text-amber-600" /> :

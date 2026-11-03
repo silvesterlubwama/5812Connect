@@ -1,0 +1,29 @@
+{
+  "summary": "Retest of the overlap between the chat Send button and the softphone pill. DESKTOP 1920x1080 PASSES. The pill is now at y952-984 and Send at y1016-1052, so they no longer overlap. elementFromPoint at Send's centre returns the Send button. A normal mouse click on Send sent the message: it appeared in the thread and sidebar, the input cleared, the dialer did NOT open, and the message survived a reload. The pill opens the dialer at x1616 y548 288x371, fully on screen and not covering the composer or Send. Clicking the pill again closes it. The WS /api/ws/<id>?token=... connected. There were no console errors and no 4xx/5xx or failed requests. MOBILE 390x844 FAILS, for two reasons unrelated to the pill overlap. (1) The CommsPage layout is not responsive. The w-72 shrink-0 sidebar takes almost the full width and the chat pane is squeezed to about 30px: the input is 26px wide and Send sits at x371, outside the card's clipped area. elementFromPoint at Send's centre returns <main>, and a real mouse click there does NOT send (input text remains, nothing sent). Playwright's locator click only succeeded because it scrolled the overflow container first. (2) The dialer popover is off screen on mobile. index.css line 186 has a global mobile rule that collapses .grid.grid-cols-3 to 1 column, which stacks the keypad vertically. The popover becomes 740px tall with top=-55, so its header and close X are cut off. The pill itself does not overlap Send on mobile (pill y712-748, Send y795-831).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CommsPage layout on mobile (390x844)", "issue": "The sidebar (div.w-72.border-r.shrink-0, line 675) is not hidden or stacked on small screens. The chat pane collapses to about 30px wide: chat-input is 26px and send-message-btn sits at x371 w16, outside the visible card. elementFromPoint at Send's centre returns MAIN, and a mouse click there does not send the message. Users on phones effectively cannot use chat. Fix: on mobile, show either the conversation list or the active room (e.g. sidebar 'hidden md:flex' when a room is selected, plus a back button), or let the sidebar stack full width.", "selector": "[data-testid='send-message-btn'], [data-testid='chat-input']", "priority": "HIGH"},
+      {"component": "SoftphonePanel dialer popover on mobile", "issue": "The keypad uses 'grid grid-cols-3', and the global mobile override in index.css:186 forces it to 1 column. The popover becomes 288x740 with top at y=-55 at 390x844, which cuts off the header, the close button and part of the input. Fix: add 'sm:grid-cols-3' (the opt-out the CSS comment describes), and/or add max-h-[calc(100vh-12rem)] overflow-y-auto.", "selector": "[data-testid='dialer-popover']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Comms header on mobile", "issues": ["The Conference button and the Available status select overflow to the right edge next to the title. The status select is clipped at x390."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Make CommsPage responsive below md: show either the conversation list or the active chat, not both, so the composer and Send are fully visible and clickable at 390px.",
+    "Keep the dialer keypad at 3 columns on mobile (add sm:grid-cols-3 to the keypad grid in SoftphonePanel.jsx) and cap the popover height so it stays on screen."
+  ],
+  "critical_code_review_comments": [
+    "The global mobile override in index.css on .grid.grid-cols-3 silently breaks components that must stay 3 across, such as keypads. Review other grid-cols-3 usages, e.g. the DIAL PAD on the Comms Phone room."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "Desktop 100% (6/6 checks). Mobile: 2 of 5 checks fail (Send hit-test and mouse send; dialer on-screen)."},
+  "test_credentials": "admin@5812global.org / Admin@1234 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "A direct conversation 'Katelyn Lubwama' already existed or was reused. Messages TEST_mouse_send_desk_*, TEST_mouse_send_mob_* and TEST_mob_mouse_* were sent to it. The last one was not sent because the mouse click failed.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Open the room by clicking the org-user-* entry filtered by 'Katelyn'. The first sidebar-chat-item is the pinned 'Phone' room, not a conversation. On mobile, do NOT rely on locator.click() for send-message-btn because it auto-scrolls the overflow container. Use elementFromPoint plus page.mouse.click at the bounding-box centre. The desktop pill fix is confirmed. Only retest mobile."
+}
