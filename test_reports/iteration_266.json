@@ -1,0 +1,47 @@
+{
+  "summary": "Tested the iter406/407 fixes end to end at the public URL. Granting admin from People WORKS: as admin@5812uganda.org I opened Christopher Ssekito (via /5812global/members?member=257c7ab5...&kind=member), turned ON member-admin-toggle and pressed Save Profile. The toast said 'Profile saved' and GET /api/admin/users then showed his account role as 'admin'. Re-opening him showed the Admin switch ON. BUG: the Role dropdown then showed 'Staff', not 'Coordinator'. Turning the switch OFF and saving changed his account role to 'Staff', not back to 'Coordinator'. I restored him to Coordinator through PUT /api/members/{id}, and both the member row and the user row are now Coordinator. Self photo WORKS. As member@5812uganda.org on /5812global/portal/profile, the camera input uploaded the image, the 'Photo updated' toast appeared, the avatar image loaded, and the photo survived a reload. GET /api/portal/profile returned the same photo_url on user and member. As admin on /5812global/profile, the upload worked and after reload the image showed in profile-photo, user-menu-avatar (top right) and the sidebar avatar. POST /users/<admin id>/photo as the member returned 403. Non-image and unauthenticated uploads were also refused. Comms WORKS: the Organization list shows 10 people and the signed-in admin is not among them. Typing 'kate' narrowed it to 1 person ('1 people'), a nonsense string gave 0 and the empty message, and clearing restored 10. Clicking Katelyn created a DM. Send by mouse click delivered messages on desktop 1920x800 and mobile 390x844, and elementFromPoint returned send-message-btn both times (the softphone pill did not cover it). Existing tests iter405 and iter406 pass (9), and the new iter407 tests pass (4).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/members/{id}", "issue": "Granting admin overwrites members.role and users.role with 'admin' and keeps the previous staff role nowhere (secondary_roles stays []). So the staff role is lost. See the frontend issue: revoking admin demotes the person to 'Staff' instead of their old role."},
+      {"endpoint": "PUT /api/members/{id}", "issue": "The escalation guard only blocks admin-tier roles. A Coordinator (level 6) can set a same-campus person to Manager or Director (above their own level). A Manager can demote an existing admin/Executive Director account to Staff, because nothing checks the target's current role level. The admin console has stricter rules (reset-password refuses targets at or above the caller's level) and this endpoint should match them. No audit entry is written for role or status changes."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "UnifiedPeoplePage memberFormFrom()/saveEditMember()", "issue": "Re-opening a person who was made admin shows Role = 'Staff', not their staff role ('Coordinator'), because memberFormFrom falls back to m.secondary_roles?.[0] || 'Staff' and secondary_roles is never written. Switching Admin OFF and saving then sets the account to 'Staff'. Reproduced: Coordinator -> admin -> OFF -> 'Staff'. Fix: on admin grant, also send secondary_roles:[editMemberForm.role] (or a staff_role field) and have the server persist it to members and users, so it can be restored on revoke.", "selector": "[data-testid=member-admin-toggle]", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Open a staff person from Staff & People (/members)", "issue": "/members now shows only the Guests & Parents, Families, Children, Pending and Family Approvals tabs. There is no staff/members list. Searching 'Ssekito' in the guests tab finds only his guest/parent record (gst_40493516), whose dialog has no admin switch. The member edit dialog could only be reached with the deep link ?member=<id>&kind=member. Check how admins are meant to find a staff person here, and add a Staff tab or a link if one is missing.", "affected_selectors": ["[data-testid=people-tabs]"]}
+    ],
+    "design_issues": [
+      {"screen": "/profile (staff layout)", "issues": ["The 'My Profile' header and cards sit flush against the sidebar edge (x=196) with no left padding, unlike other pages, which use about 20px."]},
+      {"screen": "/comms Organization list", "issues": ["Rows in the 'Other' (uncategorized) group have no data-testid, and their click handler copies the org-user-* handler (DRY)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter407_self_photo_and_admin_grant.py",
+    "/app/backend/tests/test_iter406_people_role_propagation.py",
+    "/app/backend/tests/test_iter405_google_org_binding.py",
+    "/app/test_reports/pytest/pytest_iter266.xml"
+  ],
+  "action_items": [
+    "Keep the person's staff role when admin is granted from People (persist secondary_roles or a staff_role field), show it in the Role dropdown on re-open, and restore it when Admin is switched off. Today revoking admin from Christopher (Coordinator) turned him into 'Staff'.",
+    "Make the update_member role guard match the admin console: refuse roles above the caller's level and changes to targets at or above the caller's level (unless the caller is a system admin), and write an audit entry for role/status changes.",
+    "Make the staff/member records reachable from /members, which has no staff list tab now. Admins can currently reach the Admin switch only by deep link.",
+    "Minor: add left padding on the staff /profile page, and add data-testid to the uncategorized org rows in CommsPage."
+  ],
+  "critical_code_review_comments": [
+    "core.update_member: account_update copies role from member edits, but ADMIN_TIER only checks the NEW role. Demoting an admin-tier account is unguarded for Managers.",
+    "children.upload_user_photo: managers can change any user_id's photo, and there is no explicit organisation check on the target (this relies on org_context scoping of db.users.update_one). Worth a quick cross-org test.",
+    "UnifiedPeoplePage.jsx is over 2100 lines and should be split. The Edit tab trigger is gated by canEditStaff but its content by isCoordinator, and the two conditions are not the same.",
+    "UnifiedPeoplePage saveEditMember sends the whole form, including group:'', to PUT /members. Empty strings are not None, so they overwrite stored values. Group showed blank for Christopher."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter407_self_photo_and_admin_grant.py"],
+  "success_rate": {"backend": "100% (13/13 pytest)", "frontend": "86% (6/7 checks; the admin-revoke role restore failed)"},
+  "seed_data_creation": "None kept. The DM conv_30c52af7 and its 2 TEST_iter266 messages were deleted by id. Christopher Ssekito was restored to role Coordinator on both the member row and the user row. The member@5812uganda.org photo_url was restored to its original value, and the photo_url I set on admin@5812uganda.org was unset (it had none before).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Christopher: member 257c7ab5-b173-4f82-a660-532ff8dda6a0, user 94c8ab87-b9b8-47ca-9443-0bd80018674d. Open his edit dialog with /5812global/members?member=<member id>&kind=member, then the 'Edit Profile' tab. Restore him to Coordinator afterwards with PUT /api/members/{id} {role:'Coordinator'}. DELETE /chat/conversations only hides the conversation, so clean up chat_messages and conversations by id. Comms org rows: [data-testid=org-user-<userId>]. The Organization section is expanded by default, so clicking the toggle collapses it.",
+  "rca of the issue": "Revoking admin does not restore the staff role. memberFormFrom() expects the staff role in m.secondary_roles[0] while role==='admin'. saveEditMember() sends role:'admin' but no secondary_roles, and update_member writes role:'admin' to both the member and the user. Nothing persists the old role, so re-opening the person shows the 'Staff' fallback and switching off saves 'Staff'. To reproduce: Coordinator -> toggle ON -> save -> re-open (dropdown shows Staff) -> toggle OFF -> save -> the account role is 'Staff'. Fix: persist the prior role (secondary_roles/staff_role) when granting admin."
+}

@@ -194,7 +194,7 @@ function AppRoutes() {
         <Route path="barcode-reissue" element={<BarcodeReissuePage />} />
         <Route path="reconciliation" element={<FinancePage />} />
         <Route path="customer-statements" element={<FinancePage />} />
-        <Route path="profile" element={<PortalProfile />} />
+        <Route path="profile" element={<div className="p-4 md:p-6 lg:p-8"><PortalProfile /></div>} />
         <Route path="people" element={<UnifiedPeoplePage />} />
         <Route path="audit" element={<AuditPage />} />
         <Route path="locations" element={<LocationsPage />} />

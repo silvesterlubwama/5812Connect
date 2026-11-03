@@ -309,6 +309,11 @@ export default function UnifiedPeoplePage() {
       payload.role = editMemberForm.is_admin
         ? (wasSystemAdmin ? 'system_admin' : 'admin')
         : editMemberForm.role;
+      // Remember the job title behind the admin tier so turning the Admin
+      // switch off puts them back on their real role, not a generic 'Staff'.
+      if (editMemberForm.is_admin && editMemberForm.role) {
+        payload.secondary_roles = [editMemberForm.role];
+      }
       const res = await membersApi.update(editMember.id, payload);
       // Also update users collection for flag fields (is_parent, is_guest, etc.)
       const flagFields = { is_parent: editMemberForm.is_parent, is_guest: editMemberForm.is_guest, is_customer: editMemberForm.is_customer, is_donor: editMemberForm.is_donor };

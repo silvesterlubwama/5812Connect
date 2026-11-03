@@ -6,8 +6,8 @@ import { normaliseRole } from './HouseholdPersonForm';
 
 /** One family member row — same shape everywhere (People, child profile, portal). */
 export const HouseholdAdultRow = ({ person, pending, readOnly, onEdit, onRemove, testId }) => (
-  <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-accent/30" data-testid={testId}>
-    <div className="min-w-0">
+  <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-lg bg-accent/30" data-testid={testId}>
+    <div className="min-w-0 flex-1">
       <p className="text-sm font-medium truncate">{person.name}</p>
       <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
         {person.phone && <span className="flex items-center gap-1"><Phone size={10} />{person.phone}</span>}
@@ -20,7 +20,7 @@ export const HouseholdAdultRow = ({ person, pending, readOnly, onEdit, onRemove,
         </p>
       )}
     </div>
-    <div className="flex items-center gap-2 shrink-0">
+    <div className="flex flex-wrap items-center gap-2">
       {person.approval_status === 'pending' && (
         <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">Pending review</Badge>
       )}

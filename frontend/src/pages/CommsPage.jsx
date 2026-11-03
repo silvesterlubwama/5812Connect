@@ -757,7 +757,7 @@ export default function CommsPage() {
                     <div>
                       <p className="text-[9px] text-muted-foreground/60 uppercase px-2 pt-1.5 font-semibold">Other · {uncategorized.length}</p>
                       {uncategorized.map(s => (
-                        <div key={s.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 cursor-pointer text-xs" onClick={async () => {
+                        <div key={s.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-accent/30 cursor-pointer text-xs" data-testid={`org-user-${s.id}`} onClick={async () => {
                           const existing = conversations.find(c => c.type === 'direct' && c.participants?.includes(s.id));
                           if (existing) { selectRoom(existing); return; }
                           try {

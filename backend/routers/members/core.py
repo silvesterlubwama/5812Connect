@@ -4,7 +4,7 @@ from pin_security import apply_pin_fields
 from deps import (
     db, get_current_user, _audit, require_coordinator,
     normalize_gender, resolve_department, logger, is_system_admin, get_campus_filter,
-    campus_filter_or_unscoped,
+    campus_filter_or_unscoped, get_role_level,
 )
 from models import MemberCreate, MemberUpdate
 from datetime import datetime, timezone
@@ -202,21 +202,41 @@ async def update_member(member_id: str, data: MemberUpdate, current_user: dict =
         link = linked.get("id") if linked else None
     else:
         linked = await db.users.find_one({"id": link}, {"_id": 0, "id": 1, "role": 1})
-    account_update = {k: v for k, v in update_data.items() if k in {"role", "status"}}
+    account_update = {k: v for k, v in update_data.items() if k in {"role", "status", "secondary_roles"}}
     if link and linked and account_update:
         ADMIN_TIER = {"admin", "system_admin", "Executive Director"}
+        caller_level = get_role_level(current_user.get("role"))
         if (linked.get("role") or "").lower() == "super_admin":
             account_update = {}          # the platform owner is never edited from here
-        elif account_update.get("role") in ADMIN_TIER and not is_system_admin(current_user):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Only system admins can assign the '{account_update['role']}' role",
-            )
+        elif not is_system_admin(current_user):
+            new_role = account_update.get("role")
+            if new_role in ADMIN_TIER:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Only system admins can assign the '{new_role}' role",
+                )
+            # Same rule as the admin console: you cannot hand out a rank at or
+            # above your own, nor re-rank somebody who already outranks you.
+            if new_role and get_role_level(new_role) >= caller_level:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"You cannot assign the '{new_role}' role — it is at or above your own",
+                )
+            if get_role_level(linked.get("role")) >= caller_level:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You cannot change the role or status of someone at or above your own level",
+                )
     else:
         account_update = {}
     await db.members.update_one({"id": member_id}, {"$set": update_data})
     if account_update:
         await db.users.update_one({"id": link}, {"$set": account_update})
+        await _audit(current_user["id"], "update", "user", link, {
+            "from": {"role": linked.get("role")},
+            "to": {k: v for k, v in account_update.items() if k in {"role", "status"}},
+            "via": "people-page",
+        })
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     return member
 

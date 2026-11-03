@@ -99,3 +99,35 @@ def test_an_unrelated_field_does_not_touch_the_account(person):
     set_current_org(GLOBAL_ORG)
     _run(core_mod.update_member(person["member_id"], MemberUpdate(phone="+256700000000"), _admin()))
     assert _user_role(person["user_id"])["role"] == "Staff"
+
+
+def test_the_job_title_survives_an_admin_grant(person):
+    """iter407 — ticking Admin used to lose the person's real role, so
+    un-ticking it dumped them on a generic 'Staff'."""
+    set_current_org(GLOBAL_ORG)
+    _run(core_mod.update_member(
+        person["member_id"], MemberUpdate(role="admin", secondary_roles=["Coordinator"]), _admin()))
+    with org_bypass():
+        row = _run(raw_db.users.find_one({"id": person["user_id"]}, {"_id": 0, "role": 1, "secondary_roles": 1}))
+    assert row["role"] == "admin"
+    assert row["secondary_roles"] == ["Coordinator"], "the job title was not remembered"
+
+
+def test_a_coordinator_cannot_promote_above_their_own_level(person):
+    set_current_org(GLOBAL_ORG)
+    coordinator = {"id": "test-coord", "role": "Coordinator", "organization_id": GLOBAL_ORG,
+                   "location_ids": [], "location_id": ""}
+    with pytest.raises(HTTPException) as e:
+        _run(core_mod.update_member(person["member_id"], MemberUpdate(role="Director"), coordinator))
+    assert e.value.status_code == 403
+    assert _user_role(person["user_id"])["role"] == "Staff"
+
+
+def test_nobody_junior_can_re_rank_someone_who_outranks_them(person):
+    set_current_org(GLOBAL_ORG)
+    _run(core_mod.update_member(person["member_id"], MemberUpdate(role="Director"), _admin()))
+    manager = {"id": "test-manager", "role": "Manager", "organization_id": GLOBAL_ORG}
+    with pytest.raises(HTTPException) as e:
+        _run(core_mod.update_member(person["member_id"], MemberUpdate(role="Staff"), manager))
+    assert e.value.status_code == 403
+    assert _user_role(person["user_id"])["role"] == "Director"

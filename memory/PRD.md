@@ -2424,3 +2424,17 @@ Re-running a move is therefore safe and repeatable.
 - Open: a 500 on password sign-in reported on the user's Ubuntu server, not
   reproducible in preview (that server runs older code). Sign-in now reports
   which step failed instead of a bare 500 — need the message or the log line.
+
+### 2026-11-03 — Access, own photo, chat search, who may sign in
+- Making somebody an admin from the People page now actually gives them admin
+  access: the role on a person's record is carried to their sign-in account
+  (with the admin console's own escalation rules, and an audit entry). Their job
+  title is remembered behind the admin tier, so removing admin puts them back on
+  it rather than on a generic "Staff".
+- Everybody can set their own profile photo — it is also their ID-badge photo —
+  from My Profile. Changing somebody else's still needs a manager or above.
+- The chat search box filters the people list as well as the conversations, and
+  you are never offered a chat with yourself.
+- Signing in is not joining: an email nobody has an account for is refused and
+  nothing is created. People ask for access with "Request account", which an
+  admin approves.

@@ -228,6 +228,9 @@ export default function AdminPage({ mode = 'system' }) {
         // Keep whatever admin tier they were on. Regular admin stays admin,
         // system_admin stays system_admin — no accidental demotion.
         payload.role = wasSystemAdmin ? 'system_admin' : (wasAdmin ? payload.underlying_role : 'admin');
+        // iter407 — and remember the job title the Role select is showing, so
+        // switching Admin off later restores it instead of 'Staff'.
+        if (editForm.role) payload.secondary_roles = [editForm.role];
       }
       delete payload.is_admin;
       delete payload.underlying_role;

@@ -2909,3 +2909,52 @@ Verified by the testing agent across iterations 262-265: Google org binding 4/4
 redirect carries the web name, password sign-in 6/6 with no 500s, desktop and
 mobile chat send by mouse click, dialer on screen at both sizes, websocket
 connecting, no console errors.
+
+## iter406-407 — 2026-11-03 — "other admins see no admin options", self profile photo, chat search, Google sign-ups
+
+**Granting admin from the People page did nothing (root cause).** The Admin
+switch on the member drawer posted the flags to `/api/admin/users/{id}` with the
+MEMBER id. No member id is a user id (checked: 0 of 124 overlap), so the request
+always 404'd — and the failure was swallowed by `console.warn`. The member row
+said "admin" while the person's sign-in account stayed Staff, so they saw no
+admin options. Fixes:
+- `routers/members/core.py` `update_member()` now carries `role`, `status` and
+  `secondary_roles` to the linked sign-in account (`user_id`, `member_id`, or a
+  users row sharing the id), writes an audit entry, and never touches a
+  `super_admin`.
+- The guard matches the admin console: admin-tier roles need a system admin, and
+  nobody may assign a rank at or above their own, nor re-rank someone who already
+  outranks them. The refusal happens BEFORE the member row is written.
+- `UnifiedPeoplePage.jsx`: one `memberFormFrom()` feeds all three places the edit
+  form is seeded (the live path was `handleViewMember`, which never set
+  `is_admin` at all), and `saveEditMember()` posts flags to the linked user id and
+  surfaces errors instead of swallowing them.
+- The job title survives the admin tier: granting admin stores the staff role in
+  `secondary_roles`, so switching Admin off restores "Coordinator" rather than a
+  generic "Staff". Same fix applied to `AdminPage.saveEdit()`.
+
+**Nobody could set their own profile/ID photo.** `POST /api/users/{id}/photo`
+was gated by `require_staff` (level 5), so every Member/Parent/Guest got 403 —
+and no page offered the control to anyone. Now any signed-in user may set their
+OWN photo (manager+ still required for somebody else's), and `PortalProfile`
+(served at both `/profile` and `/portal/profile`) has an avatar with a camera
+button. The server already mirrors the photo onto the member/guest row, so it is
+the ID-badge photo too. Layout avatars render `photo_url`.
+
+**Chat search + self-chat.** The search box filtered conversations only; the
+Organization list ignored it and listed you, so you could open a DM with
+yourself. `visibleStaff` now applies the search (name or role) and drops the
+signed-in user.
+
+**Google sign-in no longer creates accounts.** An address nobody has an account
+for is refused with 403 "There is no account for … use Request account", and no
+user/guest row is written. Signing in is not joining; `/register` remains the way
+to ask for access and the callback screen now links to it.
+
+Verified: tests/test_iter406_people_role_propagation.py (9),
+test_iter407_self_photo_and_admin_grant.py (4), test_iter405_google_org_binding.py
+(4 — the unknown-email test now asserts refusal plus no row created); testing
+agent iteration_266 (admin grant reaches the account, self photo saves and shows
+on the badge/avatars, 403 for someone else's photo, org list filters and excludes
+self, Send by mouse click on 1920x800 and 390x844). Also fixed from that report:
+staff `/profile` had no page padding, and the household row overflowed 390px.
