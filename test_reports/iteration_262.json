@@ -1,0 +1,43 @@
+{
+  "summary": "Bug (1) Google org binding: VERIFIED FIXED. test_iter405_google_org_binding.py passes 4/4. It covers: own org returns the same user id; the wrong org gives a 409 naming Lubwamas and creates no new row; no header still finds the account; a new email becomes a pending guest stamped with LUB_ORG. No google-probe-*/google-new-* rows are left over. Google button redirect parameters, intercepted at the network level: /lubwamas/login -> https://<host>/lubwamas/dashboard and /5812global/login -> https://<host>/5812global/dashboard (both PASS). Password sign-in over the public URL passes 6/6: lubwamas admin 200 with LUB_ORG; lubwamas creds on 5812global refused (401); 5812global admin 200 with GLOBAL_ORG; bogus google session 401 'Invalid Google session'; missing session_id 400; /auth/me works. No 500s were seen. Password-500 (issue 2) could NOT be reproduced in this preview. Chat evidence (issue 3): the websocket /api/ws/<id>?token=... connects cleanly (online_users + user_online received, ping/pong ok). All /api/chat/* calls return 200, with no console errors and no failed requests. A direct conversation could be created, a message sent with Enter went out over the WS, echoed back, appeared in the thread and sidebar, and survived a reload. REAL UI BUG FOUND: the fixed 'No softphone' pill (SoftphonePanel, fixed right-4 bottom-4 z-40) sits on top of the chat Send button at 1920x1080. A mouse click on Send hits the pill and opens the softphone dialer, so the message is NOT sent. Only Enter works. This is a very likely cause of the user's 'chat isn't working'.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/google-session", "issue": "The existing-user branch calls _resolve_login_org without the 503 wrapper the password login has. An unexpected error there still surfaces as a 500 'Google authentication failed: ...' rather than a 503 naming the step."},
+      {"endpoint": "/api/auth/login (super-admin pending path)", "issue": "The create_token_with_session call in the pending (org picker) branch is not inside the 503 wrapper. Only the main path is wrapped."},
+      {"endpoint": "WS /api/ws/{user_id} chat_message", "issue": "It does not check that the sender is a participant of conversation_id before inserting into chat_messages. When the conversation is not found it still inserts (participants=[user_id]). The org scope limits the impact, but any org member can post into any conversation id in that org."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CommsPage send button vs SoftphonePanel status pill", "issue": "The softphone-status-pill (fixed bottom-4 right-4 z-40, box x1768-1904 y1032-1064) overlaps send-message-btn (x1847 y1016 36x36). Clicking Send opens the softphone dialer instead of sending, so the message is lost. Only the Enter key sends. Reproduced in the browser: the Playwright normal click was intercepted, and a force-click at those coordinates opened the dialer with no message sent.", "selector": "[data-testid='send-message-btn'], [data-testid='softphone-status-pill']", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Chat REST fallback when WS is down", "issue": "sendChatMessageWithFallback in WebSocketContext.js uses raw fetch with only Authorization. It does not send the X-Org-Slug header that services/api.js adds, which is inconsistent with path-based org addressing. It is not exercised here because the WS was up.", "affected_selectors": []}
+    ],
+    "design_issues": [
+      {"screen": "Sidebar location selector (top-left)", "issues": ["The campus/location dropdown renders empty, showing only a pin icon, for admin@5812global.org on dashboard and comms."]},
+      {"screen": "Dashboard", "issues": ["A 5812global session shows the badge '58:12 Uganda' next to 'Welcome back, System'. This may be the campus name, but it reads like the org name; confirm it is intended."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter405_google_org_binding.py", "/app/backend/tests/test_iter405_signin_health.py", "/app/test_reports/pytest/iter405.xml"],
+  "action_items": [
+    "HIGH: Move the SoftphonePanel status pill so it does not cover the chat Send button. For example, hide it on /comms, give the composer bottom padding/margin, or move the pill. Then retest a mouse click on send-message-btn.",
+    "Add X-Org-Slug (getOrgSlug()) to the raw fetch in WebSocketContext sendChatMessageWithFallback, or route it through services/api.js.",
+    "Optional: wrap _resolve_login_org in google_auth_session in the same 503 handler as password login.",
+    "Optional: verify participant membership in the WS chat_message handler."
+  ],
+  "critical_code_review_comments": [
+    "google_auth_session: the 409 guard and the explicit org pin for new users look correct, and the tests confirm them.",
+    "With no host org, an email that exists only in a non-default org still resolves to the own account (intended per test 3).",
+    "CommsPage.jsx is 1022 lines and should be split."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter405_signin_health.py"],
+  "success_rate": {"backend": "100% (10/10)", "frontend": "Google redirect 2/2 pass; chat 1 HIGH UI bug (send button covered)"},
+  "test_credentials": "admin@5812global.org / Admin@1234 (5812global), admin@lubwamas.org / Lubwama@2026 (lubwamas)",
+  "seed_data_creation": "Created a direct conversation conv_7b10ecc0 (System Admin <-> Henry Lubega) and 1 TEST_iter405 message, both deleted after the run. Google probe rows were cleaned by the fixtures (0 left).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Comms is at /5812global/comms. The sidebar group 'Comms' renders uppercase via CSS, so match it with a case-insensitive regex. Clicking an org-user-* entry creates a direct conversation. The WS works in this preview. Retest a normal mouse click on send-message-btn after the softphone-pill fix.",
+  "rca of the issue": "Chat 'not working' (preview evidence): the backend and websocket are healthy. SoftphonePanel's fixed status pill (z-40, bottom-right) is layered over CommsPage's composer Send button, so mouse clicks go to the pill (toggling the dialer) and the message is never sent. Repro: sign in at /5812global/login, go to Comms > Chat, open any conversation, type a message, and click the send arrow at bottom-right: the dialer opens and no message is sent. Mitigation: hide or reposition the pill on the comms route, or add right/bottom clearance to the composer."
+}

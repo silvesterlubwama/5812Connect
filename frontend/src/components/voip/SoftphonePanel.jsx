@@ -37,7 +37,7 @@ export default function SoftphonePanel() {
       onClick={() => setDialerOpen(x => !x)}
       data-testid="softphone-status-pill"
       title={v.statusReason || v.status}
-      className="fixed right-4 bottom-4 z-40 flex items-center gap-2 rounded-full bg-slate-900/90 text-white text-xs px-3 py-2 shadow-lg backdrop-blur hover:bg-slate-800 transition"
+      className="fixed right-4 bottom-24 z-40 flex items-center gap-2 rounded-full bg-slate-900/90 text-white text-xs px-3 py-2 shadow-lg backdrop-blur hover:bg-slate-800 transition"
     >
       <span className={`inline-block w-2 h-2 rounded-full ${statusColor(v.status)}`} />
       <Phone size={13} />
@@ -51,7 +51,7 @@ export default function SoftphonePanel() {
 
       {/* ── incoming call toast ────────────────────────────── */}
       {showIncoming && (
-        <div className="fixed right-4 bottom-20 z-50 w-80 rounded-xl bg-white shadow-2xl border border-slate-200 p-4" data-testid="incoming-call-toast">
+        <div className="fixed right-4 bottom-40 z-50 w-80 rounded-xl bg-white shadow-2xl border border-slate-200 p-4" data-testid="incoming-call-toast">
           <div className="flex items-center gap-3 mb-3">
             <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center animate-pulse">
               <PhoneIncoming className="text-emerald-600" size={20} />
@@ -78,7 +78,7 @@ export default function SoftphonePanel() {
 
       {/* ── in-call panel ─────────────────────────────────── */}
       {inSession && !showIncoming && (
-        <div className="fixed right-4 bottom-20 z-40 w-80 rounded-xl bg-slate-900 text-white shadow-2xl p-4" data-testid="in-call-panel">
+        <div className="fixed right-4 bottom-40 z-40 w-80 rounded-xl bg-slate-900 text-white shadow-2xl p-4" data-testid="in-call-panel">
           <div className="flex items-center justify-between mb-3">
             <div>
               <div className="text-[11px] uppercase tracking-wide text-slate-400">
@@ -151,7 +151,7 @@ export default function SoftphonePanel() {
 
       {/* ── dialer popover (opens on pill click when idle) ───── */}
       {dialerOpen && !inSession && !showIncoming && (
-        <div className="fixed right-4 bottom-20 z-40 w-72 rounded-xl bg-white shadow-2xl border border-slate-200 p-4" data-testid="dialer-popover">
+        <div className="fixed right-4 bottom-40 z-40 w-72 rounded-xl bg-white shadow-2xl border border-slate-200 p-4" data-testid="dialer-popover">
           <div className="flex items-center justify-between mb-3">
             <div>
               <div className="text-[11px] uppercase tracking-wide text-slate-500">Softphone</div>
