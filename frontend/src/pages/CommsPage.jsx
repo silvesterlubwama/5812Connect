@@ -506,7 +506,7 @@ export default function CommsPage() {
             <div key={`ai-${i}-${msg.role}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
                 {msg.role === 'assistant' && <p className="text-[10px] font-semibold opacity-60 mb-0.5">AI Assistant</p>}
-                <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+                <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
               </div>
             </div>
           ))}
@@ -573,7 +573,7 @@ export default function CommsPage() {
                     <span className={`w-1.5 h-1.5 rounded-full ${PRESENCE_DOTS[getUserPresence(msg.sender_id)] || 'bg-gray-400'}`} />
                   </div>
                 )}
-                <p className="text-sm whitespace-pre-wrap">{msg.text}</p>
+                <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
                 <div className="flex items-center justify-end gap-1 mt-0.5">
                   <p className="text-[10px] opacity-50">{msg.created_at?.slice(11, 16)}</p>
                   {isMine && readStatus === 'read' && <CheckCheck size={12} className="opacity-70 text-blue-300" />}
@@ -651,7 +651,7 @@ export default function CommsPage() {
           <p className="text-sm text-muted-foreground">Chat, AI assistant, announcements & calling</p>
         </div>
         {/* My status selector */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
           {isStaff && <Button size="sm" variant="outline" className="gap-1.5 text-xs h-8" onClick={() => setShowConference(true)} data-testid="schedule-conference-btn"><Video size={13} /> Conference</Button>}
           <Select value={myStatus} onValueChange={handleSetMyStatus}>
             <SelectTrigger className="w-[160px] h-8 text-xs" data-testid="my-status-select">
@@ -808,7 +808,7 @@ export default function CommsPage() {
         </div>
 
         {/* Main chat area */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className={`flex-1 flex-col min-w-0 ${selectedRoom ? 'flex' : 'hidden md:flex'}`}>
           {selectedRoom && (
             <div className="p-3 border-b border-border flex items-center gap-3 shrink-0">
               <Button

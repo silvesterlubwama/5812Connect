@@ -1,0 +1,31 @@
+{
+  "summary": "Frontend-only retest of the two mobile fixes, plus a desktop regression check. All requested checks PASS. MOBILE 390x844: (1) With no room selected, the conversation list fills the card width (315px, the full card). The chat-back-btn is absent. Opening Katelyn's conversation from the org chart hides the list and shows the chat pane, and chat-back-btn is visible. Clicking back brings the list back and hides the button. (2) chat-input is 248px wide. Send is at x305-341, y795-831. elementFromPoint at Send's centre returns the BUTTON[data-testid=send-message-btn]. A real page.mouse.click there sent TEST_mobile_send_264: it appeared in the thread, the input cleared, and the dialer did not open. The pill is at y712-748, so it does not overlap Send. (3) The dialer popover is at x86 y312, 288x371, fully inside the viewport. The header 'Softphone / Not configured' and the close X (top 337) are visible. The keypad is 3 across (80.6px x3) and row 1 shares the same top. There is no internal overflow. DESKTOP 1920x1080: the list (287px) and the chat pane are side by side, and chat-back-btn is not visible. chat-input is 1274px wide. Send is hit by elementFromPoint, and a mouse click sent TEST_desktop_send_264. The dialer is unchanged (x1616 y548 288x371.5, 3 columns). At both sizes, the WS /api/ws/<user id>?token=... connected, with no console errors, failed requests, or 4xx/5xx responses. Minor cosmetic issues are listed below.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CommsPage empty chat pane on mobile (no room selected)", "issue": "The main chat area (`flex-1 flex flex-col min-w-0`, line ~806) still renders when selectedRoom is null. Its 'Select a conversation / Choose a room or start a new conversation' empty state (renderMessages line ~466) bleeds over the right edge of the full-width list: the clipped text 'Sele / conversa / Choose room o...' overlaps the Announcements '5' badge at x~310-360. Fix: give the main chat area `${selectedRoom ? 'flex' : 'hidden md:flex'}`.", "selector": "CommsPage main chat area", "priority": "LOW"},
+      {"component": "Message bubble on mobile", "issue": "Long unbroken tokens such as 'TEST_mouse_send_desk_1793693875' overflow and are clipped at the bubble's right edge. The text uses whitespace-pre-wrap but has no break-words/break-all (CommsPage lines 509 and 576). Add `break-words` ([overflow-wrap:anywhere]).", "selector": "message bubble p.text-sm.whitespace-pre-wrap", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Comms header on mobile", "issues": ["The Conference button and the Available status select do not wrap. The Available select runs to the viewport edge (x~390) and its right border is clipped. This was carried over from iteration_263."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: hide the CommsPage main chat area below md when no room is selected (`hidden md:flex`) so the empty-state text does not overlap the list",
+    "Optional: add break-words to the message bubble text so long tokens wrap on mobile",
+    "Optional: let the Comms header controls (Conference + status select) wrap on mobile"
+  ],
+  "critical_code_review_comments": [
+    "CommsPage.jsx: the sidebar toggles visibility but the main chat area does not, so on mobile both are in the flex row whenever no room is selected. It only looks right because the sidebar is shrink-0 w-full.",
+    "The admin route for chat is /<org>/comms. /<org>/chat is the /portal route and redirects to login for the admin context."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped)", "frontend": "100% of requested checks (2 low-priority cosmetic issues)"},
+  "test_credentials": "admin@5812global.org / Admin@1234 at /5812global/login",
+  "seed_data_creation": "Sent the chat messages TEST_mobile_send_264 and TEST_desktop_send_264 in the Katelyn Lubwama DM",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Use /5812global/comms, not /5812global/chat, which redirects to login. Log in, then page.goto works because the token is in localStorage. Open the DM via the org-user-* entry filtered by 'Katelyn'. Mobile send was verified with elementFromPoint plus page.mouse.click. The dialer stays 3 columns at 390px."
+}
