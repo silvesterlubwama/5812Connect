@@ -15,7 +15,7 @@ import api from '../services/api';
 import PortalFamily from './PortalFamily';
 
 export default function PortalProfile() {
-  const { user } = useAuth();
+  const { user, setUser } = useAuth();
   const [profile, setProfile] = useState(null);
   const [member, setMember] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -32,6 +32,26 @@ export default function PortalProfile() {
   const [viewingPayslip, setViewingPayslip] = useState(null);
   const [myBadge, setMyBadge] = useState(null);   // { token } once issued
   const [badgeLoading, setBadgeLoading] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+
+  // Your own photo is also your ID photo — the server mirrors it onto the
+  // member record the badge is printed from.
+  const uploadPhoto = async (file) => {
+    if (!user?.id) return;
+    setPhotoBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const r = await api.post(`/users/${user.id}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      const url = r.data?.photo_url;
+      setProfile(p => ({ ...(p || {}), photo_url: url }));
+      setMember(m => (m ? { ...m, photo_url: url } : m));
+      if (setUser) setUser({ ...user, photo_url: url });
+      toast.success('Photo updated');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not save the photo');
+    } finally { setPhotoBusy(false); }
+  };
 
   // iter350 — timesheet periods come from the campus pay cycle configured by
   // an admin (weekly / fortnightly / monthly + anchor date), never from a
@@ -199,8 +219,7 @@ export default function PortalProfile() {
     } catch (e) { toast.error(e.response?.data?.detail || 'PDF download failed'); }
   };
 
-  const handleSave = async () => {
-    setSaving(true);
+  const handleSave = async () => {    setSaving(true);
     try {
       await portalApi.updateProfile(form);
       toast.success('Profile updated');
@@ -304,8 +323,32 @@ export default function PortalProfile() {
       <Card className="shadow-soft rounded-xl">
         <CardHeader>
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-lg">
-              {(profile?.name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+            <div className="relative">
+              {(profile?.photo_url || member?.photo_url) ? (
+                <img
+                  src={profile?.photo_url || member?.photo_url}
+                  alt={profile?.name || 'Profile'}
+                  className="w-14 h-14 rounded-full object-cover border border-border"
+                  data-testid="profile-photo"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-lg" data-testid="profile-photo-initials">
+                  {(profile?.name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+                </div>
+              )}
+              <label
+                className="absolute -bottom-1 -right-1 h-6 w-6 rounded-full bg-primary text-primary-foreground flex items-center justify-center cursor-pointer shadow"
+                title="Change photo"
+              >
+                {photoBusy ? <span className="h-3 w-3 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" /> : <Camera size={12} />}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  data-testid="profile-photo-input"
+                  onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadPhoto(f); }}
+                />
+              </label>
             </div>
             <div>
               <CardTitle className="text-lg">{profile?.name}</CardTitle>
@@ -313,6 +356,7 @@ export default function PortalProfile() {
                 <Badge variant="outline" className="text-xs">{profile?.role}</Badge>
                 <Badge className={`text-xs ${profile?.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{profile?.status}</Badge>
               </div>
+              <p className="text-[11px] text-muted-foreground mt-1">This photo is also used on your ID badge.</p>
             </div>
           </div>
         </CardHeader>

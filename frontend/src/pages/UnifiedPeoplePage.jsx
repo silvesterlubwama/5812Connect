@@ -275,22 +275,53 @@ export default function UnifiedPeoplePage() {
     finally { setSaving(false); }
   };
 
+  // The edit form shown on the member drawer. `admin`/`system_admin` is an
+  // admin TIER, not a job title, so it is shown as the Admin switch and the
+  // role select falls back to their staff role (iter406).
+  const memberFormFrom = (m) => ({
+    name: m.name || '', email: m.email || '', phone: m.phone || '',
+    role: (m.role === 'admin' || m.role === 'system_admin') ? (m.secondary_roles?.[0] || 'Staff') : (m.role || 'Member'),
+    underlying_role: m.role || '',
+    is_admin: m.role === 'admin' || m.role === 'system_admin',
+    group: m.group || '', gender: m.gender || '', date_of_birth: m.date_of_birth || '',
+    national_id: m.national_id || '', address: m.address || '', department: m.department || '',
+    program: m.program || '', pin: '', pin_set: !!m.pin_set, notes: m.notes || '',
+    status: m.status || 'active', location_id: m.location_id || '',
+    is_parent: m.is_parent || false, is_donor: m.is_donor || false,
+  });
+
   // Edit member
   const openEditMember = (m, e) => {
     if (e) e.stopPropagation();
     setEditMember(m);
-    setEditMemberForm({ name: m.name || '', email: m.email || '', phone: m.phone || '', role: m.role || 'Member', group: m.group || '', gender: m.gender || '', date_of_birth: m.date_of_birth || '', national_id: m.national_id || '', address: m.address || '', department: m.department || '', program: m.program || '', pin: '', pin_set: !!m.pin_set, notes: m.notes || '', status: m.status || 'active', location_id: m.location_id || '', is_parent: m.is_parent || false, is_donor: m.is_donor || false, is_admin: m.role === 'admin' || m.role === 'system_admin' });
+    setEditMemberForm(memberFormFrom(m));
   };
   const saveEditMember = async () => {
     if (!editMember) return;
     setSavingEdit(true);
     try {
-      // Save to both members and users collections
-      const res = await membersApi.update(editMember.id, editMemberForm);
+      // Save to both members and users collections. The admin tick is really a
+      // role: send it as one so the server carries it to the sign-in account.
+      const wasSystemAdmin = editMemberForm.underlying_role === 'system_admin';
+      const payload = { ...editMemberForm };
+      delete payload.underlying_role;
+      delete payload.is_admin;
+      payload.role = editMemberForm.is_admin
+        ? (wasSystemAdmin ? 'system_admin' : 'admin')
+        : editMemberForm.role;
+      const res = await membersApi.update(editMember.id, payload);
       // Also update users collection for flag fields (is_parent, is_guest, etc.)
       const flagFields = { is_parent: editMemberForm.is_parent, is_guest: editMemberForm.is_guest, is_customer: editMemberForm.is_customer, is_donor: editMemberForm.is_donor };
-      if (editMemberForm.is_admin) flagFields.role = 'admin';
-      try { await adminApi.updateUser(editMember.id, flagFields); } catch (e) { console.warn(e.message || e); }
+      // iter406 — this used to post the MEMBER id to /admin/users/{id}, which
+      // always 404'd (no member id is a user id) and the warning was swallowed,
+      // so ticking "Admin" here never granted anything.
+      const accountId = editMember.user_id || res.data?.user_id || null;
+      if (accountId) {
+        try { await adminApi.updateUser(accountId, flagFields); }
+        catch (e) { toast.error(e.response?.data?.detail || 'Could not update the sign-in account'); }
+      } else if (editMemberForm.is_admin) {
+        toast.warning('Saved, but this person has no sign-in account yet — create one in System Console to give them admin access');
+      }
       setMembers(prev => prev.map(m => m.id === editMember.id ? { ...m, ...res.data, ...flagFields } : m));
       if (selectedMember?.id === editMember.id) setMemberDetail(prev => ({ ...prev, ...res.data, ...flagFields }));
       setEditMember(null);
@@ -343,12 +374,12 @@ export default function UnifiedPeoplePage() {
     setSelectedMember(member);
     // Pre-initialize edit form when viewing
     setEditMember(member);
-    setEditMemberForm({ name: member.name || '', email: member.email || '', phone: member.phone || '', role: member.role || 'Member', group: member.group || '', gender: member.gender || '', date_of_birth: member.date_of_birth || '', national_id: member.national_id || '', address: member.address || '', department: member.department || '', program: member.program || '', pin: '', pin_set: !!member.pin_set, notes: member.notes || '', status: member.status || 'active', location_id: member.location_id || '', is_parent: member.is_parent || false, is_donor: member.is_donor || false });
+    setEditMemberForm(memberFormFrom(member));
     try {
       const [detRes, docRes] = await Promise.all([membersApi.get(member.id), api.get(`/members/${member.id}/documents`).catch(() => ({ data: [] }))]);
       setMemberDetail(detRes.data);
       const detailed = detRes.data;
-      setEditMemberForm({ name: detailed.name || '', email: detailed.email || '', phone: detailed.phone || '', role: detailed.role || 'Member', group: detailed.group || '', gender: detailed.gender || '', date_of_birth: detailed.date_of_birth || '', national_id: detailed.national_id || '', address: detailed.address || '', department: detailed.department || '', program: detailed.program || '', pin: '', pin_set: !!detailed.pin_set, notes: detailed.notes || '', status: detailed.status || 'active', location_id: detailed.location_id || '', is_parent: detailed.is_parent || false, is_donor: detailed.is_donor || false });
+      setEditMemberForm(memberFormFrom(detailed));
       setMemberDocuments(docRes.data || []);
     } catch { setMemberDetail(member); }
   };

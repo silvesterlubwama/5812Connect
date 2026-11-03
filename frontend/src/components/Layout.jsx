@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
-import { Avatar, AvatarFallback } from './ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from './ui/avatar';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
 import { Dialog, DialogContent } from './ui/dialog';
@@ -663,7 +663,7 @@ export default function Layout() {
 
         <div className="px-2 py-3 border-t border-border">
           <div className="flex items-center gap-2.5 px-2 py-2 rounded-lg">
-            <Avatar className="h-8 w-8"><AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">{initials}</AvatarFallback></Avatar>
+            <Avatar className="h-8 w-8">{user?.photo_url && <AvatarImage src={user.photo_url} alt={user?.name || ''} />}<AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">{initials}</AvatarFallback></Avatar>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{user?.name}</p>
               <p className="text-xs text-muted-foreground truncate capitalize">{user?.role || 'Member'}</p>
@@ -733,7 +733,7 @@ export default function Layout() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="flex items-center gap-2 px-2 h-9" data-testid="user-menu-trigger">
-                <Avatar className="h-7 w-7"><AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">{initials}</AvatarFallback></Avatar>
+                <Avatar className="h-7 w-7" data-testid="user-menu-avatar">{user?.photo_url && <AvatarImage src={user.photo_url} alt={user?.name || ''} />}<AvatarFallback className="bg-primary text-primary-foreground text-xs font-semibold">{initials}</AvatarFallback></Avatar>
                 <span className="text-sm font-medium hidden sm:block">{user?.name}</span>
                 <ChevronDown size={13} className="text-muted-foreground" />
               </Button>

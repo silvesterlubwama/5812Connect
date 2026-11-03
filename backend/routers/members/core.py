@@ -190,7 +190,33 @@ async def update_member(member_id: str, data: MemberUpdate, current_user: dict =
         department = update_data.get("department", member.get("department"))
         update_data["department"] = await resolve_department(location_id, department)
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    # The role shown in People IS the person's access level: carry it (and the
+    # active/suspended status) to their sign-in account. Without this the
+    # "Admin" tick on this page changed the member row only, so the person
+    # never saw any admin options.
+    link = member.get("user_id")
+    if not link:
+        linked = await db.users.find_one(
+            {"$or": [{"member_id": member_id}, {"id": member_id}]}, {"_id": 0, "id": 1, "role": 1}
+        )
+        link = linked.get("id") if linked else None
+    else:
+        linked = await db.users.find_one({"id": link}, {"_id": 0, "id": 1, "role": 1})
+    account_update = {k: v for k, v in update_data.items() if k in {"role", "status"}}
+    if link and linked and account_update:
+        ADMIN_TIER = {"admin", "system_admin", "Executive Director"}
+        if (linked.get("role") or "").lower() == "super_admin":
+            account_update = {}          # the platform owner is never edited from here
+        elif account_update.get("role") in ADMIN_TIER and not is_system_admin(current_user):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only system admins can assign the '{account_update['role']}' role",
+            )
+    else:
+        account_update = {}
     await db.members.update_one({"id": member_id}, {"$set": update_data})
+    if account_update:
+        await db.users.update_one({"id": link}, {"$set": account_update})
     member = await db.members.find_one({"id": member_id}, {"_id": 0})
     return member
 

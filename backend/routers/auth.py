@@ -590,7 +590,6 @@ async def google_auth_session(data: dict, request: Request) -> dict:
             raise HTTPException(status_code=401, detail="Invalid Google session")
         google_data = resp.json()
         email = google_data.get("email", "").lower()
-        name = google_data.get("name", "")
         picture = google_data.get("picture", "")
         if not email:
             raise HTTPException(status_code=400, detail="No email from Google")
@@ -652,41 +651,16 @@ async def google_auth_session(data: dict, request: Request) -> dict:
             if picture and not existing.get("picture"):
                 await db.users.update_one({"id": user_id}, {"$set": {"picture": picture}})
         else:
-            # A person nobody has seen before. Pin the organisation they are
-            # joining explicitly rather than relying on whatever the request
-            # happened to resolve — with nothing pinned this raised and came
-            # back as "Google authentication failed".
-            target = host_org
-            if not target:
-                with org_bypass():
-                    target = await raw_db.organizations.find_one(
-                        {"status": "active", "is_default": True}, {"_id": 0}
-                    )
-                if not target:
-                    await ensure_default_organization()
-                    with org_bypass():
-                        target = await raw_db.organizations.find_one(
-                            {"status": "active", "is_default": True}, {"_id": 0}
-                        ) or await raw_db.organizations.find_one({"status": "active"}, {"_id": 0})
-            if not target:
-                raise HTTPException(status_code=503, detail="No organisation is set up on this server yet")
-            set_current_org(target["id"])
-            user_id = str(uuid.uuid4())
-            new_user = {
-                "id": user_id, "name": name, "email": email,
-                "phone": None, "national_id": None,
-                "password_hash": hash_password(str(uuid.uuid4())),
-                "role": "Guest", "status": "pending", "picture": picture,
-                "is_guest": True, "is_parent": False,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            await db.users.insert_one(new_user)
-            # Also create a guest record
-            await db.guests.insert_one({
-                "id": f"gst_{uuid.uuid4().hex[:8]}", "name": name, "email": email,
-                "user_id": user_id, "is_parent": False,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            # iter406 — nobody with this address has an account. Signing in is
+            # not the same as joining: we no longer mint a pending guest
+            # account on the spot (that quietly filled the people list with
+            # strangers). Point them at the request form instead.
+            raise HTTPException(
+                status_code=403,
+                detail=(f"There is no account for {email} here. "
+                        "Use \u2018Request account\u2019 on the sign-in page and an "
+                        "administrator will set one up for you."),
+            )
         user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
         # Pending users get a restricted token — frontend must check status
         if user.get("status") == "pending":

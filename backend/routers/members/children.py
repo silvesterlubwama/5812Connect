@@ -452,8 +452,13 @@ async def upload_child_photo(child_id: str, file: UploadFile = File(...), curren
 
 
 @router.post("/users/{user_id}/photo")
-async def upload_user_photo(user_id: str, file: UploadFile = File(...), current_user: dict = Depends(require_staff)) -> dict:
-    """Upload a profile photo for a staff/user record (admin-side equivalent of member photo)."""
+async def upload_user_photo(user_id: str, file: UploadFile = File(...), current_user: dict = Depends(get_current_user)) -> dict:
+    """Upload a profile photo for a staff/user record (admin-side equivalent of member photo).
+
+    Anyone signed in may set their OWN photo — it is also their ID photo, so
+    members, parents and guests (all below staff level) must be able to do it.
+    Changing somebody else's still needs a manager or above.
+    """
     if user_id != current_user["id"] and current_user.get("role") not in {"admin", "system_admin", "Executive Director", "Director", "Manager"}:
         raise HTTPException(status_code=403, detail="Only yourself or a manager can change this user's photo")
     photo_url = await _save_photo(file, "user-", user_id)

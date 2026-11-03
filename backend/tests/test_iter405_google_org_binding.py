@@ -116,12 +116,20 @@ def test_the_bare_address_still_finds_their_own_account(lub_person, monkeypatch)
     assert out["user"]["organization_id"] == LUB_ORG
 
 
-def test_a_genuinely_new_person_is_still_welcomed(monkeypatch):
+def test_an_unknown_email_cannot_sign_itself_in(monkeypatch):
+    """iter406 — signing in is not joining. A Google address nobody has an
+    account for is refused and NO account is created; they must ask for one."""
+    from fastapi import HTTPException
     email = f"google-new-{uuid.uuid4().hex[:6]}@test.local"
     try:
-        out = _google(email, "Brand New", "lubwamas", monkeypatch)
-        assert out.get("pending_approval") is True
-        assert out["user"]["organization_id"] == LUB_ORG, out["user"]
+        with pytest.raises(HTTPException) as e:
+            _google(email, "Brand New", "lubwamas", monkeypatch)
+        assert e.value.status_code == 403, e.value.detail
+        assert "Request account" in e.value.detail
+        with org_bypass():
+            rows = asyncio.get_event_loop().run_until_complete(
+                raw_db.users.find({"email": email}, {"_id": 0, "id": 1}).to_list(5))
+        assert rows == [], f"an account was created anyway: {rows}"
     finally:
         async def _rm():
             with org_bypass():

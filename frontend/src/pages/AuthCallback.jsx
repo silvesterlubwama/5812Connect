@@ -50,14 +50,24 @@ export default function AuthCallback() {
       <div className="min-h-screen flex items-center justify-center bg-background px-4">
         <div className="max-w-md text-center space-y-4" data-testid="google-signin-problem">
           <p className="text-sm text-foreground">{problem}</p>
-          <button
-            type="button"
-            onClick={() => navigate('/login', { replace: true })}
-            className="text-sm font-medium text-primary underline underline-offset-4"
-            data-testid="google-signin-back"
-          >
-            Back to sign-in
-          </button>
+          <div className="flex items-center justify-center gap-4">
+            <button
+              type="button"
+              onClick={() => navigate('/login', { replace: true })}
+              className="text-sm font-medium text-primary underline underline-offset-4"
+              data-testid="google-signin-back"
+            >
+              Back to sign-in
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/register', { replace: true })}
+              className="text-sm font-medium text-primary underline underline-offset-4"
+              data-testid="google-signin-request-account"
+            >
+              Request an account
+            </button>
+          </div>
         </div>
       </div>
     );

@@ -431,6 +431,13 @@ export default function CommsPage() {
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Director'].includes(user?.role);
   const isStaff = isAdmin || ['Manager', 'Coordinator', 'Staff'].includes(user?.role);
   const filteredConvs = conversations.filter(c => !searchQuery || c.name?.toLowerCase().includes(searchQuery.toLowerCase()));
+  // The people list obeys the same search box, and never offers you yourself.
+  const visibleStaff = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return allStaff.filter(s => s.id !== user?.id && (
+      !q || (s.name || '').toLowerCase().includes(q) || (s.role || '').toLowerCase().includes(q)
+    ));
+  }, [allStaff, searchQuery, user?.id]);
   const currentTyping = selectedRoom ? typingUsers[selectedRoom.id] : null;
   const typingUserName = currentTyping ? allStaff.find(s => s.id === currentTyping.user_id)?.name?.split(' ')[0] || 'Someone' : null;
 
@@ -677,7 +684,7 @@ export default function CommsPage() {
           <div className="p-3 border-b border-border space-y-2">
             <div className="relative">
               <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input className="pl-8 h-8 text-xs" placeholder="Search chats..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+              <Input className="pl-8 h-8 text-xs" placeholder="Search chats and people..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} data-testid="comms-search-input" />
             </div>
             <Button className="w-full gap-2 h-8 text-xs" size="sm" onClick={() => setShowNewConv(true)} data-testid="new-conversation-btn">
               <Plus size={13} /> New Conversation
@@ -698,13 +705,13 @@ export default function CommsPage() {
           {/* Org Chart - Staff by Role (campus-scoped, live presence) */}
           <div className="border-b border-border">
             <button onClick={() => setShowOrgChart(!showOrgChart)} className="text-[10px] font-semibold text-muted-foreground uppercase tracking-widest px-3 pt-2.5 pb-1 flex items-center gap-1 w-full hover:text-foreground" data-testid="org-chart-toggle">
-              <ChevronRight size={10} className={`transition-transform ${showOrgChart ? 'rotate-90' : ''}`} /> Organization <span className="ml-auto normal-case text-[9px] opacity-60">{allStaff.length} people</span>
+              <ChevronRight size={10} className={`transition-transform ${showOrgChart ? 'rotate-90' : ''}`} /> Organization <span className="ml-auto normal-case text-[9px] opacity-60">{visibleStaff.length} people</span>
             </button>
             {showOrgChart && (
               <div className="px-2 pb-2 space-y-0.5">
-                {allStaff.length === 0 && <p className="text-[10px] text-muted-foreground text-center py-3">No staff in your campus yet</p>}
+                {visibleStaff.length === 0 && <p className="text-[10px] text-muted-foreground text-center py-3" data-testid="org-chart-empty">{searchQuery ? 'Nobody matches that search' : 'No staff in your campus yet'}</p>}
                 {ORG_LEVELS.map(level => {
-                  const roleStaff = allStaff.filter(s => level.roles.includes((s.role || '').trim().toLowerCase()));
+                  const roleStaff = visibleStaff.filter(s => level.roles.includes((s.role || '').trim().toLowerCase()));
                   if (roleStaff.length === 0) return null;
                   return (
                     <div key={level.label} data-testid={`org-level-${level.label.toLowerCase().replace(/ /g, '-')}`}>
@@ -744,7 +751,7 @@ export default function CommsPage() {
                 })}
                 {/* Other roles not in standard org tree */}
                 {(() => {
-                  const uncategorized = allStaff.filter(s => !ORG_LEVEL_ROLES.has((s.role || '').trim().toLowerCase()));
+                  const uncategorized = visibleStaff.filter(s => !ORG_LEVEL_ROLES.has((s.role || '').trim().toLowerCase()));
                   if (uncategorized.length === 0) return null;
                   return (
                     <div>
