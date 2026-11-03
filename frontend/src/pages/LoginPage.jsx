@@ -234,7 +234,12 @@ export default function LoginPage() {
 
             {/* REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH */}
             <Button variant="outline" className="w-full gap-2" type="button" data-testid="google-signin-btn" onClick={() => {
-              const redirectUrl = window.location.origin + '/dashboard';
+              // Keep the organisation's web name in the return address: coming
+              // back to the bare domain made the server look in the DEFAULT
+              // organisation, where the person does not exist, and they were
+              // handed a brand-new guest account instead of their own.
+              const slug = getOrgSlug();
+              const redirectUrl = window.location.origin + (slug ? `/${slug}` : '') + '/dashboard';
               window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
             }}>
               <svg className="w-4 h-4" viewBox="0 0 24 24">

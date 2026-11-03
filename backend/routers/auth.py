@@ -375,7 +375,18 @@ async def login(data: UserLogin, request: Request) -> dict:
         if not totp.verify(data.totp_code):
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
     # ---- organisation gate ----
-    org_id, org, pending = await _resolve_login_org(user, host_org)
+    try:
+        org_id, org, pending = await _resolve_login_org(user, host_org)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Anything unexpected here used to surface as a bare 500 with nothing to
+        # go on. Say which step failed, and log the traceback for the server.
+        logger.exception("Sign-in failed resolving the organisation for %s", user.get("email"))
+        raise HTTPException(
+            status_code=503,
+            detail=f"Sign-in could not be completed while opening your organisation: {str(e)[:200]}",
+        )
     if pending is not None:
         # A super admin with no organisation chosen yet. Issue a token so they
         # can reach the organisation picker — it unlocks nothing else, because
@@ -397,7 +408,14 @@ async def login(data: UserLogin, request: Request) -> dict:
     if user_loc:
         await db.users.update_one({"id": user["id"]}, {"$set": {"active_campus_id": user_loc}})
         user["active_campus_id"] = user_loc
-    token = await create_token_with_session(user["id"], request)
+    try:
+        token = await create_token_with_session(user["id"], request)
+    except Exception as e:
+        logger.exception("Sign-in failed issuing a session for %s", user.get("email"))
+        raise HTTPException(
+            status_code=503,
+            detail=f"Sign-in could not be completed while starting your session: {str(e)[:200]}",
+        )
     user_out = {k: v for k, v in user.items() if k not in ("password_hash", "_id")}
     user_out["organization_id"] = org_id
     user_out["organization_name"] = org.get("name", "")
@@ -586,9 +604,27 @@ async def google_auth_session(data: dict, request: Request) -> dict:
             candidates = await raw_db.users.find(
                 {"email": email}, {"_id": 0, "password_hash": 0}
             ).to_list(20)
+        all_accounts = list(candidates)
         if host_org:
             candidates = [c for c in candidates
                           if c.get("organization_id") == host_org["id"] or is_super_admin(c)]
+        if all_accounts and not candidates:
+            # They have an account — in another organisation. Creating a fresh
+            # guest here would quietly cut them off from their own records, which
+            # is exactly what used to happen when Google sent them back to the
+            # bare domain. Point them at their own address instead.
+            with org_bypass():
+                orgs = await raw_db.organizations.find(
+                    {"id": {"$in": [c.get("organization_id") for c in all_accounts]}},
+                    {"_id": 0, "name": 1, "slug": 1},
+                ).to_list(20)
+            where = ", ".join(
+                f"{o.get('name')} ({request.base_url.hostname}/{o.get('slug')})" for o in orgs
+            ) or "another organisation"
+            raise HTTPException(
+                status_code=409,
+                detail=f"{email} belongs to {where}. Open that address and sign in there.",
+            )
         if len(candidates) > 1:
             # The same address exists in more than one organisation. A Google
             # session can only be exchanged once, so there is no safe way to ask
@@ -616,6 +652,25 @@ async def google_auth_session(data: dict, request: Request) -> dict:
             if picture and not existing.get("picture"):
                 await db.users.update_one({"id": user_id}, {"$set": {"picture": picture}})
         else:
+            # A person nobody has seen before. Pin the organisation they are
+            # joining explicitly rather than relying on whatever the request
+            # happened to resolve — with nothing pinned this raised and came
+            # back as "Google authentication failed".
+            target = host_org
+            if not target:
+                with org_bypass():
+                    target = await raw_db.organizations.find_one(
+                        {"status": "active", "is_default": True}, {"_id": 0}
+                    )
+                if not target:
+                    await ensure_default_organization()
+                    with org_bypass():
+                        target = await raw_db.organizations.find_one(
+                            {"status": "active", "is_default": True}, {"_id": 0}
+                        ) or await raw_db.organizations.find_one({"status": "active"}, {"_id": 0})
+            if not target:
+                raise HTTPException(status_code=503, detail="No organisation is set up on this server yet")
+            set_current_org(target["id"])
             user_id = str(uuid.uuid4())
             new_user = {
                 "id": user_id, "name": name, "email": email,
@@ -642,8 +697,11 @@ async def google_auth_session(data: dict, request: Request) -> dict:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Google auth error: {e}")
-        raise HTTPException(status_code=500, detail="Google authentication failed")
+        logger.exception("Google auth error")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Google authentication failed: {str(e)[:200]}",
+        )
 
 
 @router.post("/auth/forgot-password")

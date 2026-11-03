@@ -16,6 +16,7 @@ import { kioskApi, locationsApi, accessApi, nfcApi, biometricApi, authApi, badge
 import PinNumpad from '../components/PinNumpad';
 import { enterKioskFullscreen } from '../utils/kioskMode';
 import api from '../services/api';
+import { getOrgSlug } from '../orgRoute';
 import { toast } from 'sonner';
 
 // ===== Visitor Memory Helpers =====
@@ -1277,7 +1278,8 @@ export default function KioskPage() {
               </div>
 
               <Button variant="outline" className="w-full h-12 gap-2 text-base" type="button" data-testid="kiosk-google-btn" onClick={() => {
-                const redirectUrl = window.location.origin + '/kiosk';
+                const slug = getOrgSlug();
+                const redirectUrl = window.location.origin + (slug ? `/${slug}` : '') + '/kiosk';
                 window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
               }}>
                 <svg className="w-5 h-5" viewBox="0 0 24 24">
