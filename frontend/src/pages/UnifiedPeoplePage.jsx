@@ -28,6 +28,7 @@ import { emitDataChanged } from '../services/dataEvents';
 import { BulkDeleteConfirm } from '../components/BulkDeleteConfirm';
 
 import MemberForm from '../components/people/MemberForm';
+import StaffListTab from '../components/people/StaffListTab';
 import { PersonPicker } from '../components/PersonPicker';
 import { PersonNameField } from '../components/people/PersonNameField';
 import { StaffPicker } from '../components/StaffPicker';
@@ -43,6 +44,7 @@ export default function UnifiedPeoplePage() {
   const isManager = ['admin', 'system_admin', 'Executive Director', 'Director', 'Manager'].includes(userRole);
   const isDirector = ['admin', 'system_admin', 'Executive Director', 'Director'].includes(userRole);
   const isCoordinator = isManager || ['Coordinator', 'Leader'].includes(userRole);
+  const isSystemAdmin = ['admin', 'system_admin', 'super_admin'].includes(userRole);
   const canEditStaff = isDirector; // Directors+ can edit staff in their location
 
   // Members state
@@ -668,6 +670,7 @@ export default function UnifiedPeoplePage() {
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList data-testid="people-tabs" className="w-full flex overflow-x-auto no-scrollbar md:inline-flex md:w-auto">
+          {isSystemAdmin && <TabsTrigger value="staff" className="gap-1.5" data-testid="tab-staff"><Shield size={13} /> Staff</TabsTrigger>}
           <TabsTrigger value="guests" className="gap-1.5" data-testid="tab-guests"><UserPlus size={13} /> Guests & Parents ({guests.length})</TabsTrigger>
           <TabsTrigger value="families" className="gap-1.5" data-testid="tab-families"><Heart size={13} /> Families ({families.length})</TabsTrigger>
           <TabsTrigger value="children" className="gap-1.5" data-testid="tab-children"><Baby size={13} /> Children ({children.length})</TabsTrigger>
@@ -675,7 +678,14 @@ export default function UnifiedPeoplePage() {
           <TabsTrigger value="family-approvals" className="gap-1.5" data-testid="tab-family-approvals"><Heart size={13} /> Family Approvals{familyApprovalCount > 0 ? ` (${familyApprovalCount})` : ''}</TabsTrigger>
         </TabsList>
 
-        {/* MEMBERS TAB removed — staff/users are managed in /admin; guests & parents below cover non-staff people */}
+        {/* STAFF TAB — the sign-in accounts. Restored iter408: it was removed
+            when staff moved to /admin, which left no staff list where people
+            actually look for it. */}
+        {isSystemAdmin && (
+          <TabsContent value="staff" className="mt-4">
+            <StaffListTab canEdit={isSystemAdmin} />
+          </TabsContent>
+        )}
 
         {/* FAMILIES TAB */}
         <TabsContent value="families" className="mt-4">
