@@ -1,0 +1,38 @@
+{
+  "summary": "Frontend testing of iter408 People-page Staff tab (/5812global/members). All 8 requested checks PASS: the Staff tab shows for a system admin (admin@5812uganda.org) and lists 9 rows with name/email/job role/Admin/Active. Search by name ('ssekito'), email ('zipporah.zaituni@') and role ('coordinator') each narrows to 1 row. The role filter 'Manager' returns Zipporah only; 'Admins only' returns Katelyn and Silvester. Admin grant on Christopher Ssekito (Coordinator): badge appears, role stays Coordinator, and both still hold after a reload. Changing his job role to Manager while he is an admin persisted after a reload with admin kept. After changing back to Coordinator and turning Admin off, the badge is gone and the role is back to Coordinator, also after a reload. This confirms the iter266 job-title preservation fix. Non-admin Manager (zipporah.zaituni@gmail.com / Test@5812!) sees no Staff tab, and Guests, Families and Children work for her. Admin regression: all 6 tabs switch correctly with no console errors. Comms search 'zipp' filters the Organization list to 1 and self is never listed. Self-service profile photo upload works ('Photo updated'). At 390px the Staff tab has no horizontal overflow. The owner row (silvesterlubwama@icloud.com) cannot be seen from an org admin session because the owner belongs to no organisation, so the Owner read-only branch was only checked by code review (renders an Owner badge and no switches; the backend also returns 403). Side effects found in the backend (below).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/users/{id}", "issue": "Every inline save from the Staff tab (Admin switch, Active switch, job-role select) regenerates and overwrites `title`, because the tab never sends `title` and admin_update_user calls generate_title(role) without the user's locations. Observed: Christopher's title went 'admin' -> 'Coordinator'. Zipporah's custom 'Operations Manager' or Katelyn's 'Director of 58:12 Uganda' would be lost just by toggling Active. For an admin-tier user, a job-role change regenerates the title from role='admin', so it becomes literally 'admin'. Fix: only regenerate the title when role/location/department actually change, or have the tab send the existing title back."},
+      {"endpoint": "PUT /api/admin/users/{id}", "issue": "`updated_at` is computed but never written to users: it is not in ACCOUNT_FIELDS, so user_update drops it. Christopher's users.updated_at stayed 2026-10-07 after 4 edits."},
+      {"endpoint": "GET /api/admin/users", "issue": "The Staff tab lists 9 accounts, but the org has 16 users and the Comms Organization list shows 10. Missing: System Admin (admin@5812global.org), the signed-in Admin (admin@5812uganda.org), 4 'OnlyName' Staff and Portal Test Member. Likely cause is the campus/location filter or accounts that have no location_id. Decide whether accounts with no location should appear on the Staff list. Right now an admin cannot manage those accounts from this tab."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Admin OFF", "issue": "setAdmin(off) sends only {role: jobRole} and leaves secondary_roles=[jobRole] behind on the users and members docs. Observed: Christopher ended with secondary_roles ['Coordinator'] (it was []) after the round trip. setAdmin(on) also REPLACES the whole secondary_roles array with [jobRole], so any existing secondary roles are lost. setJobRole for admins does the same. Fix: on OFF send secondary_roles minus the job role; on ON or role change prepend or replace only index 0.", "affected_selectors": ["staff-admin-toggle-{id}", "staff-role-select-{id}"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Stop Staff-tab saves overwriting custom `title` (admin_update_user regenerates the title on every PUT, and gives 'admin' for admin-tier users)",
+    "On Admin OFF clear the job role from secondary_roles, and do not wipe other secondary roles on Admin ON or a job-role change",
+    "Write updated_at to users in admin_update_user (add it to the user_update set)",
+    "Decide whether accounts with no location (admin@5812global.org, the signed-in admin) should appear on the Staff list; today GET /api/admin/users drops them"
+  ],
+  "critical_code_review_comments": [
+    "StaffListTab: front-end ADMIN_TIER is ['admin','system_admin'], but the backend admin tier also includes 'Executive Director'. Executive Director rows show the Admin switch OFF, and only a system admin can save one.",
+    "StaffListTab.save merges the request payload into local state instead of the server response, so server-side changes such as the regenerated title are not reflected until a reload. Use the returned user.",
+    "StaffListTab sorts by name on the client while the backend already sorts. Harmless.",
+    "UnifiedPeoplePage passes canEdit={isSystemAdmin}, which is the same gate as the tab, so the read-only branch is only reachable for super_admin rows. Fine."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped (frontend only)", "frontend": "100% of requested checks (8/8); 3 minor backend and 1 integration side effects found"},
+  "test_credentials": "admin@5812uganda.org / Admin@5812 (system admin); zipporah.zaituni@gmail.com / Test@5812! (Manager, non-admin, default password works); ssekitochris@gmail.com (Coordinator) does NOT use the default password",
+  "seed_data_creation": "None. Touched Christopher Ssekito (94c8ab87-...): started as role Coordinator, secondary_roles [], title 'admin', status active, and was restored directly in the DB on users and members (secondary_roles [] and title 'admin' put back, because the UI round trip left ['Coordinator'] and 'Coordinator'). The members-doc updated_at may have changed. admin@5812uganda.org profile photo was uploaded for the test, then photo_url was unset (it had none). The uploaded file is still in storage.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The Staff tab lists GET /api/admin/users (9 rows in 5812global). Use Christopher Ssekito (Coordinator) as the safe toggle target and snapshot title/secondary_roles first, because saves rewrite the title. Zipporah (Manager) logs in with Test@5812!. Owner row cannot be seen from org admin sessions. SIP websocket console errors (ucm.lubwamas.org) for SIP-extension users are unrelated to the People page."
+}

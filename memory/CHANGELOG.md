@@ -2958,3 +2958,43 @@ agent iteration_266 (admin grant reaches the account, self photo saves and shows
 on the badge/avatars, 403 for someone else's photo, org list filters and excludes
 self, Send by mouse click on 1920x800 and 390x844). Also fixed from that report:
 staff `/profile` had no page padding, and the household row overflowed 390px.
+
+## iter408 — 2026-11-05 — Staff list restored on the People page
+
+The staff list was removed from People when staff moved to the System Console,
+which left no staff list where people actually look for one. New **Staff** tab on
+`/members` (`components/people/StaffListTab.jsx`, ~150 lines), visible to
+admin/system_admin/super_admin only — it reads `GET /api/admin/users`, which is
+level 10:
+- Lists every sign-in account with photo, name, email, job role, admin badge and
+  status; search over name/email/role/phone and a role filter including
+  "Admins only".
+- Inline management that writes straight to the sign-in account: job role,
+  Admin switch, Active/Suspended switch. The platform owner row is read-only
+  with an Owner badge (the backend refuses it too). Executive Director shows
+  "Admin with this role" with the switch disabled, because that role carries
+  admin on the backend.
+- Creating accounts, passwords and deletions stay in the System Console, linked
+  from the foot of the tab.
+
+Fixed while building it (found by testing agent iteration_267):
+- `admin_update_user` rebuilt the job title on EVERY save, so toggling Active
+  replaced a custom title like "Operations Manager" — and for an admin-tier
+  account it produced the literal title "admin". It now rebuilds only when
+  something the title is built from changed, and titles an admin by the job role
+  underneath (`secondary_roles[0]`).
+- `updated_at` was computed but never written to users (not in ACCOUNT_FIELDS).
+- `GET /api/admin/users` hid every account with no campus whenever a campus was
+  pinned — including the signed-in admin's own account, so org-wide admins were
+  unmanageable from anywhere. The campus filter is now OR'd with "has no campus".
+  (5812global went from 9 visible accounts to all 16.)
+- The tab no longer replaces the whole `secondary_roles` array: the job role sits
+  at the head while on the admin tier and other secondary roles are preserved;
+  turning Admin off removes the job role from the array rather than leaving it.
+- Saves merge the server's response, not the request payload.
+
+Verified: tests/test_iter408_staff_list.py (5) + the iter405-407 suites (21 total);
+testing agent iteration_267 passed 8/8 UI checks (tab visible to admins only,
+search and filters, admin grant keeps the job role across a reload, revoke
+restores it, Manager sees no tab, other People tabs unaffected, no 390px
+overflow).

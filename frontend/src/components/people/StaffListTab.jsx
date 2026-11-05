@@ -40,7 +40,7 @@ export default function StaffListTab({ canEdit }) {
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     return users
-      .filter(u => roleFilter === 'all' || (roleFilter === 'admins' ? ADMIN_TIER.includes(u.role) : jobRoleOf(u) === roleFilter))
+      .filter(u => roleFilter === 'all' || (roleFilter === 'admins' ? (ADMIN_TIER.includes(u.role) || u.role === 'Executive Director') : jobRoleOf(u) === roleFilter))
       .filter(u => !q || [u.name, u.email, u.role, u.phone].some(v => (v || '').toLowerCase().includes(q)))
       .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }, [users, search, roleFilter]);
@@ -50,21 +50,30 @@ export default function StaffListTab({ canEdit }) {
   const save = async (u, updates) => {
     setSavingId(u.id);
     try {
-      await adminApi.updateUser(u.id, updates);
-      setUsers(prev => prev.map(x => (x.id === u.id ? { ...x, ...updates } : x)));
+      const r = await adminApi.updateUser(u.id, updates);
+      const saved = r.data && r.data.id ? r.data : { ...u, ...updates };
+      setUsers(prev => prev.map(x => (x.id === u.id ? { ...x, ...saved } : x)));
       toast.success(`${u.name || 'Account'} updated`);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Could not update this account');
     } finally { setSavingId(null); }
   };
 
-  const setAdmin = (u, on) => save(u, on
-    ? { role: u.role === 'system_admin' ? 'system_admin' : 'admin', secondary_roles: [jobRoleOf(u)] }
-    : { role: jobRoleOf(u) });
+  // The job role lives at the head of secondary_roles while someone is on the
+  // admin tier — any other secondary roles they hold are left alone.
+  const setAdmin = (u, on) => {
+    const job = jobRoleOf(u);
+    const others = (u.secondary_roles || []).filter(r => r !== job);
+    return save(u, on
+      ? { role: u.role === 'system_admin' ? 'system_admin' : 'admin', secondary_roles: [job, ...others] }
+      : { role: job, secondary_roles: others });
+  };
 
-  const setJobRole = (u, role) => save(u, ADMIN_TIER.includes(u.role)
-    ? { secondary_roles: [role] }
-    : { role });
+  const setJobRole = (u, role) => {
+    if (!ADMIN_TIER.includes(u.role)) return save(u, { role });
+    const others = (u.secondary_roles || []).filter(r => r !== jobRoleOf(u) && r !== role);
+    return save(u, { secondary_roles: [role, ...others] });
+  };
 
   if (loading) {
     return <div className="flex items-center gap-2 text-sm text-muted-foreground py-10 justify-center" data-testid="staff-loading"><RefreshCw size={14} className="animate-spin" /> Loading staff…</div>;
@@ -99,6 +108,7 @@ export default function StaffListTab({ canEdit }) {
         <div className="space-y-2" data-testid="staff-rows">
           {visible.map(u => {
             const isAdminTier = ADMIN_TIER.includes(u.role);
+            const adminByRole = u.role === 'Executive Director';   // the backend grants admin with this role
             const locked = (u.role || '').toLowerCase() === 'super_admin';
             const busy = savingId === u.id;
             return (
@@ -112,6 +122,7 @@ export default function StaffListTab({ canEdit }) {
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-sm font-medium truncate" data-testid={`staff-name-${u.id}`}>{u.name || u.email}</p>
                       {isAdminTier && <Badge className="text-[10px] gap-1 bg-primary/10 text-primary border-primary/20" data-testid={`staff-admin-badge-${u.id}`}><Shield size={9} /> {u.role === 'system_admin' ? 'System admin' : 'Admin'}</Badge>}
+                      {adminByRole && <Badge variant="outline" className="text-[10px] gap-1 border-primary/30 text-primary" data-testid={`staff-admin-badge-${u.id}`}><Shield size={9} /> Admin with this role</Badge>}
                       {locked && <Badge variant="outline" className="text-[10px] gap-1"><Lock size={9} /> Owner</Badge>}
                       {u.status && u.status !== 'active' && <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700" data-testid={`staff-status-${u.id}`}>{u.status}</Badge>}
                     </div>
@@ -124,9 +135,9 @@ export default function StaffListTab({ canEdit }) {
                         <SelectTrigger className="w-36 h-8 text-xs" data-testid={`staff-role-select-${u.id}`}><SelectValue /></SelectTrigger>
                         <SelectContent>{[...new Set([...JOB_ROLES, jobRoleOf(u)])].map(r => <SelectItem key={r} value={r}>{r}</SelectItem>)}</SelectContent>
                       </Select>
-                      <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground" title={adminByRole ? 'Admin comes with the Executive Director role — change the role to remove it' : undefined}>
                         Admin
-                        <Switch checked={isAdminTier} disabled={busy} onCheckedChange={v => setAdmin(u, v)} data-testid={`staff-admin-toggle-${u.id}`} />
+                        <Switch checked={isAdminTier || adminByRole} disabled={busy || adminByRole} onCheckedChange={v => setAdmin(u, v)} data-testid={`staff-admin-toggle-${u.id}`} />
                       </label>
                       <label className="flex items-center gap-2 text-xs text-muted-foreground">
                         Active

@@ -2438,3 +2438,12 @@ Re-running a move is therefore safe and repeatable.
 - Signing in is not joining: an email nobody has an account for is refused and
   nothing is created. People ask for access with "Request account", which an
   admin approves.
+
+### 2026-11-05 — The staff list is back on the People page
+- People (`/members`) has a **Staff** tab again, for admins only: every person
+  with a sign-in account, searchable, with their job role, admin status and
+  whether their account is active — and all three changeable on the spot.
+- What you set there is what the person gets when they log in. Creating
+  accounts, passwords and deletions remain in the System Console.
+- Admins who belong to no particular campus (including your own account) are no
+  longer hidden from the staff list when a campus is pinned.

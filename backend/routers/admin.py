@@ -64,7 +64,15 @@ async def list_all_users(search: Optional[str] = None, role: Optional[str] = Non
     query = {}
     conditions = []
     if campus:
-        conditions.append(campus)
+        # Accounts that belong to the organisation but to no particular campus
+        # (platform/org-wide admins) would otherwise vanish from the staff list
+        # whenever a campus is pinned — including the signed-in admin's own
+        # account, which left them unmanageable from anywhere (iter408).
+        no_campus = {"$and": [
+            {"$or": [{"location_id": {"$in": [None, ""]}}, {"location_id": {"$exists": False}}]},
+            {"$or": [{"location_ids": {"$in": [None, []]}}, {"location_ids": {"$exists": False}}]},
+        ]}
+        conditions.append({"$or": [campus, no_campus]})
     if search:
         conditions.append({"$or": [{"name": {"$regex": search, "$options": "i"}}, {"email": {"$regex": search, "$options": "i"}}]})
     if role and role != "all": query["role"] = role
@@ -393,15 +401,25 @@ async def admin_update_user(user_id: str, data: dict, current_user: dict = Depen
 
     loc_id, expanded = await _expand_user_locations(update, data)
 
-    prev = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1, "email": 1, "role": 1, "member_id": 1}) or {}
+    prev = await db.users.find_one({"id": user_id}, {"_id": 0, "name": 1, "email": 1, "role": 1, "member_id": 1, "secondary_roles": 1}) or {}
 
-    if "title" not in data or not data.get("title"):
+    # Only rebuild the job title when something it is built FROM changed.
+    # It used to be rebuilt on every save, so toggling Active or Admin quietly
+    # replaced a custom title like "Operations Manager" — and for an admin-tier
+    # account it produced the literal title "admin" (iter408).
+    TITLE_INPUTS = {"role", "secondary_roles", "department", "department_ids", "location_id", "location_ids"}
+    if not data.get("title") and (TITLE_INPUTS & set(data.keys())):
         role = update.get("role") or prev.get("role", "")
+        if role in {"admin", "system_admin"}:
+            # Admin is a tier, not a job. Title from the job role underneath.
+            sec = update.get("secondary_roles") or prev.get("secondary_roles") or []
+            role = sec[0] if sec else "Staff"
         dept = update.get("department") or ""
         update["title"] = await generate_title(role, expanded or ([loc_id] if loc_id else []), dept)
 
     user_update = {k: v for k, v in update.items() if k in ACCOUNT_FIELDS}
     if user_update:
+        user_update["updated_at"] = update["updated_at"]
         await db.users.update_one({"id": user_id}, {"$set": user_update})
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
 
