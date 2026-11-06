@@ -37,8 +37,9 @@ export default function SettingsPage() {
   const [newVenue, setNewVenue] = useState({ name: '', capacity: 50, type: 'hall', description: '', hourly_rate: '', available: true, is_offsite: false, is_bookable: true, country: '', address: '' });
   const [passwords, setPasswords] = useState({ current: '', new_: '', confirm: '' });
   const [savingPass, setSavingPass] = useState(false);
-  const [appSettings, setAppSettings] = useState({ registration_open: true, default_role: 'member', maintenance_mode: false });
+  const [appSettings, setAppSettings] = useState({ registration_open: true, default_role: 'Guest', maintenance_mode: false, maintenance_message: '' });
   const [savingAdmin, setSavingAdmin] = useState(false);
+  const [savingNotifications, setSavingNotifications] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushLoading, setPushLoading] = useState(false);
 
@@ -239,17 +240,44 @@ export default function SettingsPage() {
         currency: d.currency || 'UGX',
       });
     }).catch(() => {});
+    // Your own notification preferences (iter409 — these used to live only in
+    // component state, so the Save button was a lie).
+    appSettingsApi.get().then(r => {
+      if (r.data?.notifications) setNotifications(prev => ({ ...prev, ...r.data.notifications }));
+    }).catch(() => {});
     if (isAdmin) {
-      appSettingsApi.get().then(r => setAppSettings(prev => ({ ...prev, ...r.data }))).catch(() => {});
+      api.get('/admin/system-settings')
+        .then(r => setAppSettings(prev => ({ ...prev, ...(r.data?.access || {}) })))
+        .catch(() => {});
     }
   }, [isAdmin]);
+
+  const handleSaveNotifications = async () => {
+    setSavingNotifications(true);
+    try {
+      await appSettingsApi.update({ notifications });
+      toast.success('Notification preferences saved');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not save your preferences');
+    } finally { setSavingNotifications(false); }
+  };
 
   const handleSaveAppSettings = async () => {
     setSavingAdmin(true);
     try {
-      await appSettingsApi.update(appSettings);
-      toast.success('Admin settings saved!');
-    } catch { toast.error('Failed to save settings'); }
+      // Organisation-wide access rules, not a personal preference.
+      await api.put('/admin/system-settings', {
+        access: {
+          registration_open: appSettings.registration_open,
+          maintenance_mode: appSettings.maintenance_mode,
+          maintenance_message: appSettings.maintenance_message || '',
+          default_role: appSettings.default_role,
+        },
+      });
+      toast.success(appSettings.maintenance_mode
+        ? 'Saved — everyone below admin is now locked out'
+        : 'Admin settings saved');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to save settings'); }
     finally { setSavingAdmin(false); }
   };
 
@@ -258,7 +286,6 @@ export default function SettingsPage() {
     try {
       await api.put('/global-settings', {
         org_name: orgSettings.orgName,
-        app_name: '58:12 Connect',
         contact_email: orgSettings.orgEmail,
         contact_phone: orgSettings.orgPhone,
         contact_address: orgSettings.orgAddress,
@@ -557,7 +584,7 @@ export default function SettingsPage() {
                   ))}
                 </div>
               </div>
-              <Button onClick={() => toast.success('Preferences saved!')} className="gap-2"><Save size={15} /> Save Preferences</Button>
+              <Button onClick={handleSaveNotifications} disabled={savingNotifications} className="gap-2" data-testid="save-notifications-btn"><Save size={15} /> {savingNotifications ? 'Saving…' : 'Save Preferences'}</Button>
             </CardContent>
           </Card>
         </TabsContent>
@@ -699,27 +726,37 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between p-3 rounded-lg border border-border">
                   <div>
                     <p className="text-sm font-medium">Open Registration</p>
-                    <p className="text-xs text-muted-foreground">Allow new users to self-register</p>
+                    <p className="text-xs text-muted-foreground">Let people request an account from the sign-in page. Off refuses new requests.</p>
                   </div>
                   <Switch checked={appSettings.registration_open} onCheckedChange={v => setAppSettings({...appSettings, registration_open: v})} data-testid="registration-toggle" />
                 </div>
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border">
-                  <div>
-                    <p className="text-sm font-medium">Maintenance Mode</p>
-                    <p className="text-xs text-muted-foreground">Show maintenance page to non-admin users</p>
+                <div className="p-3 rounded-lg border border-border space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Maintenance Mode</p>
+                      <p className="text-xs text-muted-foreground">Locks everyone below admin out of the whole system, including sign-in. You keep working.</p>
+                    </div>
+                    <Switch checked={appSettings.maintenance_mode} onCheckedChange={v => setAppSettings({...appSettings, maintenance_mode: v})} data-testid="maintenance-toggle" />
                   </div>
-                  <Switch checked={appSettings.maintenance_mode} onCheckedChange={v => setAppSettings({...appSettings, maintenance_mode: v})} data-testid="maintenance-toggle" />
+                  {appSettings.maintenance_mode && (
+                    <Input
+                      value={appSettings.maintenance_message || ''}
+                      onChange={e => setAppSettings({...appSettings, maintenance_message: e.target.value})}
+                      placeholder="Message people see, e.g. Back by 3pm — upgrading the payroll"
+                      data-testid="maintenance-message-input"
+                    />
+                  )}
                 </div>
                 <div className="space-y-2">
-                  <Label>Default User Role</Label>
+                  <Label>Default role for a new account request</Label>
                   <Select value={appSettings.default_role} onValueChange={v => setAppSettings({...appSettings, default_role: v})}>
-                    <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-48" data-testid="default-role-select"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="member">Member</SelectItem>
-                      <SelectItem value="volunteer">Volunteer</SelectItem>
-                      <SelectItem value="staff">Staff</SelectItem>
+                      <SelectItem value="Guest">Guest</SelectItem>
+                      <SelectItem value="Member">Member</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground">Requests always arrive as pending — an admin still has to approve them.</p>
                 </div>
                 <Button onClick={handleSaveAppSettings} disabled={savingAdmin} className="gap-2" data-testid="save-admin-settings-btn">
                   <Save size={15} /> {savingAdmin ? 'Saving...' : 'Save Admin Settings'}

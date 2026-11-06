@@ -11,7 +11,7 @@ are returned so an admin can confirm what's set without exposing the secret. The
 operator must re-enter the full key to change it.
 """
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, File, Request
-from deps import db, require_admin, _audit, logger, authenticate_socket
+from deps import db, require_admin, _audit, logger, authenticate_socket, invalidate_access_settings
 from org_context import set_current_org
 from upload_helper import save_upload
 from copy import deepcopy
@@ -87,6 +87,18 @@ _DEFAULTS = {
         # How early (minutes) an event shows on the kiosk's "checking in for"
         # list. It stays listed until the event's end time.
         "event_window_minutes": 60,
+    },
+    "access": {
+        # iter409 — these three used to live in the per-USER app_settings doc,
+        # so an admin's switch only ever applied to themselves and nothing in
+        # the backend read them. They are organisation-wide and enforced:
+        # registration_open gates /auth/register, maintenance_mode locks
+        # everyone below admin out of the API, default_role is what a new
+        # account request starts as.
+        "registration_open": True,
+        "maintenance_mode": False,
+        "maintenance_message": "",
+        "default_role": "Guest",
     },
     "branding": {
         # App-wide white-labelling. `nav_overrides` is a flat map from route path
@@ -310,6 +322,13 @@ async def public_system_settings(response: Response, request: Request):
             "terms": branding.get("terms") or {},
         },
         "email_provider": (raw.get("email") or {}).get("provider", "resend"),
+        "access": {
+            # So the sign-in page can say "closed for maintenance" / hide the
+            # request-account link instead of failing at the last step.
+            "registration_open": (raw.get("access") or {}).get("registration_open", True),
+            "maintenance_mode": (raw.get("access") or {}).get("maintenance_mode", False),
+            "maintenance_message": (raw.get("access") or {}).get("maintenance_message", ""),
+        },
         "payments": {
             # Non-secret: tells the public shop which checkout buttons to show.
             # iter354 — provider-agnostic: online is live when a non-manual
@@ -371,7 +390,7 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
             data["branding"]["terms"] = {
                 str(k)[:40]: str(v)[:40] for k, v in list(terms.items())[:60] if str(v).strip()
             }
-    for top in ("email", "sentry", "org", "branding", "payments", "security", "kiosk"):
+    for top in ("email", "sentry", "org", "branding", "payments", "security", "kiosk", "access"):
         if top in data and isinstance(data[top], dict):
             current_block = raw.get(top) or {}
             for k, v in data[top].items():
@@ -387,8 +406,9 @@ async def update_system_settings(data: dict, current_user: dict = Depends(requir
     await db.system_settings.update_one({"id": SETTINGS_ID}, {"$set": raw}, upsert=True)
     await _audit(
         current_user["id"], "update", "system_settings", SETTINGS_ID,
-        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding", "payments", "security", "kiosk"})},
+        {"keys_changed": sorted(set(data.keys()) & {"email", "sentry", "org", "branding", "payments", "security", "kiosk", "access"})},
     )
+    invalidate_access_settings()
     return _mask_for_read(raw)
 
 

@@ -1,7 +1,7 @@
 """Auth routes: register, login, me, logout, google-session, password reset"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pin_security import pin_digest, pin_query, pin_matches
-from deps import SECRET_KEY, db, raw_db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit, can_view_pay, is_super_admin, org_for_hostname, org_bypass, set_current_org
+from deps import SECRET_KEY, db, raw_db, get_current_user, hash_password, verify_password, create_token, create_token_with_session, logger, is_system_admin, _audit, enforce_public_rate_limit, can_view_pay, is_super_admin, org_for_hostname, org_bypass, set_current_org, get_access_settings
 from models import UserRegister, UserLogin
 from org_bootstrap import ensure_default_organization
 from datetime import datetime, timezone, timedelta
@@ -65,12 +65,19 @@ async def pin_login(data: dict, request: Request) -> dict:
 
 @router.post("/auth/register")
 async def register(data: UserRegister) -> dict:
+    # iter409 — the Settings switch now actually closes the door.
+    access = await get_access_settings()
+    if not access.get("registration_open", True):
+        raise HTTPException(
+            status_code=403,
+            detail="New account requests are closed right now. Please contact an administrator.",
+        )
     existing = await db.users.find_one({"email": data.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     user_id = str(uuid.uuid4())
     # Allow self-registration as visitor/parent with pending status
-    role = getattr(data, 'role', None) or 'Guest'
+    role = getattr(data, 'role', None) or access.get("default_role") or 'Guest'
     if role not in {'Guest', 'Member', 'visitor', 'parent'}:
         role = 'Guest'  # new signups start as guests, approved by director/manager
     expiry = None
@@ -397,6 +404,17 @@ async def login(data: UserLogin, request: Request) -> dict:
         pending["message"] = "Choose which organisation to enter"
         return pending
     set_current_org(org_id)
+
+    # iter409 — maintenance mode turns everybody below admin away at the door,
+    # with the reason, rather than letting them in to a wall of 503s.
+    maintenance = await get_access_settings(org_id)
+    if maintenance.get("maintenance_mode") and not is_system_admin({**user, "organization_id": org_id}) \
+            and (user.get("role") or "").lower() != "super_admin":
+        raise HTTPException(
+            status_code=503,
+            detail=maintenance.get("maintenance_message")
+            or "The system is down for maintenance. Please try again shortly.",
+        )
 
     # Always default to user's primary campus on login
     user_loc = user.get("location_id") or (user.get("location_ids") or [None])[0]

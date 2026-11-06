@@ -313,8 +313,17 @@ async def get_user_full_profile(user_id: str, current_user: dict = Depends(requi
     # so the edit dialog opened on somebody else's name and campus.
     member = await find_linked_member(user_id, user.get("email"), None, user.get("name"))
     if member:
-        # member data takes precedence for profile fields; user for account fields
-        merged = {**member, **{k: v for k, v in user.items() if k in {"id", "email", "role", "status", "name", "location_id", "location_ids", "department"}}}
+        # iter409 — the merge used to be member-wins for everything except a
+        # handful of keys, so fields that only ever live on the ACCOUNT
+        # (departments, title, extension, badge, notes, flags, photo) opened
+        # blank and the save then wrote those blanks back: "I changed it and it
+        # didn't save". A non-empty account value now wins; the member row only
+        # fills in what the account has nothing for.
+        account = {k: v for k, v in user.items() if v not in (None, "", [], {})}
+        merged = {**member, **account}
+        for k in ("id", "email", "role", "status", "name", "location_id", "location_ids"):
+            if k in user:
+                merged[k] = user[k]
         merged["member_id"] = member.get("id")
         merged.pop("pin", None)
         merged.pop("pin_lookup", None)

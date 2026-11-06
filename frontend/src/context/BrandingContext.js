@@ -114,11 +114,13 @@ function hexToHslTriplet(input) {
 
 export function BrandingProvider({ children }) {
   const [branding, setBranding] = useState(DEFAULTS);
+  const [access, setAccess] = useState({ registration_open: true, maintenance_mode: false, maintenance_message: '' });
 
   const refresh = useCallback(async () => {
     try {
       const r = await api.get('/admin/system-settings/public');
       setBranding({ ...DEFAULTS, ...(r.data?.branding || {}) });
+      if (r.data?.access) setAccess(a => ({ ...a, ...r.data.access }));
     } catch { /* keep defaults if unreachable (offline boot, etc) */ }
   }, []);
 
@@ -235,7 +237,7 @@ export function BrandingProvider({ children }) {
   const term = useCallback((word) => (replacer ? replacer(word) : word), [replacer]);
 
   return (
-    <BrandingContext.Provider value={{ branding, refresh, term }}>
+    <BrandingContext.Provider value={{ branding, access, refresh, term }}>
       {children}
     </BrandingContext.Provider>
   );

@@ -244,7 +244,62 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     set_current_org(org_id)
     user["organization_id"] = org_id
     user["organization_name"] = org.get("name", "")
+    await enforce_maintenance_mode(user)
     return user
+
+
+# ---------------------------------------------------------------------------
+# Organisation-wide access settings (registration / maintenance)
+# ---------------------------------------------------------------------------
+_ACCESS_DEFAULTS = {
+    "registration_open": True,
+    "maintenance_mode": False,
+    "maintenance_message": "",
+    "default_role": "Guest",
+}
+_access_cache: dict = {}        # org_id -> (expires_at_epoch, settings dict)
+_ACCESS_TTL = 15               # seconds — read on every authenticated request
+
+
+def invalidate_access_settings(org_id: str = None) -> None:
+    """Drop the cache so a saved switch takes effect at once."""
+    if org_id:
+        _access_cache.pop(org_id, None)
+    else:
+        _access_cache.clear()
+
+
+async def get_access_settings(org_id: str = None) -> dict:
+    import time
+    key = org_id or get_current_org() or "_none"
+    hit = _access_cache.get(key)
+    now = time.time()
+    if hit and hit[0] > now:
+        return hit[1]
+    try:
+        doc = await db.system_settings.find_one({"id": "default"}, {"_id": 0, "access": 1})
+    except Exception:
+        return dict(_ACCESS_DEFAULTS)
+    settings = {**_ACCESS_DEFAULTS, **((doc or {}).get("access") or {})}
+    _access_cache[key] = (now + _ACCESS_TTL, settings)
+    return settings
+
+
+async def enforce_maintenance_mode(user: dict) -> None:
+    """503 for everyone below admin while maintenance mode is on.
+
+    Applied in get_current_user so it covers every authenticated endpoint at
+    once; sign-in itself refuses earlier, with the same message.
+    """
+    if is_system_admin(user) or (user.get("role") or "").lower() == "super_admin":
+        return
+    access = await get_access_settings(user.get("organization_id"))
+    if access.get("maintenance_mode"):
+        raise HTTPException(
+            status_code=503,
+            detail=access.get("maintenance_message")
+            or "The system is down for maintenance. Please try again shortly.",
+        )
 
 
 async def authenticate_socket(token: str, claimed_user_id: str = None) -> dict:

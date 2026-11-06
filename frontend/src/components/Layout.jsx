@@ -10,7 +10,7 @@ import {
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
   Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders,
   PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock, Phone, PhoneCall, Voicemail, Server,
-  MessageSquare, BookOpen, Workflow, HeartHandshake, Landmark, Banknote, Container, Truck, HandHeart
+  MessageSquare, BookOpen, Workflow, HeartHandshake, Landmark, Banknote, Container, Truck, HandHeart, Wrench
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from './ui/dropdown-menu';
@@ -136,7 +136,7 @@ const notifTypeColor = { error: 'bg-red-500', warning: 'bg-yellow-500', info: 'b
 
 export default function Layout() {
   const { user, logout } = useAuth();
-  const { branding } = useBranding();
+  const { branding, access } = useBranding();
   // Apply admin overrides on top of the base nav config so labels/order/hidden
   // can be customised at runtime (Admin → Branding).
   const overriddenSections = (() => {
@@ -180,7 +180,13 @@ export default function Layout() {
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [dialerOpen, setDialerOpen] = useState(false);
+  // Which nav groups are open. Remembered per person: it used to be replaced
+  // on every navigation, so a group you opened snapped shut the moment you
+  // clicked something in it (iter409) — and anything inside a closed group,
+  // like Social Work, looked missing.
+  const navMemoryKey = user?.id ? `nav-sections-${user.id}` : null;
   const [expandedSections, setExpandedSections] = useState({});
+  const navMemoryLoaded = useRef(false);
   const [campuses, setCampuses] = useState([]);
   const [activeCampus, setActiveCampus] = useState(() => localStorage.getItem('5812_active_campus') || '');
 
@@ -294,26 +300,41 @@ export default function Layout() {
     loadCampuses();
   }, [activeCampus, user?.location_id]);
 
-  // Auto-expand ONLY the section containing the active route, collapse all others
+  // Restore the groups this person had open, once we know who they are.
+  useEffect(() => {
+    if (!navMemoryKey || navMemoryLoaded.current) return;
+    navMemoryLoaded.current = true;
+    try {
+      const raw = localStorage.getItem(navMemoryKey);
+      if (raw) setExpandedSections(prev => ({ ...JSON.parse(raw), ...prev }));
+    } catch { /* ignore corrupt memory */ }
+  }, [navMemoryKey]);
+
+  // Open the group holding the current page, leaving the rest as the person
+  // left them (this used to replace the whole map and close everything else).
   useEffect(() => {
     const path = location.pathname;
-    const newExpanded = {};
-    NAV_SECTIONS.forEach((section, idx) => {
-      if (section.items.some(item => path.startsWith(item.to))) {
-        newExpanded[idx] = true;
-      }
+    setExpandedSections(prev => {
+      const next = { ...prev };
+      let changed = false;
+      NAV_SECTIONS.forEach((section, idx) => {
+        if (section.items.some(item => path.startsWith(item.to)) && next[idx] !== true) {
+          next[idx] = true;
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
     });
-    setExpandedSections(newExpanded);
   }, [location.pathname]);
 
+  // Remember the choice for next time.
+  useEffect(() => {
+    if (!navMemoryKey || !navMemoryLoaded.current) return;
+    try { localStorage.setItem(navMemoryKey, JSON.stringify(expandedSections)); } catch { /* quota */ }
+  }, [navMemoryKey, expandedSections]);
+
   const toggleSection = (idx) => {
-    setExpandedSections(prev => {
-      const next = {};
-      // Collapse all others, toggle this one
-      Object.keys(prev).forEach(k => { if (parseInt(k) !== idx) next[k] = false; });
-      next[idx] = !prev[idx];
-      return next;
-    });
+    setExpandedSections(prev => ({ ...prev, [idx]: !prev[idx] }));
   };
 
   const handleCampusChange = async (val) => {
@@ -543,6 +564,20 @@ export default function Layout() {
             <Building2 size={13} className="text-primary shrink-0" />
             <span className="text-xs font-medium truncate">{user.organization_name}</span>
             <span className="text-[10px] text-muted-foreground ml-auto shrink-0">Switch</span>
+          </Link>
+        )}
+
+        {/* Maintenance notice — only an admin can still be here while it is on */}
+        {access?.maintenance_mode && isAdmin && (
+          <Link
+            to="/settings"
+            className="flex items-start gap-2 px-3 py-2 border-b border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 transition-colors"
+            data-testid="maintenance-banner"
+          >
+            <Wrench size={13} className="shrink-0 mt-0.5" />
+            <span className="text-[11px] leading-snug">
+              Maintenance mode is on — everyone below admin is locked out. Tap to turn it off.
+            </span>
           </Link>
         )}
 

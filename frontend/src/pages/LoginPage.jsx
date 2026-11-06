@@ -15,7 +15,7 @@ import { toast } from 'sonner';
 
 export default function LoginPage() {
   const { login, setUser, enterOrganization } = useAuth();
-  const { branding } = useBranding();
+  const { branding, access } = useBranding();
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -146,6 +146,14 @@ export default function LoginPage() {
           </CardHeader>
 
           <CardContent className="space-y-4">
+            {access?.maintenance_mode && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900" data-testid="login-maintenance-notice">
+                <p className="text-xs leading-snug">
+                  {access.maintenance_message || 'The system is down for maintenance. Please try again shortly.'}
+                  {' '}Administrators can still sign in.
+                </p>
+              </div>
+            )}
             {orgChoices ? (
               <div className="space-y-3" data-testid="org-picker">
                 <p className="text-sm text-muted-foreground">
@@ -261,8 +269,12 @@ export default function LoginPage() {
             </Button>
 
             <p className="text-center text-sm text-muted-foreground mt-2">
-              Need access?{' '}
-              <Link to="/register" className="text-primary hover:underline font-medium">Request account</Link>
+              {access?.registration_open === false ? (
+                <span data-testid="registration-closed-note">New account requests are closed — contact an administrator.</span>
+              ) : (
+                <>Need access?{' '}
+                <Link to="/register" className="text-primary hover:underline font-medium">Request account</Link></>
+              )}
             </p>
 
             <div className="pt-4 border-t border-border space-y-2">

@@ -162,6 +162,10 @@ export default function AdminPage({ mode = 'system' }) {
         underlying_role: p.role || '',    // hidden — used by saveEdit to preserve system_admin
         status: p.status || 'active', department: p.department || '',
         departments: p.departments || [],
+        // iter409 — the Departments picker is bound to department_ids. It was
+        // never hydrated, so it opened empty for everyone and picking one
+        // replaced the real list instead of adding to it.
+        department_ids: p.department_ids || [],
         notes: p.notes || '',
         // Flags — hydrate every toggle rendered in the "Flags" tab so their
         // Switch components reflect the real DB state and a save round-trip
@@ -187,6 +191,7 @@ export default function AdminPage({ mode = 'system' }) {
         role: (user.role === 'admin' || user.role === 'system_admin') ? 'Staff' : (user.role || 'Member'),
         underlying_role: user.role || '',
         status: user.status || 'active', department: user.department || '', notes: user.notes || '',
+        department_ids: user.department_ids || [],
         is_parent: user.is_parent || false, is_customer: user.is_customer || false, is_donor: user.is_donor || false,
         is_guest: user.is_guest || false, is_medical: user.is_medical || false, is_resident: user.is_resident || false,
         has_restricted_access: user.has_restricted_access || false,
