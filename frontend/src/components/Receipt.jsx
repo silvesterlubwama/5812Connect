@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
+import { toast } from 'sonner';
 import { escapeHtml as e } from '../utils/htmlEscape';
+import { printHtmlDocument } from '../utils/printHtml';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 
@@ -51,18 +53,31 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
 
   const handlePrint = () => {
     if (!printRef.current) return;
-    // Build the print HTML manually so we can re-generate the QR via a CDN script
-    // (canvas/SVG inside printRef won't transfer reliably to a new window)
-    const w = window.open('', '_blank', 'width=400,height=700');
+    // Print into a hidden iframe in THIS document. The old version opened a
+    // popup (window.open + document.write) and printed from its load handler,
+    // which gives a blank page whenever the popup is blocked, the app is inside
+    // an iframe, or the browser is Safari/iOS — the "print shows nothing" bug.
     const headerHtml = printRef.current.querySelector('.receipt-content')?.innerHTML || '';
-    w.document.write(`
+    // Reuse the QR already drawn on screen instead of re-fetching a CDN script
+    // (no network, no race with window.print).
+    let qrImg = '';
+    try {
+      // The on-screen QR has the logo drawn into it from another domain, which
+      // taints the canvas and makes toDataURL throw — hence the missing QR on
+      // print. Copy the plain one rendered off-screen instead.
+      const canvas = printRef.current.querySelector('.qr-clean canvas') || printRef.current.querySelector('.qr canvas');
+      const dataUrl = canvas?.toDataURL('image/png');
+      if (dataUrl) qrImg = `<div class="qr-print"><img src="${dataUrl}" width="120" height="120" alt="" /><div style="font-size:8px;margin-top:2px;color:#555">Scan to verify</div></div>`;
+    } catch (err) { console.warn('[receipt] QR copy failed', err); }
+
+    const html = `<!doctype html>
       <html>
         <head>
+          <meta charset="utf-8" />
           <title>Receipt ${e(receiptNumber)}</title>
-          <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
           <style>
             @page { size: ${paperWidth} auto; margin: 4mm; }
-            body { margin: 0; padding: 2mm; font-family: monospace, 'Courier New', Courier; font-size: 11px; width: ${paperWidth}; box-sizing: border-box; }
+            body { margin: 0; padding: 2mm; font-family: monospace, 'Courier New', Courier; font-size: 11px; width: ${paperWidth}; box-sizing: border-box; color: #000; background: #fff; }
             .center { text-align: center; }
             .bold { font-weight: 700; }
             hr { border: none; border-top: 1px dashed #888; margin: 4px 0; }
@@ -70,29 +85,34 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
             td { padding: 2px 0; font-size: 10px; }
             .logo { max-width: 60%; height: auto; margin: 0 auto 4px; display: block; }
             .qr-print { margin: 6px auto; text-align: center; }
-            #qrCanvas { display: block; margin: 0 auto; }
             .total-row { font-size: 13px; font-weight: 700; }
           </style>
         </head>
         <body>
           ${headerHtml}
-          ${showQR ? `<div class="qr-print"><canvas id="qrCanvas"></canvas><div style="font-size:8px;margin-top:2px;color:#555">Scan to verify</div></div>` : ''}
+          ${qrImg}
           <hr/>
           <div class="center" style="font-size: 9px">${e(storeSettings.receipt_footer || 'Thank you for your purchase!')}</div>
           <div class="center" style="font-size: 8px; color: #888; margin-top: 4px">${e(receiptNumber)} · 58:12 Global</div>
-          <script>
-            window.addEventListener('load', () => {
-              if (window.QRCode && document.getElementById('qrCanvas')) {
-                QRCode.toCanvas(document.getElementById('qrCanvas'), ${JSON.stringify(trackingUrl)}, { width: 120, margin: 1 }, function(err){ if(!err) setTimeout(()=>{window.focus(); window.print();}, 200); else setTimeout(()=>{window.focus(); window.print();}, 100); });
-              } else {
-                setTimeout(() => { window.focus(); window.print(); }, 200);
-              }
-            });
-          </script>
         </body>
-      </html>
-    `);
-    w.document.close();
+      </html>`;
+
+    const frame = printHtmlDocument(html, { autoPrint: false });
+    // Fire only once the logo has actually arrived, or the page prints empty.
+    const start = Date.now();
+    const tryPrint = () => {
+      const doc = frame.contentWindow?.document;
+      const pending = doc ? [...doc.images].some(img => !img.complete) : false;
+      if (pending && Date.now() - start < 4000) return setTimeout(tryPrint, 150);
+      try {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+      } catch (err) {
+        console.warn('[receipt] print failed', err);
+        toast.error('Could not open the print dialog — check your browser settings');
+      }
+    };
+    setTimeout(tryPrint, 150);
   };
 
   return (
@@ -201,6 +221,13 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           <div className="qr" style={{ margin: '6px auto', textAlign: 'center' }}>
             <QRCodeLogo value={trackingUrl} size={120} logoImage={LOGO_URL} logoWidth={22} ecLevel="M" quietZone={4} />
             <div style={{ fontSize: 8, marginTop: 2, color: '#555' }}>Scan to verify</div>
+          </div>
+        )}
+        {/* Logo-free twin, off-screen: the printable copy. A canvas with a
+            cross-origin logo painted on it cannot be exported. */}
+        {showQR && receiptNumber && (
+          <div className="qr-clean" aria-hidden="true" style={{ position: 'absolute', left: -9999, top: 0, width: 0, height: 0, overflow: 'hidden' }}>
+            <QRCodeLogo value={trackingUrl} size={120} ecLevel="M" quietZone={4} />
           </div>
         )}
         <hr />

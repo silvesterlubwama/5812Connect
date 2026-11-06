@@ -2998,3 +2998,69 @@ testing agent iteration_267 passed 8/8 UI checks (tab visible to admins only,
 search and filters, admin grant keeps the job role across a reload, revoke
 restores it, Manager sees no tab, other People tabs unaffected, no 390px
 overflow).
+
+## iter409 — 2026-11-06 — Settings that save, switches that do something, nav that remembers
+
+**"Changes in a user's profile don't save" — root cause.** `GET /admin/users/{id}/profile`
+merged the member row over the account row, keeping only a handful of keys from
+the account. Every field that lives ONLY on the account — departments, title,
+extension, badge id, notes, the parent/guest flags, photo — therefore opened
+BLANK in the profile editor, and saving wrote those blanks back over real data.
+The merge now prefers any non-empty account value and uses the member row only
+to fill gaps (gender, date of birth, etc.); identity keys always come from the
+account. `AdminPage.openEdit` also never hydrated `department_ids`, which the
+Departments picker is bound to — so it opened empty and picking a department
+REPLACED the existing list instead of adding to it.
+
+**Notification preferences.** The Save button on Settings → Notifications only
+raised a toast; the five switches were component state and reset on reload. They
+now load from and save to the per-user `/api/app-settings` document.
+
+**Registration / maintenance / default role now real.** They used to be written
+into the per-USER app_settings doc and nothing in the backend ever read them.
+Moved to organisation-wide `system_settings.access` (`routers/system_settings.py`
+`_DEFAULTS`, exposed on `/public` too) and enforced:
+- `registration_open: false` → `/auth/register` returns 403 with a clear reason;
+  the sign-in page swaps the "Request account" link for a note.
+- `maintenance_mode: true` → `enforce_maintenance_mode()` in `get_current_user`
+  503s every authenticated request from anyone below admin, and `/auth/login`
+  refuses them at the door with the custom message. Admins keep working and get a
+  banner in the sidebar linking to Settings. Cached 15s per org
+  (`get_access_settings`), invalidated on save.
+- `default_role` is what a new account request starts as (still pending).
+- Settings → Organisation no longer force-writes `app_name: '58:12 Connect'`,
+  which reset a branded app name on every save.
+
+**Nav groups remember themselves.** The expanded-sections map was REPLACED on
+every navigation, so a group you opened snapped shut the moment you clicked
+something in it — which is why Social Work "wasn't there" for a Coordinator who
+does have access (it lives inside the collapsed Operations group). Now: the group
+holding the current page opens, the rest stay as the person left them, and the
+whole map is remembered per user in localStorage. The campus switcher also showed
+an empty box when no campus was pinned (`value='__all__'` with no such item) —
+it shows "Choose campus" now.
+
+Verified: tests/test_iter409_settings_and_access.py (8) + UI: preference survives
+a reload, department add keeps the existing one, member refused at sign-in with
+the reason while the admin gets in and sees the banner, registration-closed note,
+Social Work page loads, group collapse survives a reload. All switches restored
+to open/off afterwards.
+
+## iter410 — 2026-11-06 — Receipt printing came out blank
+
+`Receipt.jsx` and `InvoicePrintable.jsx` printed by opening a popup
+(`window.open('', '_blank')` + `document.write`) and calling `print()` from its
+load handler. That yields nothing at all when the popup is blocked, when the app
+runs inside an iframe, or on Safari/iOS — and `window.open` returning null threw
+before anything was written. Both now render into a hidden iframe via the
+existing `utils/printHtml.js` helper and print only once the images have actually
+loaded (up to 4s), so the logo can't be missing from the sheet.
+
+The receipt QR was also absent from every printed copy: the on-screen QR has the
+58:12 logo painted into it from another domain, which taints the canvas and makes
+`toDataURL()` throw. A logo-free twin is now rendered off-screen and that one is
+embedded as a data URL — no CDN script, no race with `print()`.
+
+Verified in-browser on a reprinted sale and a draft invoice: no popup opens, and
+the print document contains the full receipt (logo, lines, total, QR, footer) and
+the full A4 invoice.

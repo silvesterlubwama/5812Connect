@@ -584,11 +584,13 @@ export default function Layout() {
         {/* Campus Switcher */}
         {canSwitchCampus && campuses.length > 0 && (
           <div className="px-3 py-2 border-b border-border">
-            <Select value={activeCampus || '__all__'} onValueChange={handleCampusChange}>
+            {/* undefined, not '__all__': there is no such item, and Radix then
+                renders an empty box instead of the placeholder. */}
+            <Select value={activeCampus || undefined} onValueChange={handleCampusChange}>
               <SelectTrigger className="h-8 text-xs" data-testid="campus-switcher">
                 <div className="flex items-center gap-1.5">
                   <MapPin size={12} className="text-muted-foreground shrink-0" />
-                  <SelectValue placeholder="My Campus" />
+                  <SelectValue placeholder="Choose campus" />
                 </div>
               </SelectTrigger>
               <SelectContent>

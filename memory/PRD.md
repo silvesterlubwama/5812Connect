@@ -2447,3 +2447,17 @@ Re-running a move is therefore safe and repeatable.
   accounts, passwords and deletions remain in the System Console.
 - Admins who belong to no particular campus (including your own account) are no
   longer hidden from the staff list when a campus is pinned.
+
+### 2026-11-06 — Settings, access switches, menus and receipt printing
+- Editing someone's profile keeps their details: departments, title, extension,
+  badge, notes and flags no longer open blank and get wiped on save, and adding a
+  department adds to the list instead of replacing it.
+- Notification preferences actually save.
+- Registration open / maintenance mode / default role are organisation-wide and
+  real: closing registration refuses new requests, maintenance mode locks
+  everyone below admin out (with your own message) while admins keep working and
+  see a banner.
+- Menu groups remember what each person had open, so nothing stays hidden behind
+  a closed group — the reason a Coordinator could not find Social Work.
+- Receipts and invoices print again: they no longer depend on a popup window, and
+  the receipt QR is included in the printed copy.

@@ -150,8 +150,8 @@ export default function LoginPage() {
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900" data-testid="login-maintenance-notice">
                 <p className="text-xs leading-snug">
                   {access.maintenance_message || 'The system is down for maintenance. Please try again shortly.'}
-                  {' '}Administrators can still sign in.
                 </p>
+                <p className="text-[11px] opacity-80 mt-1">Administrators can still sign in.</p>
               </div>
             )}
             {orgChoices ? (

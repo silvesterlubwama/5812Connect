@@ -251,6 +251,9 @@ def _mask_for_read(doc: dict) -> dict:
     out["org"] = doc.get("org") or {}
     out["security"] = {"cors_origins": ((doc.get("security") or {}).get("cors_origins") or [])}
     out["branding"] = doc.get("branding") or {}
+    # iter409 (testing agent) — the Admin tab reads these; without them the UI
+    # showed defaults and every save overwrote the stored values with defaults.
+    out["access"] = {**_DEFAULTS.get("access", {}), **(doc.get("access") or {})}
     p = doc.get("payments", {}) or {}
     out["payments"] = {
         "provider": p.get("provider", "flutterwave"),

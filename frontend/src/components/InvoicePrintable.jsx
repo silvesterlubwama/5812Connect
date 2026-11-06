@@ -1,4 +1,6 @@
 import React, { useRef } from 'react';
+import { toast } from 'sonner';
+import { printHtmlDocument } from '../utils/printHtml';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 
@@ -28,10 +30,10 @@ export default function InvoicePrintable({ invoice, mode = 'a4', orgName = '58:1
     const area = printRef.current?.innerHTML;
     if (!area) return;
     const isThermal = mode === 'thermal';
-    const w = window.open('', '_blank', `width=${isThermal ? 400 : 900},height=900`);
-    w.document.write(`
+    const html = `<!doctype html>
       <html>
         <head>
+          <meta charset="utf-8" />
           <title>Invoice ${invoice.invoice_number}</title>
           <style>
             @page { size: ${isThermal ? '80mm auto' : 'A4'}; margin: ${isThermal ? '4mm' : '15mm'}; }
@@ -57,11 +59,26 @@ export default function InvoicePrintable({ invoice, mode = 'a4', orgName = '58:1
             .savings-banner .amount { font-size: 18px; font-weight: 800; color: #78350f; margin: 2px 0; }
           </style>
         </head>
-        <body>${area}</body>
+        <body><div class="invoice-body">${area}</div></body>
       </html>
-    `);
-    w.document.close();
-    setTimeout(() => { w.focus(); w.print(); }, 400);
+    `;
+    // Hidden iframe, not a popup: a blocked popup (or Safari/iOS, or the app
+    // running inside an iframe) is why "print shows nothing" (iter410).
+    const frame = printHtmlDocument(html, { autoPrint: false });
+    const start = Date.now();
+    const tryPrint = () => {
+      const doc = frame.contentWindow?.document;
+      const pending = doc ? [...doc.images].some(img => !img.complete) : false;
+      if (pending && Date.now() - start < 4000) return setTimeout(tryPrint, 150);
+      try {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+      } catch (err) {
+        console.warn('[invoice] print failed', err);
+        toast.error('Could not open the print dialog — check your browser settings');
+      }
+    };
+    setTimeout(tryPrint, 150);
   };
 
   return (
