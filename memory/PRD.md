@@ -2475,3 +2475,11 @@ Re-running a move is therefore safe and repeatable.
   are corrected and any booking it sold is released.
 - The floating softphone can be dismissed per screen with its ×, and brought
   back from the phone button's dialer.
+
+### 2026-11-07 — Refund slips and end-of-day takings
+- Voiding a sale prints a REFUND slip for the customer, showing the original
+  receipt, the items returned and the amount refunded. Admins can void an older
+  sale from Sales History, not just inside the 60-second window.
+- A Z-Report button shows and prints the day's takings for that till: sales,
+  items, gross and net, a split by payment method and cashier, voids, and the
+  cash drawer's expected-versus-counted with the over/short.

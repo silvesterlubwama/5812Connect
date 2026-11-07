@@ -14,6 +14,7 @@
  * keeps using the dialog.
  */
 import api from '../services/api';
+import { printHtmlDocument } from './printHtml';
 import { pairDeviceForRole, getDeviceForRole } from './deviceRoles';
 
 const CONFIG_KEY = '5812:till-printer';
@@ -331,6 +332,155 @@ export async function printSaleReceipt(sale, storeSettings = {}, extra = {}) {
 /** ESC/POS drawer pulse down the same cable as the receipt. */
 export async function openDrawer() {
   return sendBytes(bytes(DRAWER_KICK));
+}
+
+/**
+ * Refund / void slip — the customer's paper trail for money given back
+ * (iter414). Deliberately says REFUND in big letters and carries the original
+ * receipt number so it can never be mistaken for a sale.
+ */
+export function buildRefundBytes(sale, opts = {}) {
+  const {
+    storeName = '58:12 Global Connect', currency = 'UGX', columns = 48,
+    voidedBy = '', reason = '', showQr = true, trackingUrl = '',
+  } = opts;
+  const items = sale.items || sale.line_items || [];
+  const parts = [bytes(
+    INIT, ALIGN_CENTER, BOLD_ON, DOUBLE_ON, 'REFUND\n', DOUBLE_OFF,
+    `${storeName}\n`, BOLD_OFF,
+  )];
+  const push = (...p) => parts.push(bytes(...p));
+
+  push(ALIGN_LEFT, '='.repeat(columns) + '\n');
+  if (sale.receipt_number) push(row('Original receipt', sale.receipt_number, columns));
+  if (sale.created_at) push(row('Sold on', String(sale.created_at).slice(0, 16).replace('T', ' '), columns));
+  push(row('Refunded', new Date().toISOString().slice(0, 16).replace('T', ' '), columns));
+  if (voidedBy) push(row('Authorised by', String(voidedBy).slice(0, 22), columns));
+  if (sale.customer_name) push(row('Customer', String(sale.customer_name).slice(0, 22), columns));
+  push('='.repeat(columns) + '\n', 'ITEMS RETURNED\n');
+
+  items.forEach(it => {
+    const qty = it.qty ?? it.quantity ?? 1;
+    const line = it.line_total ?? (Number(it.price || 0) * qty);
+    push(`${String(it.product_name || it.name || 'Item').slice(0, columns)}\n`);
+    push(row(`  ${qty} x ${Number(it.price || 0).toLocaleString()}`, Number(line).toLocaleString(), columns));
+  });
+
+  push('-'.repeat(columns) + '\n');
+  push(BOLD_ON, DOUBLE_ON, row('REFUNDED', money(sale.total, currency), Math.floor(columns / 2)), DOUBLE_OFF, BOLD_OFF);
+  if (sale.payment_method) push(row('Paid originally by', String(sale.payment_method).toUpperCase(), columns));
+  if (reason) push(`\nReason: ${reason}\n`);
+  push('\n', ALIGN_CENTER);
+  if (showQr && trackingUrl) { parts.push(qrBytes(trackingUrl)); push('Scan to verify\n'); }
+  push('Stock returned. No further payment is due.\n', '\n\n\n', CUT);
+  return bytes(...parts);
+}
+
+/** End-of-day takings slip for one till. */
+export function buildZReportBytes(report, opts = {}) {
+  const { storeName = '58:12 Global Connect', currency = 'UGX', columns = 48 } = opts;
+  const parts = [bytes(
+    INIT, ALIGN_CENTER, BOLD_ON, DOUBLE_ON, 'Z-REPORT\n', DOUBLE_OFF,
+    `${storeName}\n`, BOLD_OFF,
+  )];
+  const push = (...p) => parts.push(bytes(...p));
+  push(`${report.store_name || ''}\n`, ALIGN_LEFT, '='.repeat(columns) + '\n');
+  push(row('Date', report.date, columns));
+  push(row('Printed', new Date().toLocaleString(), columns));
+  if (report.generated_by) push(row('By', String(report.generated_by).slice(0, 22), columns));
+  push('='.repeat(columns) + '\n');
+  push(row('Sales', String(report.sales_count), columns));
+  push(row('Items sold', String(report.items_sold), columns));
+  push(row('Gross takings', money(report.gross, currency), columns));
+  if (report.discounts) push(row('Discounts', `-${money(report.discounts, currency)}`, columns));
+  if (report.tax) push(row('Tax', money(report.tax, currency), columns));
+  push(BOLD_ON, row('NET TAKINGS', money(report.net, currency), columns), BOLD_OFF);
+  push(row('Average sale', money(report.average_sale, currency), columns));
+  push('-'.repeat(columns) + '\n', 'BY PAYMENT METHOD\n');
+  (report.by_method || []).forEach(m => push(row(`  ${m.method} (${m.count})`, money(m.total, currency), columns)));
+  if ((report.by_cashier || []).length) {
+    push('-'.repeat(columns) + '\n', 'BY CASHIER\n');
+    report.by_cashier.forEach(c => push(row(`  ${String(c.cashier).slice(0, 20)} (${c.count})`, money(c.total, currency), columns)));
+  }
+  if (report.voided_count) {
+    push('-'.repeat(columns) + '\n');
+    push(row(`Voided / refunded (${report.voided_count})`, money(report.voided_total, currency), columns));
+  }
+  const d = report.drawer || {};
+  if (d.shifts) {
+    push('-'.repeat(columns) + '\n', 'CASH DRAWER\n');
+    push(row('  Opening float', money(d.opening_cash, currency), columns));
+    push(row('  Cash drops', money(d.cash_drops, currency), columns));
+    push(row('  Expected', money(d.expected_cash, currency), columns));
+    push(row('  Counted', money(d.counted_cash, currency), columns));
+    push(BOLD_ON, row('  Over / short', money(d.variance, currency), columns), BOLD_OFF);
+  }
+  push('-'.repeat(columns) + '\n');
+  if (report.first_receipt) push(row('First receipt', report.first_receipt, columns));
+  if (report.last_receipt) push(row('Last receipt', report.last_receipt, columns));
+  push('\n', ALIGN_CENTER, 'End of day\n', '\n\n\n', CUT);
+  return bytes(...parts);
+}
+
+export async function printRefundSlip(sale, storeSettings = {}, extra = {}) {
+  const cfg = getTillConfig();
+  if (cfg.connection === 'none') return { printed: false, transport: 'none', reason: 'No till printer set up' };
+  return sendBytes(buildRefundBytes(sale, {
+    storeName: storeSettings.store_name || '58:12 Global Connect',
+    currency: storeSettings.currency || 'UGX',
+    columns: columnsFor(cfg.paper),
+    showQr: storeSettings.receipt_show_qr !== false,
+    trackingUrl: extra.trackingUrl || (sale.receipt_number ? `${window.location.origin}/receipt/${sale.receipt_number}` : ''),
+    voidedBy: extra.voidedBy || '',
+    reason: extra.reason || '',
+  }));
+}
+
+export async function printZReport(report, storeSettings = {}) {
+  const cfg = getTillConfig();
+  if (cfg.connection === 'none') return { printed: false, transport: 'none', reason: 'No till printer set up' };
+  return sendBytes(buildZReportBytes(report, {
+    storeName: storeSettings.store_name || '58:12 Global Connect',
+    currency: storeSettings.currency || 'UGX',
+    columns: columnsFor(cfg.paper),
+  }));
+}
+
+/**
+ * No thermal printer on this device (or it refused): put the same slip through
+ * the browser's print dialog so the customer still gets paper.
+ */
+export function printSlipFallback(title, textLines) {
+  const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  printHtmlDocument(`<!doctype html><html><head><meta charset="utf-8"/><title>${esc(title)}</title>
+    <style>
+      @page { size: 80mm auto; margin: 4mm; }
+      body { font-family: monospace, 'Courier New', Courier; font-size: 11px; width: 80mm; margin: 0; padding: 2mm; color: #000; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+    </style></head>
+    <body><pre>${esc(textLines.join('\n'))}</pre></body></html>`);
+}
+
+/** The same two slips as plain text, for the fallback above. */
+export function refundSlipText(sale, opts = {}) {
+  return _decode(buildRefundBytes(sale, { ...opts, showQr: false }));
+}
+export function zReportText(report, opts = {}) {
+  return _decode(buildZReportBytes(report, opts));
+}
+
+/** Strip the ESC/POS control bytes back out so the text can be shown or printed. */
+function _decode(payload) {
+  const text = new TextDecoder().decode(payload);
+  /* eslint-disable no-control-regex */
+  return text
+    .replace(/\x1b@/g, '')
+    .replace(/\x1b[aE!][\s\S]/g, '')     // ESC a n / ESC E n / ESC ! n
+    .replace(/\x1d[!V][\s\S]/g, '')      // GS ! n / GS V n
+    .replace(/\x1bp[\s\S]{3}/g, '')      // drawer kick
+    .replace(/[\x00-\x09\x0b-\x1f]/g, '')
+    .split('\n');
+  /* eslint-enable no-control-regex */
 }
 
 export async function testPrint() {

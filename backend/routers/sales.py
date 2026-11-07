@@ -676,6 +676,94 @@ async def undo_sale(sale_id: str, current_user: dict = Depends(get_current_user)
 
 # ========== DRAFT / PARKED SALES ==========
 
+@router.get("/sales/z-report")
+async def z_report(
+    date: Optional[str] = None,
+    location_id: Optional[str] = None,
+    cashier_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """End-of-day takings for one till (iter414).
+
+    Everything rung up at this till on this date: what was sold, what came in by
+    each payment method, what was voided, and — if shifts were used — the cash
+    that should be in the drawer against what was counted.
+    """
+    day = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    loc = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    window = {"$gte": f"{day}T00:00:00", "$lte": f"{day}T23:59:59.999999"}
+    query: dict = {"created_at": window}
+    if loc:
+        query["location_id"] = loc
+    if cashier_id:
+        query["cashier_id"] = cashier_id
+
+    sales = await db.sales.find(query, {"_id": 0}).sort("created_at", 1).to_list(5000)
+    live = [s for s in sales if not s.get("voided")]
+    voided = [s for s in sales if s.get("voided")]
+
+    by_method: dict = {}
+    by_cashier: dict = {}
+    items_sold = 0
+    gross = discounts = tax = 0.0
+    for s in live:
+        total = float(s.get("total") or 0)
+        gross += total
+        discounts += float(s.get("discount") or 0)
+        tax += float(s.get("tax") or 0)
+        items_sold += sum(int(i.get("qty") or 0) for i in (s.get("items") or []))
+        method = (s.get("payment_method") or "unknown").lower()
+        m = by_method.setdefault(method, {"method": method, "count": 0, "total": 0.0})
+        m["count"] += 1
+        m["total"] += total
+        name = s.get("cashier_name") or s.get("created_by_name") or "Unknown"
+        c = by_cashier.setdefault(name, {"cashier": name, "count": 0, "total": 0.0})
+        c["count"] += 1
+        c["total"] += total
+
+    receipts = [s.get("receipt_number") for s in sales if s.get("receipt_number")]
+    shift_query = {"opened_at": window, "status": "closed"}
+    if loc:
+        shift_query["location_id"] = loc
+    if cashier_id:
+        shift_query["cashier_id"] = cashier_id
+    shifts = await db.shifts.find(shift_query, {"_id": 0}).to_list(100)
+    drawer = {
+        "shifts": len(shifts),
+        "opening_cash": sum(float(s.get("opening_cash") or 0) for s in shifts),
+        "cash_drops": sum(float(s.get("cash_drops_total") or 0) for s in shifts),
+        "expected_cash": sum(float(s.get("expected_cash") or 0) for s in shifts),
+        "counted_cash": sum(float(s.get("closing_cash") or 0) for s in shifts),
+        "variance": sum(float(s.get("variance") or 0) for s in shifts),
+    }
+
+    store = None
+    if loc:
+        store = await db.locations.find_one({"id": loc}, {"_id": 0, "name": 1})
+
+    return {
+        "date": day,
+        "location_id": loc,
+        "store_name": (store or {}).get("name", ""),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_by": current_user.get("name") or current_user.get("email", ""),
+        "sales_count": len(live),
+        "items_sold": items_sold,
+        "gross": round(gross, 2),
+        "discounts": round(discounts, 2),
+        "tax": round(tax, 2),
+        "net": round(gross - discounts, 2),
+        "average_sale": round(gross / len(live), 2) if live else 0,
+        "voided_count": len(voided),
+        "voided_total": round(sum(float(s.get("total") or 0) for s in voided), 2),
+        "by_method": sorted(by_method.values(), key=lambda m: -m["total"]),
+        "by_cashier": sorted(by_cashier.values(), key=lambda c: -c["total"]),
+        "first_receipt": receipts[0] if receipts else "",
+        "last_receipt": receipts[-1] if receipts else "",
+        "drawer": drawer,
+    }
+
+
 @router.get("/sales/drafts")
 async def list_draft_sales(current_user: dict = Depends(get_current_user)):
     """List parked/draft sales for the current kiosk/location (shared with all staff at this campus)."""

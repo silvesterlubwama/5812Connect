@@ -28,7 +28,7 @@ import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import { CrossCampusMoveDialog } from '../components/CrossCampusMoveDialog';
-import { ArrowRightLeft, Store } from 'lucide-react';
+import { ArrowRightLeft, Store, FileText } from 'lucide-react';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
 import { authApi, cashDropsApi, shiftsApi } from '../services/api';
@@ -36,7 +36,7 @@ import ChangeCalculator from '../components/ChangeCalculator';
 import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
 import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer, describePeripheralSupport } from '../utils/posPeripherals';
 import TillPrinterDialog from '../components/pos/TillPrinterDialog';
-import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer } from '../utils/tillPrinter';
+import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText } from '../utils/tillPrinter';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
@@ -489,6 +489,45 @@ export default function ProductsPage() {
   const [showTillPrinter, setShowTillPrinter] = useState(false);
   const [tillPrinterReady, setTillPrinterReady] = useState(false);
   useEffect(() => { isTillReady().then(setTillPrinterReady); }, []);
+  const [zReport, setZReport] = useState(null);
+  const [zLoading, setZLoading] = useState(false);
+
+  // The customer's paper trail for money given back (iter414). Straight to the
+  // thermal roll when the till has one, otherwise the print dialog.
+  const printRefundFor = async (sale) => {
+    const settings = lastStoreSettings || storeSettings || {};
+    const extra = { voidedBy: user?.name || '', reason: 'Voided at the till' };
+    const res = await printRefundSlip(sale, settings, extra);
+    if (res.printed) { toast.success('Sale voided — refund slip printed, stock restored'); return; }
+    toast.success('Sale voided — stock restored');
+    printSlipFallback(`Refund ${sale.receipt_number || ''}`, refundSlipText(sale, {
+      storeName: settings.store_name || '58:12 Global Connect',
+      currency: settings.currency || 'UGX',
+      columns: 48, ...extra,
+    }));
+  };
+
+  const openZReport = async () => {
+    setZLoading(true);
+    try {
+      const r = await salesApi.zReport({ location_id: saleLocationId || undefined });
+      setZReport(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not build the Z-report');
+    } finally { setZLoading(false); }
+  };
+
+  const printZ = async () => {
+    if (!zReport) return;
+    const settings = storeSettings || {};
+    const res = await printZReport(zReport, settings);
+    if (res.printed) { toast.success('Z-report printed'); return; }
+    printSlipFallback(`Z-Report ${zReport.date}`, zReportText(zReport, {
+      storeName: settings.store_name || '58:12 Global Connect',
+      currency: settings.currency || 'UGX',
+      columns: 48,
+    }));
+  };
   // Cash drop dialog
   const [cashDropOpen, setCashDropOpen] = useState(false);
   const [cashDropForm, setCashDropForm] = useState({ amount: '', destination: 'safe', destination_account_id: '', notes: '' });
@@ -822,6 +861,15 @@ export default function ProductsPage() {
               {drawerConnected ? 'Drawer Connected' : 'Connect Drawer'}
             </Button>
           )}
+          {/* End-of-day takings for this till */}
+          <Button
+            variant="outline" size="sm" className="h-8 text-xs gap-1"
+            onClick={openZReport} disabled={zLoading}
+            data-testid="z-report-btn"
+            title="End-of-day takings for this till"
+          >
+            <FileText size={12} /> {zLoading ? 'Building…' : 'Z-Report'}
+          </Button>
           {/* Till printer — straight to the roll, no browser dialog */}
           <Button
             variant="outline" size="sm"
@@ -1231,6 +1279,18 @@ export default function ProductsPage() {
                                 } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
                               }}>↺</Button>
                             )}
+                            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs gap-1 text-amber-600" data-testid={`void-sale-${sale.id}`} title="Void and print a refund slip" disabled={sale.voided} onClick={async () => {
+                              if (sale.voided) return;
+                              if (!await confirm({ title: 'Void this sale?', message: 'The items go back into stock, the takings come out of the books, and a refund slip prints for the customer.', destructive: true, confirmLabel: 'Void & refund' })) return;
+                              try {
+                                await salesApi.undo(sale.id);
+                                setSales(prev => prev.map(s => s.id === sale.id ? { ...s, voided: true } : s));
+                                await printRefundFor(sale);
+                                fetchAll();
+                              } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
+                            }}>
+                              ↶
+                            </Button>
                             <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!await confirm({ title: 'Delete sale?', message: 'The items go back into stock, the takings come out of the books, and any booking it sold is released. The receipt cannot be brought back.', destructive: true, confirmLabel: 'Delete' })) return; try { const r = await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success(r.data?.message || 'Sale deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button>
                           </td>}
                         </tr>);
@@ -1505,6 +1565,49 @@ export default function ProductsPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Z-Report — what this till took today */}
+      <Dialog open={!!zReport} onOpenChange={(v) => { if (!v) setZReport(null); }}>
+        <DialogContent className="max-w-md" data-testid="z-report-dialog">
+          <DialogHeader>
+            <DialogTitle className="text-base">Z-Report — {zReport?.date}</DialogTitle>
+          </DialogHeader>
+          {zReport && (
+            <div className="text-sm space-y-1.5 font-mono">
+              {zReport.store_name && <p className="text-xs text-muted-foreground font-sans">{zReport.store_name}</p>}
+              <div className="flex justify-between"><span>Sales</span><span data-testid="z-sales-count">{zReport.sales_count}</span></div>
+              <div className="flex justify-between"><span>Items sold</span><span>{zReport.items_sold}</span></div>
+              <div className="flex justify-between"><span>Gross takings</span><span>{fmt(zReport.gross, storeSettings?.currency)}</span></div>
+              {!!zReport.discounts && <div className="flex justify-between text-muted-foreground"><span>Discounts</span><span>-{fmt(zReport.discounts, storeSettings?.currency)}</span></div>}
+              {!!zReport.tax && <div className="flex justify-between text-muted-foreground"><span>Tax</span><span>{fmt(zReport.tax, storeSettings?.currency)}</span></div>}
+              <div className="flex justify-between font-bold border-t border-border pt-1.5"><span>Net takings</span><span data-testid="z-net">{fmt(zReport.net, storeSettings?.currency)}</span></div>
+              <div className="pt-2 border-t border-border">
+                <p className="text-[11px] uppercase text-muted-foreground font-sans mb-1">By payment method</p>
+                {(zReport.by_method || []).length === 0 && <p className="text-xs text-muted-foreground">Nothing rung up yet today</p>}
+                {(zReport.by_method || []).map(m => (
+                  <div key={m.method} className="flex justify-between text-xs"><span>{m.method} ({m.count})</span><span>{fmt(m.total, storeSettings?.currency)}</span></div>
+                ))}
+              </div>
+              {!!zReport.voided_count && (
+                <div className="flex justify-between text-xs text-amber-700 pt-1.5 border-t border-border">
+                  <span>Voided / refunded ({zReport.voided_count})</span><span>{fmt(zReport.voided_total, storeSettings?.currency)}</span>
+                </div>
+              )}
+              {!!zReport.drawer?.shifts && (
+                <div className="pt-2 border-t border-border">
+                  <p className="text-[11px] uppercase text-muted-foreground font-sans mb-1">Cash drawer</p>
+                  <div className="flex justify-between text-xs"><span>Expected</span><span>{fmt(zReport.drawer.expected_cash, storeSettings?.currency)}</span></div>
+                  <div className="flex justify-between text-xs"><span>Counted</span><span>{fmt(zReport.drawer.counted_cash, storeSettings?.currency)}</span></div>
+                  <div className={`flex justify-between text-xs font-bold ${zReport.drawer.variance < 0 ? 'text-destructive' : ''}`}><span>Over / short</span><span>{fmt(zReport.drawer.variance, storeSettings?.currency)}</span></div>
+                </div>
+              )}
+              <Button onClick={printZ} className="w-full mt-3 gap-2" data-testid="z-report-print-btn">
+                <Printer size={14} /> {tillPrinterReady ? 'Print on the till printer' : 'Print'}
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Receipt Modal */}
       <TillPrinterDialog open={showTillPrinter} onOpenChange={(v) => { setShowTillPrinter(v); if (!v) isTillReady().then(setTillPrinterReady); }} />
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
@@ -1522,7 +1625,7 @@ export default function ProductsPage() {
                   await salesApi.undo(lastReceipt.id);
                   setLastReceipt({ ...lastReceipt, voided: true });
                   setSales(prev => prev.map(s => s.id === lastReceipt.id ? { ...s, voided: true } : s));
-                  toast.success('Sale voided — stock restored');
+                  await printRefundFor(lastReceipt);
                   setShowReceipt(false);
                   fetchAll();
                 } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }

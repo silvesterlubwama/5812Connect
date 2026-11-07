@@ -372,6 +372,8 @@ export const salesApi = {
   setPaymentStatus: (id, payment_status, payment_reference) => api.put(`/sales/${id}/payment-status`, { payment_status, payment_reference }),
   // Quick-undo last sale (60s window)
   undo: (id) => api.post(`/sales/${id}/undo`),
+  // End-of-day takings for one till
+  zReport: (params) => api.get('/sales/z-report', { params }),
 };
 
 export const cashDropsApi = {

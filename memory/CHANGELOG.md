@@ -3136,3 +3136,31 @@ floating phone on this screen again" link for later.
 Verified in-browser at 1920 and 390: hidden on the dashboard, still present on
 Comms, still hidden after navigating away and after a reload, restored from the
 dialer, no overflow at 390px.
+
+## iter414 — 2026-11-07 — Refund slips and the Z-report
+
+**Refund slip.** Voiding a sale now prints the customer's paper trail:
+`buildRefundBytes()` in utils/tillPrinter.js — REFUND in double height, the
+ORIGINAL receipt number, when it was sold and when it was refunded, who
+authorised it, the items returned, the amount refunded and how it was originally
+paid, ending "Stock returned. No further payment is due." It goes to the till
+printer, or through the print dialog as plain text when there isn't one
+(`printSlipFallback` + `refundSlipText`, which strip the ESC/POS control bytes).
+Sales History also gained a ↶ **Void & refund** button for admins — previously a
+void was only possible inside the 60-second window at the till, so an older
+refund had no way to produce a slip at all.
+
+**Z-report.** New `GET /api/sales/z-report?date=&location_id=&cashier_id=`
+(routers/sales.py, declared before `/sales/{id}` so the path resolves) returns
+one till's day: sales count, items sold, gross, discounts, tax, net, average
+sale, voided count and value, a split by payment method and by cashier, the
+first and last receipt number, and — when shifts were used — opening float,
+drops, expected vs counted cash and the over/short. The **Z-Report** button on
+Sales shows it and prints it on the same thermal printer
+(`buildZReportBytes`), falling back to the print dialog.
+
+Verified: tests/test_iter414_z_report.py (8 — voids excluded, method and cashier
+splits, discounts, drawer figures, other tills not counted, a quiet day returns
+zeroes) and in-browser against two seeded sales: the dialog showed 2 sales /
+UGX 40,000 and the printed slip matched; a real void produced a clean refund
+slip with the original receipt number. All seeded data removed afterwards.
