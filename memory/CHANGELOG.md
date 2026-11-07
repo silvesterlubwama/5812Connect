@@ -3164,3 +3164,57 @@ splits, discounts, drawer figures, other tills not counted, a quiet day returns
 zeroes) and in-browser against two seeded sales: the dialog showed 2 sales /
 UGX 40,000 and the printed slip matched; a real void produced a clean refund
 slip with the original receipt number. All seeded data removed afterwards.
+
+## iter415 — 2026-11-07 — Part refunds, and stores that really are separate
+
+**Part refund.** `POST /api/sales/{id}/refund` returns one line (or a few of a
+line's units) off a receipt while the rest of it stands:
+`refund_sale_lines()` in routers/sales.py. It puts only the returned units back
+into THAT store's stock column, records the refund on the sale
+(`refunds[]`, `items[i].refunded_qty`, `refunded_total`, `fully_refunded`),
+takes the customer's running total down, and posts its OWN contra entry
+(`post_sale_refund()` in routers/finance/postings.py — Dr 4100 Sales Revenue,
+Cr cash/bank, idempotency `sale_refund:<refund_id>`) because the rest of the
+receipt is still a real sale and the original entry cannot simply be reversed.
+Refusals: more than was sold, a line already returned, an item not on the
+receipt, a voided receipt, or a cashier from another store (any cashier at the
+store that rang it may refund — the user asked for counter returns without
+fetching a manager).
+
+Knock-ons that would otherwise have double-counted: `_reverse_sale_side_effects`
+now restores `qty − refunded_qty` (not the whole line) and reverses any standing
+`sale_refund` entry when the whole sale is voided or deleted.
+
+UI: `components/pos/RefundDialog.jsx` (± stepper per line, remaining count,
+reason, money-back-as), reachable from every row in Sales History
+(`refund-sale-<id>`) and from the receipt dialog (`receipt-refund-btn`); prints
+a **PART REFUND** slip ending "The rest of this receipt still stands."
+The Z-report gained `refunds_count` / `refunds_total` (counted by the day the
+refund was GIVEN, not the day of the sale) and nets them off the takings.
+
+**Stores staying separate** — the user's report was "using the switcher to one
+campus doesn't actually change the store you are in". It didn't: ProductsPage
+bound the till to `localStorage['5812_pos_store_id'] || user.location_id` and
+never once looked at `active_campus_id`, and neither the products nor the sales
+fetch sent a store at all, so a shared product showed the CHAIN's on-hand and
+the history showed every till the signed-in user could see. Now:
+  * the till follows the campus switcher (a locked kiosk keeps its pin), and
+    refetches products, sales and parked baskets when the store changes;
+  * `GET /api/products?location_id=` and the new `GET /api/sales?location_id=`
+    (plus `/sales/drafts?location_id=`) scope server-side, intersected with the
+    caller's campus filter so it can't be used to peek at another store.
+
+**Customers are shared across stores** (user request): `GET /api/customers` is
+org-wide again rather than campus-scoped, and `_ensure_customer_account` matches
+an existing shopper by name across the whole organisation, so one account
+carries every receipt from every store.
+
+Verified: tests/test_iter415_partial_refund.py (12 — single unit back, receipt
+total untouched, over-refund refused, no double refund, full return flags the
+receipt, unknown item rejected, voided receipt refused, other store's cashier
+403, contra entry posted, till lists only its own sales, refunds on the Z-report
+and not on another till's, void after a part refund does not restock twice) plus
+test_iter411/412/414 still green (32 total). Live: sold 3 → stock 10→7, returned
+1 → 8, JE posted, Z-report net 10,000 off gross 15,000; Zimba Farm's till showed
+0 sales and 0 products while Uganda's showed 5; refund dialog checked at 1920px
+and 390px. All ZTMP test data removed.

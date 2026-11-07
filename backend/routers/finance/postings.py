@@ -4,6 +4,7 @@ Both call into `post_journal_entry` — they don't have their own ledger, they
 just build the right line-shape and hand it off. This is the single source
 of truth for how payroll and sales become ledger movements.
 """
+from datetime import datetime, timezone
 from typing import Optional
 
 from deps import db, logger
@@ -175,6 +176,45 @@ async def post_sale(sale: dict, current_user: dict) -> Optional[dict]:
         created_by_name=current_user.get("name"),
         idempotency_key=f"sale:{sale.get('id')}",
     )
+
+async def post_sale_refund(sale: dict, amount: float, current_user: dict, *,
+                           refund_id: str, reason: str = "") -> Optional[dict]:
+    """Money handed back on part of a receipt.
+
+        Debit  4100 Sales Revenue      (takings come back out)
+        Credit 1010 Bank / 1000 Cash   (cash leaves the drawer)
+
+    A whole-sale void reverses the original entry; a part refund cannot — the
+    rest of that receipt is still a real sale — so it posts its own contra
+    entry for just the amount given back.
+    """
+    total = _q(amount)
+    if total <= 0:
+        return None
+    revenue_acct = await get_account_by_code("4100")
+    if not revenue_acct:
+        return None
+    cash_acct = await _cash_account_id(sale.get("location_id"), sale.get("channel"))
+    if not cash_acct:
+        return None
+    return await post_journal_entry(
+        date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        description=f"Refund — receipt {sale.get('receipt_number') or sale.get('id')}"
+                    + (f" ({reason})" if reason else ""),
+        lines=[
+            {"account_id": revenue_acct["id"], "account_code": revenue_acct["code"],
+             "account_name": revenue_acct["name"], "debit": float(total), "credit": 0},
+            {"account_id": cash_acct["id"], "account_code": cash_acct["code"],
+             "account_name": cash_acct["name"], "debit": 0, "credit": float(total)},
+        ],
+        source="sale_refund",
+        reference=sale.get("id"),
+        location_id=sale.get("location_id"),
+        created_by=current_user.get("id"),
+        created_by_name=current_user.get("name"),
+        idempotency_key=f"sale_refund:{refund_id}",
+    )
+
 
 async def post_event_ticket_sale(booking: dict, event: dict, current_user: dict) -> Optional[dict]:
     """Ticket money from the public event pages (iter383).

@@ -342,11 +342,11 @@ export async function openDrawer() {
 export function buildRefundBytes(sale, opts = {}) {
   const {
     storeName = '58:12 Global Connect', currency = 'UGX', columns = 48,
-    voidedBy = '', reason = '', showQr = true, trackingUrl = '',
+    voidedBy = '', reason = '', showQr = true, trackingUrl = '', partial = false,
   } = opts;
   const items = sale.items || sale.line_items || [];
   const parts = [bytes(
-    INIT, ALIGN_CENTER, BOLD_ON, DOUBLE_ON, 'REFUND\n', DOUBLE_OFF,
+    INIT, ALIGN_CENTER, BOLD_ON, DOUBLE_ON, partial ? 'PART REFUND\n' : 'REFUND\n', DOUBLE_OFF,
     `${storeName}\n`, BOLD_OFF,
   )];
   const push = (...p) => parts.push(bytes(...p));
@@ -372,7 +372,8 @@ export function buildRefundBytes(sale, opts = {}) {
   if (reason) push(`\nReason: ${reason}\n`);
   push('\n', ALIGN_CENTER);
   if (showQr && trackingUrl) { parts.push(qrBytes(trackingUrl)); push('Scan to verify\n'); }
-  push('Stock returned. No further payment is due.\n', '\n\n\n', CUT);
+  push('Stock returned. No further payment is due.\n',
+       ...(partial ? ['The rest of this receipt still stands.\n'] : []), '\n\n\n', CUT);
   return bytes(...parts);
 }
 
@@ -406,6 +407,10 @@ export function buildZReportBytes(report, opts = {}) {
     push('-'.repeat(columns) + '\n');
     push(row(`Voided / refunded (${report.voided_count})`, money(report.voided_total, currency), columns));
   }
+  if (report.refunds_count) {
+    push('-'.repeat(columns) + '\n');
+    push(row(`Part refunds (${report.refunds_count})`, `-${money(report.refunds_total, currency)}`, columns));
+  }
   const d = report.drawer || {};
   if (d.shifts) {
     push('-'.repeat(columns) + '\n', 'CASH DRAWER\n');
@@ -433,6 +438,7 @@ export async function printRefundSlip(sale, storeSettings = {}, extra = {}) {
     trackingUrl: extra.trackingUrl || (sale.receipt_number ? `${window.location.origin}/receipt/${sale.receipt_number}` : ''),
     voidedBy: extra.voidedBy || '',
     reason: extra.reason || '',
+    partial: !!extra.partial,
   }));
 }
 

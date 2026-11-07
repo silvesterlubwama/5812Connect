@@ -351,7 +351,7 @@ export const departmentsApi = {
 
 // ---- PRODUCTS & SALES ----
 export const productsApi = {
-  list: () => api.get('/products'),
+  list: (params) => api.get('/products', { params }),
   create: (data) => api.post('/products', data),
   update: (id, data) => api.put(`/products/${id}`, data),
   delete: (id) => api.delete(`/products/${id}`),
@@ -364,7 +364,7 @@ export const salesApi = {
   export: (params) => api.get('/sales/export', { params }),
   import: (data) => api.post('/sales/import', data),
   // Draft / parked sales
-  drafts: () => api.get('/sales/drafts'),
+  drafts: (params) => api.get('/sales/drafts', { params }),
   saveDraft: (data) => api.post('/sales/drafts', data),
   deleteDraft: (id) => api.delete(`/sales/drafts/${id}`),
   lookupByReceipt: (receiptNumber) => api.get(`/sales/by-receipt/${encodeURIComponent(receiptNumber)}`),
@@ -372,6 +372,8 @@ export const salesApi = {
   setPaymentStatus: (id, payment_status, payment_reference) => api.put(`/sales/${id}/payment-status`, { payment_status, payment_reference }),
   // Quick-undo last sale (60s window)
   undo: (id) => api.post(`/sales/${id}/undo`),
+  // Return one line (or a few units of it) off a receipt
+  refund: (id, data) => api.post(`/sales/${id}/refund`, data),
   // End-of-day takings for one till
   zReport: (params) => api.get('/sales/z-report', { params }),
 };

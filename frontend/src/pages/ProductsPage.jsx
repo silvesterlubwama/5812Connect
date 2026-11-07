@@ -28,7 +28,7 @@ import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import { CrossCampusMoveDialog } from '../components/CrossCampusMoveDialog';
-import { ArrowRightLeft, Store, FileText } from 'lucide-react';
+import { ArrowRightLeft, Store, FileText, RotateCcw } from 'lucide-react';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
 import { authApi, cashDropsApi, shiftsApi } from '../services/api';
@@ -36,6 +36,7 @@ import ChangeCalculator from '../components/ChangeCalculator';
 import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
 import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer, describePeripheralSupport } from '../utils/posPeripherals';
 import TillPrinterDialog from '../components/pos/TillPrinterDialog';
+import { RefundDialog } from '../components/pos/RefundDialog';
 import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText } from '../utils/tillPrinter';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
@@ -178,9 +179,16 @@ export default function ProductsPage() {
   // Active tab (controlled — needed for USB scanner focus capture scope)
   const [activeTab, setActiveTab] = useState('pos');
   // Sale Counter location: bound at kiosk-config time (NOT picked per-sale).
-  // Resolution order: URL param (/pos/:storeId) → localStorage → user's primary location_id.
+  // A locked kiosk keeps its own pinned store; everyone else follows the campus
+  // switcher (iter415 — switching campus used to leave the till still ringing
+  // up against the old store), then the last store used on this device, then
+  // their main location.
   const [saleLocationId, setSaleLocationId] = useState(() =>
-    localStorage.getItem('5812_pos_store_id') || user?.location_id || ''
+    (localStorage.getItem('5812_pos_kiosk') === 'true' && localStorage.getItem('5812_pos_store_id'))
+    || user?.active_campus_id
+    || localStorage.getItem('5812_pos_store_id')
+    || user?.location_id
+    || ''
   );
   // Receipt paper size (set before completing sale)
   const [receiptPaperSize, setReceiptPaperSize] = useState('auto');
@@ -188,6 +196,13 @@ export default function ProductsPage() {
   useEffect(() => {
     if (saleLocationId) localStorage.setItem('5812_pos_store_id', saleLocationId);
   }, [saleLocationId]);
+  // Follow the campus switcher: picking another campus moves the till to that
+  // store's products, history and takings. A locked kiosk never moves.
+  useEffect(() => {
+    if (localStorage.getItem('5812_pos_kiosk') === 'true') return;
+    const active = user?.active_campus_id;
+    if (active && active !== saleLocationId) setSaleLocationId(active);
+  }, [user?.active_campus_id]);  // eslint-disable-line react-hooks/exhaustive-deps
   // Friendly label for the bound store (custom store_name → location name → fallback)
   const posBoundStoreLabel = (() => {
     if (!saleLocationId) return 'No store assigned — set in Store Settings';
@@ -260,7 +275,11 @@ export default function ProductsPage() {
     try {
       // Promise.allSettled — sales endpoint can 403 for non-finance users
       // (POS page is still useful without the historical sales feed).
-      const results = await Promise.allSettled([productsApi.list(), salesApi.list({ limit: 200 }), locationsApi.list()]);
+      const results = await Promise.allSettled([
+        productsApi.list(saleLocationId ? { location_id: saleLocationId } : undefined),
+        salesApi.list({ limit: 200, ...(saleLocationId ? { location_id: saleLocationId } : {}) }),
+        locationsApi.list(),
+      ]);
       const data = (i, fb = []) => results[i].status === 'fulfilled' ? (results[i].value?.data ?? fb) : fb;
       setProducts(data(0, []));
       const salesData = data(1, []);
@@ -294,7 +313,7 @@ export default function ProductsPage() {
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchAll(); }, []);
+  useEffect(() => { fetchAll(); }, [saleLocationId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredProducts = products.filter(p => {
     const matchSearch = p.name?.toLowerCase().includes(productSearch.toLowerCase());
@@ -451,10 +470,10 @@ export default function ProductsPage() {
   const [drafts, setDrafts] = useState([]);
   const [showDrafts, setShowDrafts] = useState(false);
   const fetchDrafts = async () => {
-    try { const res = await salesApi.drafts(); setDrafts(res.data || []); }
+    try { const res = await salesApi.drafts(saleLocationId ? { location_id: saleLocationId } : undefined); setDrafts(res.data || []); }
     catch (e) { console.warn(e.message || e); }
   };
-  useEffect(() => { fetchDrafts(); }, []);
+  useEffect(() => { fetchDrafts(); }, [saleLocationId]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const parkSale = async () => {
     if (cart.length === 0) { toast.error('Cart is empty — nothing to park'); return; }
@@ -505,6 +524,29 @@ export default function ProductsPage() {
       currency: settings.currency || 'UGX',
       columns: 48, ...extra,
     }));
+  };
+
+  // Part refund: just the lines coming back, with their own slip.
+  const [refundSale, setRefundSale] = useState(null);
+  const printPartRefund = async (sale, lines, amount, reason) => {
+    const settings = lastStoreSettings || storeSettings || {};
+    const slip = {
+      receipt_number: sale.receipt_number || sale.id,
+      created_at: sale.created_at,
+      customer_name: sale.customer_name,
+      payment_method: sale.payment_method,
+      items: lines,
+      total: amount,
+    };
+    const extra = { voidedBy: user?.name || '', reason: reason || 'Items returned', partial: true };
+    const res = await printRefundSlip(slip, settings, extra);
+    if (!res.printed) {
+      printSlipFallback(`Refund ${slip.receipt_number}`, refundSlipText(slip, {
+        storeName: settings.store_name || '58:12 Global Connect',
+        currency: settings.currency || 'UGX',
+        columns: 48, ...extra,
+      }));
+    }
   };
 
   const openZReport = async () => {
@@ -1223,6 +1265,7 @@ export default function ProductsPage() {
                       <th className="pb-2 font-medium text-muted-foreground">Date</th>
                       <th className="pb-2 font-medium text-muted-foreground">Cashier</th>
                       {isAdmin && <th className="pb-2 w-8"></th>}
+                      <th className="pb-2 w-8"></th>
                     </tr></thead>
                     <tbody className="divide-y divide-border">
                       {sales.map(sale => {
@@ -1233,7 +1276,14 @@ export default function ProductsPage() {
                           <td className="py-3 font-mono text-xs text-primary font-semibold">{sale.receipt_number || sale.id}</td>
                           <td className="py-3">{sale.customer_name || '--'}</td>
                           <td className="py-3 text-muted-foreground">{(sale.items || []).length} items</td>
-                          <td className="py-3 font-bold text-primary">{fmt(sale.total)}</td>
+                          <td className="py-3 font-bold text-primary">
+                            {fmt(sale.total)}
+                            {!!sale.refunded_total && (
+                              <span className="block text-[10px] font-medium text-amber-600" data-testid={`sale-refunded-${sale.id}`}>
+                                −{fmt(sale.refunded_total)} refunded
+                              </span>
+                            )}
+                          </td>
                           <td className="py-3"><Badge variant="outline" className="text-xs capitalize">{sale.payment_method}</Badge></td>
                           <td className="py-3">
                             {isPending ? (
@@ -1293,6 +1343,13 @@ export default function ProductsPage() {
                             </Button>
                             <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!await confirm({ title: 'Delete sale?', message: 'The items go back into stock, the takings come out of the books, and any booking it sold is released. The receipt cannot be brought back.', destructive: true, confirmLabel: 'Delete' })) return; try { const r = await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success(r.data?.message || 'Sale deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button>
                           </td>}
+                          <td className="py-3">
+                            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs gap-1 text-amber-700" title="Return one line off this receipt"
+                              data-testid={`refund-sale-${sale.id}`} disabled={sale.voided || sale.fully_refunded}
+                              onClick={() => setRefundSale(sale)}>
+                              <RotateCcw size={11} />
+                            </Button>
+                          </td>
                         </tr>);
                       })}
                     </tbody>
@@ -1579,6 +1636,11 @@ export default function ProductsPage() {
               <div className="flex justify-between"><span>Gross takings</span><span>{fmt(zReport.gross, storeSettings?.currency)}</span></div>
               {!!zReport.discounts && <div className="flex justify-between text-muted-foreground"><span>Discounts</span><span>-{fmt(zReport.discounts, storeSettings?.currency)}</span></div>}
               {!!zReport.tax && <div className="flex justify-between text-muted-foreground"><span>Tax</span><span>{fmt(zReport.tax, storeSettings?.currency)}</span></div>}
+              {!!zReport.refunds_count && (
+                <div className="flex justify-between text-amber-600" data-testid="z-refunds">
+                  <span>Part refunds ({zReport.refunds_count})</span><span>-{fmt(zReport.refunds_total, storeSettings?.currency)}</span>
+                </div>
+              )}
               <div className="flex justify-between font-bold border-t border-border pt-1.5"><span>Net takings</span><span data-testid="z-net">{fmt(zReport.net, storeSettings?.currency)}</span></div>
               <div className="pt-2 border-t border-border">
                 <p className="text-[11px] uppercase text-muted-foreground font-sans mb-1">By payment method</p>
@@ -1609,6 +1671,19 @@ export default function ProductsPage() {
       </Dialog>
 
       {/* Receipt Modal */}
+      <RefundDialog
+        sale={refundSale}
+        open={!!refundSale}
+        onOpenChange={(v) => { if (!v) setRefundSale(null); }}
+        currency={storeSettings?.currency || 'UGX'}
+        onDone={async (res, lines, amount, reason) => {
+          const sale = refundSale;
+          toast.success(res?.message || 'Refunded — stock restored');
+          setSales(prev => prev.map(s => s.id === sale.id ? { ...s, ...(res?.sale || {}) } : s));
+          await printPartRefund(sale, lines, amount, reason);
+          fetchAll();
+        }}
+      />
       <TillPrinterDialog open={showTillPrinter} onOpenChange={(v) => { setShowTillPrinter(v); if (!v) isTillReady().then(setTillPrinterReady); }} />
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
@@ -1632,6 +1707,12 @@ export default function ProductsPage() {
               }}>↶ Undo this sale ({Math.max(0, Math.ceil(60 - ageS))}s left)</Button>
             ) : null;
           })()}
+          {lastReceipt && !lastReceipt.voided && !lastReceipt.fully_refunded && (
+            <Button variant="outline" className="w-full mt-2 gap-1.5" data-testid="receipt-refund-btn"
+              onClick={() => { setShowReceipt(false); setRefundSale(lastReceipt); }}>
+              <RotateCcw size={13} /> Return an item off this receipt
+            </Button>
+          )}
         </DialogContent>
       </Dialog>
 

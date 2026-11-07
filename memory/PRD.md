@@ -2483,3 +2483,17 @@ Re-running a move is therefore safe and repeatable.
 - A Z-Report button shows and prints the day's takings for that till: sales,
   items, gross and net, a split by payment method and cashier, voids, and the
   cash drawer's expected-versus-counted with the over/short.
+
+### 2026-11-07 — Part refunds, and the store switcher actually switching stores
+- A cashier can return just one line off a receipt — or a few of its units —
+  instead of voiding the whole sale. Only those units go back into stock, only
+  that money comes out of the books, and a PART REFUND slip prints with the
+  original receipt number. Any cashier at the store that rang the sale can do
+  it; nobody has to fetch a manager.
+- The campus switcher now really moves the till. Picking another campus changes
+  the products, the stock figures, the sales history and the takings the POS is
+  working with. A store-locked kiosk stays on its own store, as before.
+- One shop's sales no longer appear at another's till, and a product shared
+  between shops shows that shop's own on-hand rather than the chain total.
+- Customers are shared across the whole organisation: one account, every receipt
+  from every store on it.

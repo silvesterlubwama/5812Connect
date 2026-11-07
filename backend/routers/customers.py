@@ -15,7 +15,7 @@ from typing import Optional
 from datetime import datetime, timezone
 import uuid
 
-from deps import db, get_current_user, require_staff, require_manager, get_campus_filter
+from deps import db, get_current_user, require_staff, require_manager
 
 router = APIRouter(prefix="/api", tags=["customers"])
 
@@ -23,14 +23,13 @@ router = APIRouter(prefix="/api", tags=["customers"])
 @router.get("/customers")
 async def list_customers(location_id: Optional[str] = None, search: Optional[str] = None,
                          current_user: dict = Depends(get_current_user)):
-    """Customer accounts, scoped to the caller's campus unless one is named."""
+    """Customer accounts. One account serves the whole organisation — a shopper
+    at the Kampala shop is the same person at the farm shop, and their receipts
+    all hang off the one account (iter415). Pass `location_id` to narrow to the
+    customers first registered at one store."""
     query = {}
     if location_id:
         query["location_id"] = location_id
-    else:
-        campus = await get_campus_filter(current_user)
-        if campus:
-            query.update(campus)
     if search:
         query["$or"] = [
             {"name": {"$regex": search, "$options": "i"}},

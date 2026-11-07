@@ -55,8 +55,14 @@ class SaleCreate(BaseModel):
 # ========== SALES ==========
 
 @router.get("/sales")
-async def list_sales(skip: int = 0, limit: int = 100, include_voided: bool = False, current_user: dict = Depends(get_current_user)):
+async def list_sales(skip: int = 0, limit: int = 100, include_voided: bool = False,
+                     location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     query = {**await get_campus_filter(current_user)}
+    # A till asks for ITS store. Without this the POS showed every sale the
+    # signed-in user could see — a manager over three shops watched all three
+    # tills' receipts land in one history (iter415).
+    if location_id:
+        query["location_id"] = location_id
     if not include_voided:
         query["voided"] = {"$ne": True}
     return await db.sales.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
@@ -415,11 +421,11 @@ async def _ensure_customer_account(sale: dict, current_user: dict):
     if phone:
         existing = await db.customer_accounts.find_one({"phone": phone}, {"_id": 0, "id": 1, "name": 1})
     if not existing and raw_name and name_lower not in {"walk-in", "walk-in customer"}:
-        # Case-insensitive exact match by name + location to reduce false-positives
+        # Case-insensitive exact name match across the whole organisation — one
+        # account follows the shopper between stores (iter415).
         import re
         existing = await db.customer_accounts.find_one(
-            {"name": {"$regex": f"^{re.escape(raw_name)}$", "$options": "i"},
-             "location_id": sale.get("location_id")},
+            {"name": {"$regex": f"^{re.escape(raw_name)}$", "$options": "i"}},
             {"_id": 0, "id": 1, "name": 1},
         )
     if existing:
@@ -587,7 +593,11 @@ async def _reverse_sale_side_effects(sale: dict, current_user: dict, *, reason: 
     for item in (sale.get("items") or []):
         if not item.get("product_id"):
             continue
-        qty = item.get("qty", 1)
+        # Units already handed back by a part refund are on the shelf already —
+        # restoring them a second time would invent stock (iter415).
+        qty = float(item.get("qty", 1) or 0) - float(item.get("refunded_qty") or 0)
+        if qty <= 0:
+            continue
         units_per_pack = int(item.get("units_per_pack", 1) or 1)
         base_units = qty * max(1, units_per_pack)
         restore_field = await _stock_field_for(item["product_id"], sale.get("location_id") or "")
@@ -605,7 +615,8 @@ async def _reverse_sale_side_effects(sale: dict, current_user: dict, *, reason: 
     if sale.get("customer_id"):
         await db.customer_accounts.update_one(
             {"id": sale["customer_id"]},
-            {"$inc": {"total_purchases": -1, "total_spent": -(sale.get("total", 0))},
+            {"$inc": {"total_purchases": -1,
+                      "total_spent": -(float(sale.get("total", 0) or 0) - float(sale.get("refunded_total") or 0))},
              "$pull": {"receipt_history": {"sale_id": sale.get("id")}}},
         )
 
@@ -619,6 +630,16 @@ async def _reverse_sale_side_effects(sale: dict, current_user: dict, *, reason: 
         if je:
             await reverse_journal_entry(je["id"], reason=reason, current_user=current_user)
             summary["journal_reversed"] = True
+        # Any part refund already taken off this receipt was its own contra
+        # entry. With the whole sale coming out of the books, leaving those
+        # standing would knock the revenue down twice (iter415).
+        async for prior in db.finance_journal_entries.find(
+            {"reference": sale.get("id"), "source": "sale_refund",
+             "reversed": {"$ne": True}, "voided": {"$ne": True}},
+            {"_id": 0, "id": 1},
+        ):
+            await reverse_journal_entry(prior["id"], reason=f"{reason} (part refund rolled back)",
+                                        current_user=current_user)
     except Exception as ex:
         logger.error(f"[finance] could not reverse JE for sale {sale.get('id')}: {ex}")
 
@@ -674,6 +695,198 @@ async def undo_sale(sale_id: str, current_user: dict = Depends(get_current_user)
     return {"message": "Sale voided and stock restored", "sale_id": sale_id}
 
 
+class RefundLine(BaseModel):
+    product_id: Optional[str] = None
+    variant_id: Optional[str] = None
+    qty: float
+    name: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+
+class RefundCreate(BaseModel):
+    items: List[RefundLine]
+    reason: Optional[str] = ""
+    refund_method: Optional[str] = None
+    model_config = {"extra": "allow"}
+
+
+def _line_key(item: dict) -> str:
+    return f"{item.get('product_id') or item.get('name') or ''}::{item.get('variant_id') or ''}"
+
+
+def _unit_price(item: dict) -> float:
+    """What one of this line costs. Prefer the price actually charged; fall
+    back to the line total divided by how many were sold, so a discounted line
+    refunds the discounted amount and not the shelf price."""
+    sold = float(item.get("qty") or item.get("quantity") or 1) or 1
+    line_total = item.get("line_total")
+    if line_total not in (None, ""):
+        try:
+            return float(line_total) / sold
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    try:
+        return float(item.get("price") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _can_refund_here(user: dict, sale: dict) -> bool:
+    """Any cashier standing at the store that rang the sale may return a line;
+    admins/directors may do it from anywhere (iter415 — the user asked for
+    counter returns without fetching a manager)."""
+    if _can_edit_sale(user, sale):
+        return True
+    if sale.get("cashier_id") == user.get("id") or sale.get("created_by") == user.get("id"):
+        return True
+    sale_loc = sale.get("location_id") or ""
+    if not sale_loc:
+        return False
+    user_locs = set(user.get("location_ids") or [])
+    for key in ("location_id", "active_campus_id"):
+        if user.get(key):
+            user_locs.add(user[key])
+    return sale_loc in user_locs
+
+
+@router.post("/sales/{sale_id}/refund")
+async def refund_sale_lines(sale_id: str, data: RefundCreate, current_user: dict = Depends(get_current_user)):
+    """Return part of a receipt — one line, or a few of a line's units.
+
+    Puts just those units back into this store's stock, takes just that money
+    back out of the books with its own contra entry, and leaves the rest of the
+    receipt standing as a real sale. A whole-receipt return is still a void.
+    """
+    sale = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+    if not sale:
+        raise HTTPException(status_code=404, detail="Sale not found")
+    if sale.get("voided"):
+        raise HTTPException(status_code=400, detail="This sale was voided — the whole receipt is already refunded")
+    if not _can_refund_here(current_user, sale):
+        raise HTTPException(status_code=403, detail="You can only refund sales rung up at your own store")
+    if not data.items:
+        raise HTTPException(status_code=400, detail="Pick at least one line to refund")
+
+    sold_lines = sale.get("items") or []
+    by_key = {}
+    for idx, it in enumerate(sold_lines):
+        by_key.setdefault(_line_key(it), (idx, it))
+
+    refunded_lines: list = []
+    amount = 0.0
+    for req in data.items:
+        key = _line_key(req.model_dump())
+        found = by_key.get(key)
+        if not found:
+            raise HTTPException(status_code=400, detail=f"{req.name or req.product_id} is not on this receipt")
+        idx, item = found
+        sold_qty = float(item.get("qty") or item.get("quantity") or 0)
+        already = float(item.get("refunded_qty") or 0)
+        qty = float(req.qty or 0)
+        if qty <= 0:
+            continue
+        if qty > sold_qty - already + 1e-9:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Only {sold_qty - already:g} of {item.get('name') or 'this item'} left to refund on this receipt",
+            )
+        unit = _unit_price(item)
+        line_amount = round(unit * qty, 2)
+        amount += line_amount
+        refunded_lines.append({
+            "index": idx,
+            "product_id": item.get("product_id"),
+            "variant_id": item.get("variant_id"),
+            "name": item.get("name") or item.get("product_name") or "Item",
+            "qty": qty,
+            "price": unit,
+            "line_total": line_amount,
+            "units_per_pack": int(item.get("units_per_pack") or 1),
+        })
+
+    if not refunded_lines:
+        raise HTTPException(status_code=400, detail="Nothing to refund — all quantities were zero")
+
+    amount = round(amount, 2)
+    refund_id = f"ref_{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc).isoformat()
+    store_id = sale.get("location_id") or ""
+
+    # Stock: only the units coming back, into THIS store's column.
+    for line in refunded_lines:
+        if not line["product_id"]:
+            continue
+        base_units = line["qty"] * max(1, line["units_per_pack"])
+        field = await _stock_field_for(line["product_id"], store_id)
+        if line.get("variant_id"):
+            await db.products.update_one(
+                {"id": line["product_id"], "variants.id": line["variant_id"]},
+                {"$inc": {"variants.$.stock": line["qty"], field: base_units}},
+            )
+        else:
+            await db.products.update_one({"id": line["product_id"]}, {"$inc": {field: base_units}})
+
+    refund_doc = {
+        "id": refund_id,
+        "at": now,
+        "by": current_user["id"],
+        "by_name": current_user.get("name", ""),
+        "reason": (data.reason or "").strip(),
+        "method": data.refund_method or sale.get("payment_method") or "cash",
+        "amount": amount,
+        "items": [{k: v for k, v in line.items() if k != "index"} for line in refunded_lines],
+    }
+    inc_fields = {"refunded_total": amount}
+    set_fields = {"last_refund_at": now}
+    for line in refunded_lines:
+        inc_fields[f"items.{line['index']}.refunded_qty"] = line["qty"]
+    await db.sales.update_one({"id": sale_id}, {"$inc": inc_fields, "$set": set_fields,
+                                                "$push": {"refunds": refund_doc}})
+
+    # Fully returned line by line? Flag it so the history reads honestly.
+    latest = await db.sales.find_one({"id": sale_id}, {"_id": 0})
+    fully = all(
+        float(it.get("refunded_qty") or 0) >= float(it.get("qty") or it.get("quantity") or 0) - 1e-9
+        for it in (latest.get("items") or [])
+    ) if (latest.get("items") or []) else False
+    if fully:
+        await db.sales.update_one({"id": sale_id}, {"$set": {"fully_refunded": True}})
+        latest["fully_refunded"] = True
+
+    if sale.get("customer_id"):
+        await db.customer_accounts.update_one({"id": sale["customer_id"]}, {"$inc": {"total_spent": -amount}})
+
+    # The money: its own contra entry, because the rest of the receipt stands.
+    journal_posted = False
+    if (sale.get("payment_status") or "").lower() == "paid":
+        try:
+            from routers.finance.postings import post_sale_refund
+            je = await post_sale_refund(sale, amount, current_user,
+                                        refund_id=refund_id, reason=refund_doc["reason"])
+            journal_posted = bool(je)
+        except Exception as ex:
+            logger.error(f"[finance] refund JE post failed for {sale_id}: {ex}")
+    if sale.get("deposit_to_account_id"):
+        try:
+            from routers.chart_accounts import invalidate_balance_cache
+            invalidate_balance_cache([sale["deposit_to_account_id"]])
+        except Exception:
+            pass
+
+    await _audit(current_user["id"], "refund", "sale", sale_id,
+                 {"refund_id": refund_id, "amount": amount,
+                  "lines": len(refunded_lines), "reason": refund_doc["reason"]})
+
+    return {
+        "message": f"Refunded {amount:,.0f} on {len(refunded_lines)} line(s) — stock restored",
+        "refund": refund_doc,
+        "journal_posted": journal_posted,
+        "fully_refunded": fully,
+        "refunded_total": float(latest.get("refunded_total") or amount),
+        "sale": latest,
+    }
+
+
 # ========== DRAFT / PARKED SALES ==========
 
 @router.get("/sales/z-report")
@@ -722,6 +935,22 @@ async def z_report(
         c["total"] += total
 
     receipts = [s.get("receipt_number") for s in sales if s.get("receipt_number")]
+    # Part refunds given out TODAY, even against a receipt from an earlier day.
+    refund_query: dict = {"refunds.at": window}
+    if loc:
+        refund_query["location_id"] = loc
+    refunds_total = 0.0
+    refunds_count = 0
+    refunded_sales = await db.sales.find(refund_query, {"_id": 0, "refunds": 1, "cashier_id": 1}).to_list(2000)
+    for s in refunded_sales:
+        if cashier_id and s.get("cashier_id") != cashier_id:
+            continue
+        for r in (s.get("refunds") or []):
+            at = str(r.get("at") or "")
+            if at >= window["$gte"] and at <= window["$lte"]:
+                refunds_total += float(r.get("amount") or 0)
+                refunds_count += 1
+
     shift_query = {"opened_at": window, "status": "closed"}
     if loc:
         shift_query["location_id"] = loc
@@ -752,8 +981,10 @@ async def z_report(
         "gross": round(gross, 2),
         "discounts": round(discounts, 2),
         "tax": round(tax, 2),
-        "net": round(gross - discounts, 2),
+        "net": round(gross - discounts - refunds_total, 2),
         "average_sale": round(gross / len(live), 2) if live else 0,
+        "refunds_count": refunds_count,
+        "refunds_total": round(refunds_total, 2),
         "voided_count": len(voided),
         "voided_total": round(sum(float(s.get("total") or 0) for s in voided), 2),
         "by_method": sorted(by_method.values(), key=lambda m: -m["total"]),
@@ -765,9 +996,9 @@ async def z_report(
 
 
 @router.get("/sales/drafts")
-async def list_draft_sales(current_user: dict = Depends(get_current_user)):
+async def list_draft_sales(location_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """List parked/draft sales for the current kiosk/location (shared with all staff at this campus)."""
-    loc_id = current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    loc_id = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
     query = {"status": "draft"}
     if loc_id:
         query["location_id"] = loc_id
