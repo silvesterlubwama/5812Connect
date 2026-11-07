@@ -571,6 +571,75 @@ async def update_sale(sale_id: str, data: dict, current_user: dict = Depends(get
     return await db.sales.find_one({"id": sale_id}, {"_id": 0})
 
 
+async def _reverse_sale_side_effects(sale: dict, current_user: dict, *, reason: str) -> dict:
+    """Put back everything a sale moved: stock, the customer's running totals,
+    the ledger entry and any booking/ticket it spawned.
+
+    iter412 — deleting a sale only ever restored the store's stock column (and
+    even that in the wrong units for multi-packs): variant stock, the customer's
+    totals, the money in the books and the seat/ticket it sold all stayed
+    behind. The journal entry is removed outright while the period is open and
+    reversed with a contra entry once it is locked, so the books stay readable
+    either way.
+    """
+    summary = {"stock_restored": 0, "journal_reversed": False, "bookings_released": 0, "tickets_released": 0}
+
+    for item in (sale.get("items") or []):
+        if not item.get("product_id"):
+            continue
+        qty = item.get("qty", 1)
+        units_per_pack = int(item.get("units_per_pack", 1) or 1)
+        base_units = qty * max(1, units_per_pack)
+        restore_field = await _stock_field_for(item["product_id"], sale.get("location_id") or "")
+        if item.get("variant_id"):
+            await db.products.update_one(
+                {"id": item["product_id"], "variants.id": item["variant_id"]},
+                {"$inc": {"variants.$.stock": qty, restore_field: base_units}},
+            )
+        else:
+            await db.products.update_one(
+                {"id": item["product_id"]}, {"$inc": {restore_field: base_units}}
+            )
+        summary["stock_restored"] += 1
+
+    if sale.get("customer_id"):
+        await db.customer_accounts.update_one(
+            {"id": sale["customer_id"]},
+            {"$inc": {"total_purchases": -1, "total_spent": -(sale.get("total", 0))},
+             "$pull": {"receipt_history": {"sale_id": sale.get("id")}}},
+        )
+
+    # The money: take the sale back out of the books.
+    try:
+        from routers.finance._common import reverse_journal_entry
+        je = await db.finance_journal_entries.find_one(
+            {"idempotency_key": f"sale:{sale.get('id')}", "reversed": {"$ne": True}, "voided": {"$ne": True}},
+            {"_id": 0, "id": 1},
+        )
+        if je:
+            await reverse_journal_entry(je["id"], reason=reason, current_user=current_user)
+            summary["journal_reversed"] = True
+    except Exception as ex:
+        logger.error(f"[finance] could not reverse JE for sale {sale.get('id')}: {ex}")
+
+    # Seats and tickets this sale issued go back on sale too.
+    try:
+        bk = await db.bookings.delete_many({"sale_id": sale.get("id")})
+        tk = await db.event_tickets.delete_many({"sale_id": sale.get("id")})
+        summary["bookings_released"] = bk.deleted_count
+        summary["tickets_released"] = tk.deleted_count
+    except Exception as ex:
+        logger.warning(f"Sale {sale.get('id')} booking/ticket release skipped: {ex}")
+
+    if sale.get("deposit_to_account_id"):
+        try:
+            from routers.chart_accounts import invalidate_balance_cache
+            invalidate_balance_cache([sale["deposit_to_account_id"]])
+        except Exception:
+            pass
+    return summary
+
+
 @router.post("/sales/{sale_id}/undo")
 async def undo_sale(sale_id: str, current_user: dict = Depends(get_current_user)):
     """Quick-undo a sale within 60 seconds of creation — typical "oops" flow at the till.
@@ -592,27 +661,8 @@ async def undo_sale(sale_id: str, current_user: dict = Depends(get_current_user)
         raise HTTPException(status_code=403, detail="Undo window (60s) has passed. Ask a director to edit/refund.")
     if age_s <= 60 and not is_owner and not can_force:
         raise HTTPException(status_code=403, detail="Only the cashier who made this sale can undo it")
-    # Reverse stock
-    for item in (sale.get("items") or []):
-        if item.get("product_id"):
-            qty = item.get("qty", 1)
-            units_per_pack = int(item.get("units_per_pack", 1) or 1)
-            base_units = qty * max(1, units_per_pack)
-            restore_field = await _stock_field_for(item["product_id"], sale.get("location_id") or "")
-            if item.get("variant_id"):
-                await db.products.update_one(
-                    {"id": item["product_id"], "variants.id": item["variant_id"]},
-                    {"$inc": {"variants.$.stock": qty, restore_field: base_units}}
-                )
-            else:
-                await db.products.update_one({"id": item["product_id"]},
-                                             {"$inc": {restore_field: base_units}})
-    # Reverse customer accounts totals
-    if sale.get("customer_id"):
-        await db.customer_accounts.update_one(
-            {"id": sale["customer_id"]},
-            {"$inc": {"total_purchases": -1, "total_spent": -(sale.get("total", 0))}}
-        )
+    # Put the stock, the customer's totals, the money and any seat back.
+    await _reverse_sale_side_effects(sale, current_user, reason=f"Sale {sale.get('receipt_number') or sale_id} voided at the till")
     # Mark voided rather than delete (audit trail)
     await db.sales.update_one({"id": sale_id}, {"$set": {
         "voided": True,
@@ -1015,15 +1065,30 @@ async def delete_sale(sale_id: str, current_user: dict = Depends(get_current_use
         else:
             raise HTTPException(status_code=403, detail="Only administrators can delete entries older than 30 days")
     
+    # A voided sale has already given everything back — don't do it twice.
+    if sale.get("voided"):
+        await db.sales.delete_one({"id": sale_id})
+        await _audit(current_user["id"], "delete", "sale", sale_id, {"was_voided": True})
+        return {"message": "Voided sale removed", "stock_restored": 0,
+                "journal_reversed": False, "bookings_released": 0, "tickets_released": 0}
+
+    # Undo everything the sale did, THEN remove it.
+    reversal = await _reverse_sale_side_effects(
+        sale, current_user,
+        reason=f"Sale {sale.get('receipt_number') or sale_id} deleted by {current_user.get('name') or current_user['id']}",
+    )
     await db.sales.delete_one({"id": sale_id})
-    # Restore stock for sold items
-    for item in (sale.get("items") or []):
-        if item.get("product_id"):
-            restore_field = await _stock_field_for(item["product_id"], sale.get("location_id") or "")
-            await db.products.update_one({"id": item["product_id"]},
-                                         {"$inc": {restore_field: item.get("qty", 1)}})
-    await _audit(current_user["id"], "delete", "sale", sale_id)
-    return {"message": "Sale entry deleted, stock restored"}
+    await _audit(current_user["id"], "delete", "sale", sale_id, {
+        "receipt_number": sale.get("receipt_number"),
+        "total": sale.get("total"),
+        **reversal,
+    })
+    parts = ["Sale deleted", f"stock restored on {reversal['stock_restored']} item(s)"]
+    if reversal["journal_reversed"]:
+        parts.append("takings removed from the books")
+    if reversal["bookings_released"] or reversal["tickets_released"]:
+        parts.append(f"{reversal['bookings_released'] + reversal['tickets_released']} booking(s) released")
+    return {"message": " — ".join(parts), **reversal}
 
 
 # ========== SALES EXPORT / IMPORT ==========

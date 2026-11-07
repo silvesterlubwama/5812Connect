@@ -580,6 +580,7 @@ try:
     from routers.translate import router as translate_router
     from routers.products import router as products_router
     from routers.sales import router as sales_router
+    from routers.pos_print import router as pos_print_router
     from routers.sheet_import import router as sheet_import_router
     # iter319: POS store config — lifted out of the legacy financial router so
     # Kiosk / Products / POS Setup stop calling a 404.
@@ -625,6 +626,7 @@ try:
     app.include_router(translate_router)
     app.include_router(products_router)
     app.include_router(sales_router)
+    app.include_router(pos_print_router)
     app.include_router(sheet_import_router)
     app.include_router(store_settings_router)
     app.include_router(public_shop_router)

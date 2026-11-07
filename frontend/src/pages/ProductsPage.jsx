@@ -35,6 +35,8 @@ import { authApi, cashDropsApi, shiftsApi } from '../services/api';
 import ChangeCalculator from '../components/ChangeCalculator';
 import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
 import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer, describePeripheralSupport } from '../utils/posPeripherals';
+import TillPrinterDialog from '../components/pos/TillPrinterDialog';
+import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer } from '../utils/tillPrinter';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
@@ -484,6 +486,9 @@ export default function ProductsPage() {
   const [changeOpen, setChangeOpen] = useState(false);
   // Peripheral status
   const [drawerConnected, setDrawerConnected] = useState(false);
+  const [showTillPrinter, setShowTillPrinter] = useState(false);
+  const [tillPrinterReady, setTillPrinterReady] = useState(false);
+  useEffect(() => { isTillReady().then(setTillPrinterReady); }, []);
   // Cash drop dialog
   const [cashDropOpen, setCashDropOpen] = useState(false);
   const [cashDropForm, setCashDropForm] = useState({ amount: '', destination: 'safe', destination_account_id: '', notes: '' });
@@ -611,6 +616,7 @@ export default function ProductsPage() {
         setCart([]); setCustomerName('Walk-in Customer');
         SOUNDS.saleComplete(); haptic([30, 50, 30]);
         if (drawerConnected) { kickCashDrawer().catch(() => {}); }
+        else if (getTillConfig().openDrawerOnCash) { openTillDrawer().catch(() => {}); }
         toast.success(`Sale queued offline (${queued.temp_id}) — will sync when online`);
         refreshOfflineCount();
         return;
@@ -622,27 +628,16 @@ export default function ProductsPage() {
       setLastReceipt(res.data); setLastStoreSettings(receiptStoreSettings); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
       SOUNDS.saleComplete();
       haptic([30, 50, 30]);
-      // Kick the cash drawer if connected (cash sales only)
-      if (paymentMethod === 'cash' && drawerConnected) {
-        kickCashDrawer().catch(() => {});
+      // Kick the cash drawer if connected (cash sales only). Either the drawer
+      // has its own cable, or it hangs off the till printer's round port.
+      if (paymentMethod === 'cash') {
+        if (drawerConnected) kickCashDrawer().catch(() => {});
+        else if (getTillConfig().openDrawerOnCash) openTillDrawer().catch(() => {});
       }
       toast.success(`Sale recorded! Receipt: ${res.data.receipt_number || res.data.id}`);
-      // Auto-print: when the store has `auto_print_receipt` enabled, prefer
-      // a paired ESC/POS Serial printer (see /admin → USB Devices & Roles).
-      // If no device is paired, fall back to window.print() so the receipt
-      // panel + print CSS still produces a usable printout.
-      if (storeSettings.auto_print_receipt) {
-        setTimeout(async () => {
-          try {
-            const { printReceiptText, buildReceiptLines } = await import('../utils/printers');
-            const r = await printReceiptText(buildReceiptLines(res.data, { storeName: storeSettings.store_name || '58:12 Sales', currency: storeSettings.currency || 'UGX' }));
-            if (!r.printed) window.print();
-          } catch (err) {
-            console.warn('auto-print failed, falling back to window.print:', err);
-            try { window.print(); } catch (e2) { console.warn(e2); }
-          }
-        }, 600);
-      }
+      // Auto-print: the receipt panel does it — straight to the till printer
+      // when one is set up, otherwise the browser print dialog. (It used to call
+      // window.print() here, which printed the whole POS page.)
       fetchAll();
     } catch (e) {
       SOUNDS.saleError();
@@ -827,6 +822,17 @@ export default function ProductsPage() {
               {drawerConnected ? 'Drawer Connected' : 'Connect Drawer'}
             </Button>
           )}
+          {/* Till printer — straight to the roll, no browser dialog */}
+          <Button
+            variant="outline" size="sm"
+            className={`h-8 text-xs gap-1 ${tillPrinterReady ? 'border-green-300 text-green-700' : ''}`}
+            onClick={() => setShowTillPrinter(true)}
+            data-testid="till-printer-btn"
+            title="Set up the receipt printer for this till"
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${tillPrinterReady ? 'bg-green-500' : 'bg-muted-foreground'}`} />
+            <Printer size={12} /> {tillPrinterReady ? 'Printer Ready' : 'Printer'}
+          </Button>
           {/* Peripheral support diagnostics — shows what works in current browser */}
           <PeripheralDiagnostics />
           {/* Offline status indicator */}
@@ -1225,7 +1231,7 @@ export default function ProductsPage() {
                                 } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
                               }}>↺</Button>
                             )}
-                            <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!await confirm({ title: 'Delete sale?', message: 'This removes the receipt and cannot be undone.', destructive: true, confirmLabel: 'Delete' })) return; try { await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success('Sale deleted'); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button>
+                            <Button size="sm" variant="ghost" className="h-6 text-xs text-destructive" onClick={async () => { if (!await confirm({ title: 'Delete sale?', message: 'The items go back into stock, the takings come out of the books, and any booking it sold is released. The receipt cannot be brought back.', destructive: true, confirmLabel: 'Delete' })) return; try { const r = await salesApi.delete(sale.id); setSales(prev => prev.filter(s => s.id !== sale.id)); toast.success(r.data?.message || 'Sale deleted'); fetchAll(); } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); } }} data-testid={`delete-sale-${sale.id}`}>Del</Button>
                           </td>}
                         </tr>);
                       })}
@@ -1500,10 +1506,11 @@ export default function ProductsPage() {
       </Dialog>
 
       {/* Receipt Modal */}
+      <TillPrinterDialog open={showTillPrinter} onOpenChange={(v) => { setShowTillPrinter(v); if (!v) isTillReady().then(setTillPrinterReady); }} />
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Receipt size={16} /> Receipt {lastReceipt?.receipt_number || ''}</DialogTitle></DialogHeader>
-          {lastReceipt && <ReceiptComponent sale={lastReceipt} storeSettings={lastStoreSettings || storeSettings || {}} />}
+          {lastReceipt && <ReceiptComponent sale={lastReceipt} storeSettings={lastStoreSettings || storeSettings || {}} autoPrint={!!storeSettings?.auto_print_receipt} />}
           {/* 60-second Undo button — quick revert of an oops sale */}
           {lastReceipt && !lastReceipt.voided && (() => {
             const created = new Date(lastReceipt.created_at).getTime();
@@ -1676,17 +1683,22 @@ export default function ProductsPage() {
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-[10px] uppercase">Default print mode</Label>
-                  <Select value={storeSettings.print_mode || 'browser'} onValueChange={v => setStoreSettings({...storeSettings, print_mode: v})}>
-                    <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="browser">Browser print dialog</SelectItem>
-                      <SelectItem value="silent">Silent (kiosk mode)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label className="text-[10px] uppercase">Receipt printer</Label>
+                  <Button
+                    type="button" variant="outline" size="sm"
+                    className="h-8 w-full text-xs gap-1.5 justify-start"
+                    onClick={() => setShowTillPrinter(true)}
+                    data-testid="store-settings-printer-btn"
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${tillPrinterReady ? 'bg-green-500' : 'bg-muted-foreground'}`} />
+                    {tillPrinterReady ? 'Printing straight to the roll' : 'Set up this till\u2019s printer'}
+                  </Button>
                 </div>
               </div>
-              <p className="text-[10px] text-muted-foreground italic">Silent mode requires the browser to be launched with --kiosk-printing on Chrome/Edge.</p>
+              <p className="text-[10px] text-muted-foreground italic">
+                The printer is set per till, on the computer itself — a till with one set up prints with
+                no dialog at all; anywhere else the usual Print window opens.
+              </p>
             </div>
             <div className="space-y-2">
               <Label>API Integrations (JSON)</Label>

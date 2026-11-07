@@ -32,6 +32,12 @@ export const secureStorage = {
   setPref: (key, val) => localStorage.setItem(key, val),
   removePref: (key) => localStorage.removeItem(key),
 
+  // Clears the SESSION only. Device-scoped preferences deliberately survive a
+  // sign-out, because they describe the hardware in front of the person, not
+  // the person: '5812:till-printer', '5812:device-role-pairings',
+  // '5812_pos_store_id', '5812_pos_kiosk', '5812_kiosk_locked' and the per-user
+  // 'nav-sections-*' map. Never replace this with localStorage.clear() — a till
+  // would lose its printer and its store every time a cashier signs out.
   clearAll: () => {
     sessionStorage.removeItem(TOKEN_KEY);
     sessionStorage.removeItem(USER_KEY);

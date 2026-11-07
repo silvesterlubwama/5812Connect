@@ -3,6 +3,7 @@ import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
 import { toast } from 'sonner';
 import { escapeHtml as e } from '../utils/htmlEscape';
 import { printHtmlDocument } from '../utils/printHtml';
+import { printSaleReceipt, isReady as isTillReady } from '../utils/tillPrinter';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 
@@ -20,9 +21,22 @@ const PAPER_WIDTHS = {
  * Auto-generates a tracking QR that points to /receipt/{number}.
  * Auto-detects printer paper width on first render if not specified in storeSettings.
  */
-export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 Global Connect' }) {
+export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 Global Connect', autoPrint = false }) {
   const printRef = useRef(null);
   const [autoPaperSize, setAutoPaperSize] = useState(null);
+  const [tillReady, setTillReady] = useState(false);
+  const autoPrintedRef = useRef(false);
+
+  useEffect(() => { isTillReady().then(setTillReady); }, []);
+
+  // Auto-print once when the store wants it (hook stays above the early return).
+  const printFnRef = useRef(null);
+  useEffect(() => {
+    if (!autoPrint || !sale || autoPrintedRef.current) return;
+    autoPrintedRef.current = true;
+    const t = setTimeout(() => printFnRef.current?.(), 500);
+    return () => clearTimeout(t);
+  }, [autoPrint, sale]);
 
   // Heuristic: try matchMedia for narrow screen / receipt printer detection.
   // Thermal POS printers commonly resolve to <100mm width when used as default.
@@ -51,7 +65,16 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
   const saleTime = sale.created_at ? new Date(sale.created_at).toLocaleString() : '';
   const currency = sale.items?.[0]?.currency || storeSettings.currency || 'UGX';
 
-  const handlePrint = () => {
+  // Straight to the thermal roll when this till has a printer set up; the
+  // browser dialog is the fallback so a sale is never stuck (iter411).
+  const handlePrint = async () => {
+    const till = await printSaleReceipt(sale, storeSettings, { trackingUrl });
+    if (till.printed) { toast.success('Receipt sent to the printer'); return; }
+    if (till.transport !== 'none') toast.error(`${till.reason || 'Printer not available'} — opening the print dialog`);
+    printViaBrowser();
+  };
+
+  const printViaBrowser = () => {
     if (!printRef.current) return;
     // Print into a hidden iframe in THIS document. The old version opened a
     // popup (window.open + document.write) and printed from its load handler,
@@ -114,6 +137,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
     };
     setTimeout(tryPrint, 150);
   };
+  printFnRef.current = handlePrint;
 
   return (
     <div className="space-y-3" data-testid="receipt">
@@ -244,7 +268,15 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           onClick={handlePrint}
           data-testid="receipt-print-btn"
           className="flex-1 bg-primary text-primary-foreground rounded-md py-2 text-sm font-medium hover:opacity-90 transition"
-        >Print Receipt</button>
+        >{tillReady ? 'Print Receipt' : 'Print Receipt'}</button>
+        {tillReady && (
+          <button
+            onClick={printViaBrowser}
+            data-testid="receipt-print-dialog-btn"
+            className="border border-border rounded-md px-3 py-2 text-sm font-medium hover:bg-accent transition"
+            title="Use the browser's print window instead of the till printer"
+          >Print dialog</button>
+        )}
         {sale.customer_phone && (
           <button
             onClick={() => {

@@ -9,11 +9,24 @@
  * shrinks to a tiny status pill when idle, and expands into a full call panel
  * during a session so the operator can keep working without losing context.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Phone, PhoneOff, PhoneIncoming, Mic, MicOff, Pause, Play, Grid3x3, ArrowRightLeft, X, Video, VideoOff } from 'lucide-react';
+import { toast } from 'sonner';
 import { useVoip } from '../../context/VoipContext';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+
+// Screens the operator has dismissed the pill on, kept per device so it stays
+// out of the way next time too (iter413).
+const HIDDEN_KEY = '5812:softphone-hidden-paths';
+const readHidden = () => {
+  try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]'); } catch { return []; }
+};
+const writeHidden = (paths) => {
+  try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(paths)); } catch { /* private mode */ }
+  try { window.dispatchEvent(new Event('softphone-visibility')); } catch { /* SSR */ }
+};
 
 const statusColor = (s) => ({ registered: 'bg-emerald-500', registering: 'bg-amber-400 animate-pulse',
   failed: 'bg-red-500', unconfigured: 'bg-slate-400', offline: 'bg-slate-400' }[s] || 'bg-slate-400');
@@ -30,24 +43,65 @@ export default function SoftphonePanel() {
   const showIncoming = v.callState === 'incoming';
   const inSession = ['outgoing', 'in-call', 'held'].includes(v.callState);
 
+  // Hidden on this screen? A call in progress always shows itself regardless.
+  const location = useLocation();
+  const [hiddenPaths, setHiddenPaths] = useState(readHidden);
+  useEffect(() => {
+    const sync = () => setHiddenPaths(readHidden());
+    window.addEventListener('softphone-visibility', sync);
+    return () => window.removeEventListener('softphone-visibility', sync);
+  }, []);
+  const here = location.pathname;
+  const hiddenHere = hiddenPaths.includes(here);
+
+  const hideHere = (e) => {
+    e.stopPropagation();
+    const next = Array.from(new Set([...hiddenPaths, here]));
+    setHiddenPaths(next);
+    writeHidden(next);
+    setDialerOpen(false);
+    toast.success('Softphone hidden on this screen', {
+      description: 'Calls still come through — use the phone button in the top bar.',
+      action: {
+        label: 'Undo',
+        onClick: () => { const back = next.filter(p => p !== here); setHiddenPaths(back); writeHidden(back); },
+      },
+    });
+  };
+
   // ── the persistent tiny registration pill ───────────────────
   const pill = (
-    <button
-      type="button"
-      onClick={() => setDialerOpen(x => !x)}
-      data-testid="softphone-status-pill"
-      title={v.statusReason || v.status}
-      className="fixed right-4 bottom-24 z-40 flex items-center gap-2 rounded-full bg-slate-900/90 text-white text-xs px-3 py-2 shadow-lg backdrop-blur hover:bg-slate-800 transition"
+    <div
+      className="fixed right-4 bottom-24 z-40 flex items-center rounded-full bg-slate-900/90 text-white text-xs shadow-lg backdrop-blur"
+      data-testid="softphone-pill-wrap"
     >
-      <span className={`inline-block w-2 h-2 rounded-full ${statusColor(v.status)}`} />
-      <Phone size={13} />
-      <span className="hidden sm:inline">{v.extension ? `Ext ${v.extension}` : 'No softphone'}</span>
-    </button>
+      <button
+        type="button"
+        onClick={() => setDialerOpen(x => !x)}
+        data-testid="softphone-status-pill"
+        title={v.statusReason || v.status}
+        className="flex items-center gap-2 rounded-l-full py-2 pl-3 pr-2 hover:bg-slate-800 transition rounded-r-full"
+      >
+        <span className={`inline-block w-2 h-2 rounded-full ${statusColor(v.status)}`} />
+        <Phone size={13} />
+        <span className="hidden sm:inline">{v.extension ? `Ext ${v.extension}` : 'No softphone'}</span>
+      </button>
+      <button
+        type="button"
+        onClick={hideHere}
+        data-testid="softphone-hide-btn"
+        title="Hide on this screen"
+        aria-label="Hide the softphone on this screen"
+        className="rounded-r-full py-2 pl-1.5 pr-2.5 text-slate-300 hover:text-white hover:bg-slate-800 transition"
+      >
+        <X size={12} />
+      </button>
+    </div>
   );
 
   return (
     <>
-      {pill}
+      {!hiddenHere && pill}
 
       {/* ── incoming call toast ────────────────────────────── */}
       {showIncoming && (
@@ -150,7 +204,7 @@ export default function SoftphonePanel() {
       )}
 
       {/* ── dialer popover (opens on pill click when idle) ───── */}
-      {dialerOpen && !inSession && !showIncoming && (
+      {dialerOpen && !inSession && !showIncoming && !hiddenHere && (
         <div className="fixed right-4 bottom-40 z-40 w-72 max-w-[calc(100vw-2rem)] max-h-[70vh] overflow-y-auto rounded-xl bg-white shadow-2xl border border-slate-200 p-4" data-testid="dialer-popover">
           <div className="flex items-center justify-between mb-3">
             <div>

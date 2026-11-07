@@ -2461,3 +2461,17 @@ Re-running a move is therefore safe and repeatable.
   a closed group — the reason a Coordinator could not find Social Work.
 - Receipts and invoices print again: they no longer depend on a popup window, and
   the receipt QR is included in the printed copy.
+
+### 2026-11-07 — Till printing, sale reversal, softphone dismissal
+- Receipts print straight to the thermal roll with no Print window: USB,
+  Bluetooth or a network printer, set up per till from the Printer button on
+  Sales. The drawer opens on cash sales through the printer cable. iPhones and
+  iPads keep the normal Print window, as Apple allows nothing else.
+- A till remembers its printer, its peripherals and its store even after the
+  cashier signs out; a store-locked kiosk still locks to its store behind the
+  cashier PIN.
+- Deleting a sale now really undoes it: the items go back into stock (packs and
+  variants included), the takings come out of the books, the customer's totals
+  are corrected and any booking it sold is released.
+- The floating softphone can be dismissed per screen with its ×, and brought
+  back from the phone button's dialer.

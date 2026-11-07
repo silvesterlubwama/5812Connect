@@ -11,6 +11,19 @@ export default function Dialer({ open, onClose }) {
   const { initiateCall, callableContacts, isInCall } = useCall();
   const [searchTerm, setSearchTerm] = useState('');
   const [calling, setCalling] = useState(false);
+  // Way back for anyone who dismissed the floating phone on this screen.
+  const here = typeof window !== 'undefined' ? window.location.pathname : '';
+  const hiddenPaths = (() => {
+    try { return JSON.parse(localStorage.getItem('5812:softphone-hidden-paths') || '[]'); } catch { return []; }
+  })();
+  const softphoneHiddenHere = hiddenPaths.some(p => here.endsWith(p));
+  const restoreSoftphone = () => {
+    const next = hiddenPaths.filter(p => !here.endsWith(p));
+    try { localStorage.setItem('5812:softphone-hidden-paths', JSON.stringify(next)); } catch { /* ignore */ }
+    window.dispatchEvent(new Event('softphone-visibility'));
+    toast.success('Softphone shown again on this screen');
+    onClose?.();
+  };
 
   const filteredContacts = callableContacts.filter(c => {
     if (!searchTerm) return true;
@@ -88,7 +101,17 @@ export default function Dialer({ open, onClose }) {
           )}
         </div>
 
-        <div className="p-3 border-t border-border text-center">
+        <div className="p-3 border-t border-border text-center space-y-1.5">
+          {softphoneHiddenHere && (
+            <button
+              type="button"
+              onClick={restoreSoftphone}
+              className="text-[11px] text-primary underline underline-offset-2"
+              data-testid="restore-softphone-btn"
+            >
+              Show the floating phone on this screen again
+            </button>
+          )}
           <p className="text-[10px] text-muted-foreground">WebRTC calls - unlimited audio & video, screen sharing, group calls</p>
         </div>
       </DialogContent>

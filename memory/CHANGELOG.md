@@ -3064,3 +3064,75 @@ embedded as a data URL — no CDN script, no race with `print()`.
 Verified in-browser on a reprinted sale and a draft invoice: no popup opens, and
 the print document contains the full receipt (logo, lines, total, QR, footer) and
 the full A4 invoice.
+
+## iter411 — 2026-11-07 — Till printing: straight to the thermal roll
+
+New `utils/tillPrinter.js` (ESC/POS builder + three transports) and
+`components/pos/TillPrinterDialog.jsx` ("Printer" button on Sales, green when
+ready). Set up per till, on the computer itself:
+- **USB** — Web Serial (desktop Chrome/Edge) or WebUSB (Android), paired through
+  the existing `deviceRoles` 'receipt_printer' role.
+- **Bluetooth** — Web Bluetooth GATT across the usual thermal write services
+  (0xFFE0 / 0x18F0 / ISSC / Nordic), written in 180-byte chunks, silent
+  reconnect via `navigator.bluetooth.getDevices()`.
+- **Network** — browsers cannot open a raw socket, so the bytes go to the new
+  `POST /api/pos/print-raw` (routers/pos_print.py) which forwards them to the
+  printer's port 9100. Resolves the host first and refuses anything that is not
+  private/loopback/link-local, caps a job at 256KB, 5s connect timeout.
+- **Browser print dialog** — the fallback, and the only option on iOS; the
+  dialog says so rather than failing silently.
+Receipt layout: 32 or 48 columns by paper width, right-aligned amounts, native
+ESC/POS QR (GS ( k), paper cut. The cash drawer kicks (ESC p) down the printer
+cable on cash sales when no dedicated drawer port is connected.
+
+`Receipt.jsx` now prints through the till printer first and falls back to the
+hidden-iframe dialog, with a "Print dialog" button to force it; `autoPrint`
+replaces the old `window.print()` in ProductsPage, which printed the whole POS
+page. The dead store-level `print_mode` select was replaced with a link to the
+till printer dialog. A proxy 502/504 no longer shows Cloudflare's own text as
+the printer error.
+
+Device memory (asked for explicitly): all till/peripheral preferences live in
+localStorage — `5812:till-printer`, `5812:device-role-pairings`,
+`5812_pos_store_id`, `5812_pos_kiosk`, `5812_kiosk_locked` — and
+`secureStorage.clearAll()` only drops token/user keys, so a sign-out keeps them.
+Verified in-browser: set a printer + store binding, signed out (token gone,
+settings kept), signed back in → "Printer Ready" and still bound to Zimba Farm;
+with the kiosk flag the POS still locks to that store behind the cashier PIN.
+A comment in secureStorage warns against ever using localStorage.clear().
+
+Tests: tests/test_iter411_till_printer.py (6) — real socket round-trip to a
+listening server, dead printer, public-host refusal, empty/oversized/invalid job.
+
+## iter412 — 2026-11-07 — Deleting a sale now actually reverses it
+
+`DELETE /api/sales/{id}` only ever restored the store's stock column, and even
+that in the wrong units for multi-packs (`qty`, not `qty * units_per_pack`). The
+variant's own stock, the customer's running totals, the money in the ledger and
+any booking/ticket the sale issued were all left behind. New
+`_reverse_sale_side_effects()` in routers/sales.py now puts all of it back and
+is shared with the 60-second void, which also never touched the ledger:
+- variant stock + the store column in base units,
+- `customer_accounts` totals and the receipt from their history,
+- the sale's journal entry via `reverse_journal_entry` (deleted outright while
+  the period is open, contra entry once locked),
+- bookings and event tickets carrying that `sale_id`,
+- the cash-account balance cache.
+Deleting an already-voided sale skips the reversal so stock is not given back
+twice. The response and the POS confirm dialog now say what will happen.
+
+Tests: tests/test_iter412_sale_delete_reversal.py (6) — pack maths, variant
+stock, the sale row, the ledger entry gone, customer totals, and no
+double-restore after a void.
+
+## iter413 — 2026-11-07 — Dismiss the softphone per screen
+
+The floating softphone pill has an × . Hiding it applies to the screen you are
+on and is remembered per device (`5812:softphone-hidden-paths`), so it stays out
+of the way next time; other screens keep theirs. An incoming call and an
+in-progress call still show themselves regardless, and the top-bar phone button
+still places calls. The toast offers Undo, and the Dialer carries a "Show the
+floating phone on this screen again" link for later.
+Verified in-browser at 1920 and 390: hidden on the dashboard, still present on
+Comms, still hidden after navigating away and after a reload, restored from the
+dialer, no overflow at 390px.
