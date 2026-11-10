@@ -28,7 +28,7 @@ import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import { CrossCampusMoveDialog } from '../components/CrossCampusMoveDialog';
-import { ArrowRightLeft, Store, FileText, RotateCcw } from 'lucide-react';
+import { ArrowRightLeft, Store, FileText, RotateCcw, PackageX, Truck } from 'lucide-react';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
 import { authApi, cashDropsApi, shiftsApi } from '../services/api';
@@ -37,7 +37,9 @@ import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
 import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer, describePeripheralSupport } from '../utils/posPeripherals';
 import TillPrinterDialog from '../components/pos/TillPrinterDialog';
 import { RefundDialog } from '../components/pos/RefundDialog';
-import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText } from '../utils/tillPrinter';
+import { ReturnsReportDialog } from '../components/pos/ReturnsReportDialog';
+import { TransferStockDialog } from '../components/pos/TransferStockDialog';
+import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText, printQuoteSlip, quoteSlipText } from '../utils/tillPrinter';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
@@ -203,11 +205,15 @@ export default function ProductsPage() {
     const active = user?.active_campus_id;
     if (active && active !== saleLocationId) setSaleLocationId(active);
   }, [user?.active_campus_id]);  // eslint-disable-line react-hooks/exhaustive-deps
-  // Friendly label for the bound store (custom store_name → location name → fallback)
+  // Friendly label for the bound store. The LOCATION's own name leads, because
+  // a shop's trading name in Store Settings can be anything (every store here
+  // was named "Zimba Farm", which made the switcher look broken — iter416).
   const posBoundStoreLabel = (() => {
     if (!saleLocationId) return 'No store assigned — set in Store Settings';
     const loc = (locations || []).find(l => l.id === saleLocationId);
-    return (storeSettings.location_id === saleLocationId && storeSettings.store_name) || loc?.name || saleLocationId;
+    const trading = storeSettings.location_id === saleLocationId ? storeSettings.store_name : '';
+    if (loc?.name && trading && trading !== loc.name) return `${loc.name} · ${trading}`;
+    return loc?.name || trading || saleLocationId;
   })();
   // Whether this device is a dedicated POS kiosk (URL was /pos/:storeId)
   const isPosKiosk = typeof window !== 'undefined' && localStorage.getItem('5812_pos_kiosk') === 'true';
@@ -547,6 +553,55 @@ export default function ProductsPage() {
         columns: 48, ...extra,
       }));
     }
+  };
+
+  // "What would this cost?" — the basket, priced up, watermarked so it can
+  // never pass as a receipt. Nothing is saved, nothing leaves the shelf.
+  const printQuote = async () => {
+    if (!cart.length) return;
+    const settings = storeSettings || {};
+    const items = cart.map(item => {
+      const calc = calcLine(item, cart, productsById[item.product_id] || null);
+      return { name: item.name, qty: item.qty, price: item.price, line_total: calc.line_total };
+    });
+    const quote = {
+      quote_number: `QUOTE-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-4)}`,
+      created_at: new Date().toISOString(),
+      customer_name: customerName && customerName !== 'Walk-in Customer' ? customerName : '',
+      store_label: locations.find(l => l.id === saleLocationId)?.name || '',
+      items,
+      subtotal: cartTotals.subtotal,
+      discount: cartTotals.discount_total,
+      total: cartTotals.total,
+    };
+    const extra = { preparedBy: activeCashier?.name || user?.name || '', validDays: 7 };
+    const res = await printQuoteSlip(quote, settings, extra);
+    if (res.printed) { toast.success('Quote printed — marked NOT A RECEIPT'); return; }
+    printSlipFallback(quote.quote_number, quoteSlipText(quote, {
+      storeName: settings.store_name || '58:12 Global Connect',
+      currency: settings.currency || activeCurrency || 'UGX',
+      columns: 48, ...extra,
+    }));
+  };
+
+  // What keeps coming back — by product and by reason.
+  const [returnsReport, setReturnsReport] = useState(null);
+  const [returnsRange, setReturnsRange] = useState(() => {
+    const end = new Date();
+    const start = new Date(Date.now() - 29 * 86400000);
+    return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+  });
+  const [returnsLoading, setReturnsLoading] = useState(false);
+  const [showReturns, setShowReturns] = useState(false);
+  const [transferProduct, setTransferProduct] = useState(null);
+  const openReturnsReport = async (range = returnsRange) => {
+    setReturnsLoading(true);
+    try {
+      const r = await salesApi.refundReport({ ...range, location_id: saleLocationId || undefined });
+      setReturnsReport(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not build the returns report');
+    } finally { setReturnsLoading(false); }
   };
 
   const openZReport = async () => {
@@ -912,6 +967,15 @@ export default function ProductsPage() {
           >
             <FileText size={12} /> {zLoading ? 'Building…' : 'Z-Report'}
           </Button>
+          {/* What keeps coming back */}
+          <Button
+            variant="outline" size="sm" className="h-8 text-xs gap-1"
+            onClick={() => { setShowReturns(true); openReturnsReport(); }}
+            data-testid="returns-report-btn"
+            title="Returns by product and by reason"
+          >
+            <PackageX size={12} /> Returns
+          </Button>
           {/* Till printer — straight to the roll, no browser dialog */}
           <Button
             variant="outline" size="sm"
@@ -1186,6 +1250,10 @@ export default function ProductsPage() {
                     Parked ({drafts.length})
                   </Button>
                 </div>
+                <Button variant="ghost" size="sm" className="w-full gap-1.5 text-xs text-muted-foreground"
+                  disabled={cart.length === 0} onClick={printQuote} data-testid="print-quote-btn">
+                  <FileText size={13} /> Price it up (not a receipt)
+                </Button>
               </div>
             </div>
           </div>
@@ -1207,6 +1275,12 @@ export default function ProductsPage() {
                       <p className="font-semibold text-sm leading-tight flex-1">{p.name}</p>
                       <div className="flex gap-1 ml-2">
                         <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => openEditProduct(p)} data-testid="edit-product-btn"><Edit2 size={11} /></Button>
+                        {!p.has_variants && locations.length > 1 && (
+                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setTransferProduct(p)}
+                            data-testid={`transfer-stock-${p.id}`} title="Send stock to another store">
+                            <Truck size={11} />
+                          </Button>
+                        )}
                         {(user?.role === 'admin' || user?.role === 'system_admin') && (
                           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setMoveProduct(p)} data-testid="move-product-btn" title="Move to another campus">
                             <ArrowRightLeft size={11} />
@@ -1676,6 +1750,17 @@ export default function ProductsPage() {
         open={!!refundSale}
         onOpenChange={(v) => { if (!v) setRefundSale(null); }}
         currency={storeSettings?.currency || 'UGX'}
+        cart={cart}
+        cartTotal={cartTotals.total}
+        onExchanged={async (res, lines, amount, reason) => {
+          const sale = refundSale;
+          toast.success(res?.message || 'Exchanged');
+          await printPartRefund(sale, lines, amount, reason || 'Exchanged');
+          setCart([]);
+          setLastReceipt(res?.sale || null);
+          setShowReceipt(true);
+          fetchAll();
+        }}
         onDone={async (res, lines, amount, reason) => {
           const sale = refundSale;
           toast.success(res?.message || 'Refunded — stock restored');
@@ -1683,6 +1768,24 @@ export default function ProductsPage() {
           await printPartRefund(sale, lines, amount, reason);
           fetchAll();
         }}
+      />
+      <ReturnsReportDialog
+        report={returnsReport}
+        range={returnsRange}
+        setRange={setReturnsRange}
+        loading={returnsLoading}
+        open={showReturns}
+        onOpenChange={setShowReturns}
+        onRefresh={openReturnsReport}
+        currency={storeSettings?.currency || activeCurrency || 'UGX'}
+      />
+      <TransferStockDialog
+        product={transferProduct}
+        locations={locations}
+        fromLocationId={saleLocationId}
+        open={!!transferProduct}
+        onOpenChange={(v) => { if (!v) setTransferProduct(null); }}
+        onDone={() => fetchAll()}
       />
       <TillPrinterDialog open={showTillPrinter} onOpenChange={(v) => { setShowTillPrinter(v); if (!v) isTillReady().then(setTillPrinterReady); }} />
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>

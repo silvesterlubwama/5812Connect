@@ -887,6 +887,152 @@ async def refund_sale_lines(sale_id: str, data: RefundCreate, current_user: dict
     }
 
 
+class ExchangeCreate(BaseModel):
+    returns: List[RefundLine]
+    items: List[dict]
+    payment_method: Optional[str] = None
+    reason: Optional[str] = "Exchange"
+    total: Optional[float] = None
+    model_config = {"extra": "allow"}
+
+
+@router.post("/sales/{sale_id}/exchange")
+async def exchange_sale_lines(sale_id: str, data: ExchangeCreate, current_user: dict = Depends(get_current_user)):
+    """Swap a returned item for another there and then — the customer pays, or
+    is given, only the difference.
+
+    It is a part refund and a fresh sale stitched together: the refund puts the
+    returned units back and takes that money out, the new sale takes the
+    replacement units off the shelf and puts its money in, so the ledger nets to
+    exactly the difference that crossed the counter (iter416).
+    """
+    if not data.items:
+        raise HTTPException(status_code=400, detail="Put the replacement items in the basket first")
+
+    refund = await refund_sale_lines(
+        sale_id,
+        RefundCreate(items=data.returns, reason=data.reason or "Exchange",
+                     refund_method="exchange"),
+        current_user,
+    )
+    original = refund["sale"]
+    refunded = float(refund["refund"]["amount"])
+    new_total = float(data.total if data.total is not None
+                      else sum(float(i.get("line_total") if i.get("line_total") not in (None, "")
+                                     else float(i.get("price") or 0) * float(i.get("qty") or 0))
+                               for i in data.items))
+    difference = round(new_total - refunded, 2)
+
+    new_sale = await create_sale(SaleCreate(
+        items=data.items,
+        customer_name=original.get("customer_name") or "Walk-in Customer",
+        customer_phone=original.get("customer_phone"),
+        customer_id=original.get("customer_id"),
+        total=new_total,
+        payment_method=data.payment_method or original.get("payment_method") or "cash",
+        location_id=original.get("location_id"),
+        notes=f"Exchange against receipt {original.get('receipt_number') or sale_id}",
+    ), current_user)
+
+    new_id = new_sale.get("id") if isinstance(new_sale, dict) else None
+    await db.sales.update_one({"id": new_id}, {"$set": {
+        "exchange_of": sale_id,
+        "exchange_credit": refunded,
+        "exchange_difference": difference,
+    }})
+    await db.sales.update_one({"id": sale_id}, {"$set": {"exchanged_for": new_id}})
+
+    if difference >= 0:
+        message = (f"Exchanged — {('customer pays ' + format(difference, ',.0f')) if difference else 'nothing to pay'}")
+    else:
+        message = f"Exchanged — give back {abs(difference):,.0f}"
+    return {
+        "message": message,
+        "refund": refund["refund"],
+        "credit": refunded,
+        "new_total": new_total,
+        "difference": difference,
+        "sale": {**(new_sale if isinstance(new_sale, dict) else {}),
+                 "exchange_of": sale_id, "exchange_credit": refunded,
+                 "exchange_difference": difference},
+        "original": refund["sale"],
+    }
+
+
+@router.get("/sales/refund-report")
+async def refund_report(start: Optional[str] = None, end: Optional[str] = None,
+                        location_id: Optional[str] = None,
+                        current_user: dict = Depends(get_current_user)):
+    """What keeps coming back — by product and by reason.
+
+    Counted by the day the refund was GIVEN, so it reconciles with the till.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    start = (start or today)[:10]
+    end = (end or today)[:10]
+    window = {"$gte": f"{start}T00:00:00", "$lte": f"{end}T23:59:59.999999"}
+
+    query: dict = {"refunds.at": window}
+    loc = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    if loc:
+        query["location_id"] = loc
+
+    by_reason: dict = {}
+    by_product: dict = {}
+    total_amount = 0.0
+    total_count = 0
+    total_qty = 0.0
+    sales = await db.sales.find(query, {"_id": 0, "refunds": 1, "receipt_number": 1}).to_list(5000)
+    for sale in sales:
+        for ref in (sale.get("refunds") or []):
+            at = str(ref.get("at") or "")
+            if not (window["$gte"] <= at <= window["$lte"]):
+                continue
+            reason = (ref.get("reason") or "").strip() or "No reason given"
+            amount = float(ref.get("amount") or 0)
+            total_amount += amount
+            total_count += 1
+            r = by_reason.setdefault(reason, {"reason": reason, "count": 0, "qty": 0.0, "amount": 0.0})
+            r["count"] += 1
+            r["amount"] += amount
+            for line in (ref.get("items") or []):
+                qty = float(line.get("qty") or 0)
+                line_amount = float(line.get("line_total") or 0)
+                total_qty += qty
+                r["qty"] += qty
+                key = line.get("product_id") or line.get("name") or "Unknown"
+                p = by_product.setdefault(key, {
+                    "product_id": line.get("product_id"), "name": line.get("name") or "Item",
+                    "qty": 0.0, "amount": 0.0, "count": 0, "reasons": {},
+                })
+                p["qty"] += qty
+                p["amount"] += line_amount
+                p["count"] += 1
+                p["reasons"][reason] = round(p["reasons"].get(reason, 0) + qty, 2)
+
+    def _round(rows, keys):
+        for row in rows:
+            for k in keys:
+                row[k] = round(row[k], 2)
+        return rows
+
+    products = _round(sorted(by_product.values(), key=lambda r: -r["qty"]), ["qty", "amount"])
+    reasons = _round(sorted(by_reason.values(), key=lambda r: -r["amount"]), ["qty", "amount"])
+    store_name = ""
+    if loc:
+        store = await db.locations.find_one({"id": loc}, {"_id": 0, "name": 1})
+        store_name = (store or {}).get("name", "")
+    return {
+        "start": start, "end": end, "location_id": loc, "store_name": store_name,
+        "refunds_count": total_count,
+        "refunds_total": round(total_amount, 2),
+        "items_returned": round(total_qty, 2),
+        "by_product": products,
+        "by_reason": reasons,
+        "worst": products[0] if products else None,
+    }
+
+
 # ========== DRAFT / PARKED SALES ==========
 
 @router.get("/sales/z-report")

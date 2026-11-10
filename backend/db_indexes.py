@@ -221,6 +221,14 @@ async def _ensure_finance_indexes():
     await db.chart_account_transfers.create_index("to_account_id")
 
     await db.sales.create_index([("location_id", 1), ("created_at", -1)])
+    # iter416 — one row per store, or a shop's name and payment methods look
+    # unsaved because find_one picked a different duplicate each time.
+    await _recreate_index(
+        db.store_settings, "org_location_unique",
+        [("organization_id", 1), ("location_id", 1)], unique=True)
+    await db.stock_transfers.create_index([("from_location_id", 1), ("created_at", -1)])
+    await db.stock_transfers.create_index([("to_location_id", 1), ("created_at", -1)])
+    await db.stock_transfers.create_index("product_id")
     await db.sales.create_index("receipt_number")
     await db.sales.create_index("customer_id")
     await db.sales.create_index([("deposit_to_account_id", 1), ("voided", 1)])

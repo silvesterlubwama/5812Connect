@@ -427,6 +427,69 @@ export function buildZReportBytes(report, opts = {}) {
   return bytes(...parts);
 }
 
+/**
+ * A price-it-up slip: what a basket WOULD cost. Watermarked so it can never be
+ * mistaken for a receipt — the band repeats at the top, between the totals and
+ * at the foot, because a customer only ever reads one end of the roll.
+ */
+export function buildQuoteBytes(quote, opts = {}) {
+  const {
+    storeName = '58:12 Global Connect', currency = 'UGX', columns = 48,
+    validDays = 7, preparedBy = '', note = '',
+  } = opts;
+  const items = quote.items || [];
+  const band = `*** ${'NOT A RECEIPT'} ***`;
+  const centred = (s) => `${' '.repeat(Math.max(0, Math.floor((columns - s.length) / 2)))}${s}\n`;
+  const parts = [bytes(INIT, ALIGN_CENTER, BOLD_ON, DOUBLE_ON, `${storeName}\n`, DOUBLE_OFF,
+                       'PRICE QUOTE\n', BOLD_OFF)];
+  const push = (...p) => parts.push(bytes(...p));
+
+  push(BOLD_ON, `${band}\n`, BOLD_OFF);
+  if (quote.quote_number) push(`${quote.quote_number}\n`);
+  push(ALIGN_LEFT, '-'.repeat(columns) + '\n');
+  push(row('Prepared', (quote.created_at || new Date().toISOString()).slice(0, 19).replace('T', ' '), columns));
+  if (preparedBy) push(row('By', String(preparedBy).slice(0, 20), columns));
+  if (quote.customer_name) push(row('For', String(quote.customer_name).slice(0, 20), columns));
+  if (quote.store_label) push(row('At', String(quote.store_label).slice(0, 20), columns));
+  push('-'.repeat(columns) + '\n');
+
+  items.forEach(it => {
+    const name = String(it.product_name || it.name || 'Item');
+    const qty = it.qty ?? it.quantity ?? 1;
+    const line = it.line_total ?? (Number(it.price || 0) * qty);
+    push(`${name.slice(0, columns)}\n`);
+    push(row(`  ${qty} x ${Number(it.price || 0).toLocaleString()}`, Number(line).toLocaleString(), columns));
+  });
+
+  push('-'.repeat(columns) + '\n');
+  if (quote.subtotal != null) push(row('Subtotal', money(quote.subtotal, currency), columns));
+  if (quote.discount) push(row('Discount', `-${money(quote.discount, currency)}`, columns));
+  if (quote.tax) push(row('Tax', money(quote.tax, currency), columns));
+  push(BOLD_ON, DOUBLE_ON, row('WOULD COST', money(quote.total, currency), Math.floor(columns / 2)),
+       DOUBLE_OFF, BOLD_OFF);
+  push(ALIGN_CENTER, BOLD_ON, `${band}\n`, BOLD_OFF, ALIGN_LEFT);
+  push('-'.repeat(columns) + '\n');
+  push(`Nothing has been paid and nothing has\nbeen set aside. Prices hold for ${validDays} day(s),\nsubject to stock.\n`);
+  if (note) push(`${note}\n`);
+
+  push('\n', ALIGN_CENTER, BOLD_ON, DOUBLE_ON, 'NOT A RECEIPT\n', DOUBLE_OFF, BOLD_OFF);
+  push(centred('Keep this for reference only'), '\n\n\n', CUT);
+  return bytes(...parts);
+}
+
+export async function printQuoteSlip(quote, storeSettings = {}, extra = {}) {
+  const cfg = getTillConfig();
+  if (cfg.connection === 'none') return { printed: false, transport: 'none', reason: 'No till printer set up' };
+  return sendBytes(buildQuoteBytes(quote, {
+    storeName: storeSettings.store_name || '58:12 Global Connect',
+    currency: storeSettings.currency || 'UGX',
+    columns: columnsFor(cfg.paper),
+    preparedBy: extra.preparedBy || '',
+    validDays: extra.validDays || 7,
+    note: extra.note || '',
+  }));
+}
+
 export async function printRefundSlip(sale, storeSettings = {}, extra = {}) {
   const cfg = getTillConfig();
   if (cfg.connection === 'none') return { printed: false, transport: 'none', reason: 'No till printer set up' };
@@ -473,6 +536,9 @@ export function refundSlipText(sale, opts = {}) {
 }
 export function zReportText(report, opts = {}) {
   return _decode(buildZReportBytes(report, opts));
+}
+export function quoteSlipText(quote, opts = {}) {
+  return _decode(buildQuoteBytes(quote, opts));
 }
 
 /** Strip the ESC/POS control bytes back out so the text can be shown or printed. */

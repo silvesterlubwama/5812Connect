@@ -14,12 +14,14 @@ const unitPrice = (it) => {
   return Number(it.price || 0);
 };
 
-/** Return one line (or a few units of it) off a receipt — the rest stands. */
-export const RefundDialog = ({ sale, open, onOpenChange, currency = 'UGX', onDone }) => {
+/** Return one line (or a few units of it) off a receipt — the rest stands.
+ *  With items in the basket it can also swap: the customer pays the difference. */
+export const RefundDialog = ({ sale, open, onOpenChange, currency = 'UGX', onDone, cart = [], cartTotal = 0, onExchanged }) => {
   const [qtys, setQtys] = useState({});
   const [reason, setReason] = useState('');
   const [method, setMethod] = useState('');
   const [busy, setBusy] = useState(false);
+  const [exchange, setExchange] = useState(false);
 
   const lines = useMemo(() => (sale?.items || []).map((it, i) => ({
     ...it,
@@ -31,6 +33,7 @@ export const RefundDialog = ({ sale, open, onOpenChange, currency = 'UGX', onDon
   const money = (n) => `${currency} ${Number(n || 0).toLocaleString()}`;
   const amount = lines.reduce((sum, l) => sum + (Number(qtys[l._i] || 0) * l.unit), 0);
   const picked = lines.filter(l => Number(qtys[l._i] || 0) > 0);
+  const difference = Number(cartTotal || 0) - amount;
 
   const bump = (l, delta) => setQtys(q => {
     const next = Math.max(0, Math.min(l.remaining, Number(q[l._i] || 0) + delta));
@@ -41,24 +44,38 @@ export const RefundDialog = ({ sale, open, onOpenChange, currency = 'UGX', onDon
     if (!picked.length) { toast.error('Pick what is coming back'); return; }
     setBusy(true);
     try {
-      const res = await salesApi.refund(sale.id, {
-        items: picked.map(l => ({
-          product_id: l.product_id, variant_id: l.variant_id || null,
-          name: l.name, qty: Number(qtys[l._i]),
-        })),
-        reason: reason.trim(),
-        refund_method: method || undefined,
-      });
-      onDone?.(res.data, picked.map(l => ({
+      const returnedLines = picked.map(l => ({
         name: l.name || l.product_name || 'Item',
         qty: Number(qtys[l._i]),
         price: l.unit,
         line_total: Number(qtys[l._i]) * l.unit,
-      })), amount, reason.trim());
-      setQtys({}); setReason(''); setMethod('');
+      }));
+      if (exchange) {
+        const res = await salesApi.exchange(sale.id, {
+          returns: picked.map(l => ({
+            product_id: l.product_id, variant_id: l.variant_id || null,
+            name: l.name, qty: Number(qtys[l._i]),
+          })),
+          items: cart,
+          total: cartTotal,
+          reason: reason.trim() || 'Exchange',
+        });
+        onExchanged?.(res.data, returnedLines, amount, reason.trim());
+      } else {
+        const res = await salesApi.refund(sale.id, {
+          items: picked.map(l => ({
+            product_id: l.product_id, variant_id: l.variant_id || null,
+            name: l.name, qty: Number(qtys[l._i]),
+          })),
+          reason: reason.trim(),
+          refund_method: method || undefined,
+        });
+        onDone?.(res.data, returnedLines, amount, reason.trim());
+      }
+      setQtys({}); setReason(''); setMethod(''); setExchange(false);
       onOpenChange(false);
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'Refund failed');
+      toast.error(e.response?.data?.detail || (exchange ? 'Exchange failed' : 'Refund failed'));
     } finally { setBusy(false); }
   };
 
@@ -103,7 +120,7 @@ export const RefundDialog = ({ sale, open, onOpenChange, currency = 'UGX', onDon
           </div>
           <div>
             <Label className="text-xs">Money back as</Label>
-            <Select value={method || (sale?.payment_method || 'cash')} onValueChange={setMethod}>
+            <Select value={method || (sale?.payment_method || 'cash')} onValueChange={setMethod} disabled={exchange}>
               <SelectTrigger data-testid="refund-method-select"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="cash">Cash</SelectItem>
@@ -115,15 +132,33 @@ export const RefundDialog = ({ sale, open, onOpenChange, currency = 'UGX', onDon
           </div>
         </div>
 
+        {cart.length > 0 && (
+          <label className="flex items-start gap-2 text-sm border border-border rounded-lg px-3 py-2 cursor-pointer">
+            <input type="checkbox" className="mt-1" checked={exchange} data-testid="refund-exchange-toggle"
+                   onChange={(e) => setExchange(e.target.checked)} />
+            <span>
+              <span className="font-medium">Swap for what's in the basket</span>
+              <span className="block text-xs text-muted-foreground">
+                {cart.length} item(s) worth {money(cartTotal)} — the customer pays only the difference
+              </span>
+            </span>
+          </label>
+        )}
+
         <div className="flex justify-between items-center border-t border-border pt-3 text-sm">
-          <span className="text-muted-foreground">Refund total</span>
-          <span className="text-lg font-bold text-amber-600" data-testid="refund-total">{money(amount)}</span>
+          <span className="text-muted-foreground">{exchange ? 'Difference to pay' : 'Refund total'}</span>
+          <span className={`text-lg font-bold ${exchange && difference < 0 ? 'text-emerald-600' : 'text-amber-600'}`}
+                data-testid="refund-total">
+            {exchange
+              ? (difference >= 0 ? money(difference) : `${money(Math.abs(difference))} back`)
+              : money(amount)}
+          </span>
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} data-testid="refund-cancel-btn">Cancel</Button>
           <Button onClick={submit} disabled={busy || !picked.length} className="gap-2" data-testid="refund-submit-btn">
-            {busy ? 'Refunding…' : 'Refund & print slip'}
+            {busy ? 'Working…' : (exchange ? 'Exchange & print' : 'Refund & print slip')}
           </Button>
         </DialogFooter>
       </DialogContent>

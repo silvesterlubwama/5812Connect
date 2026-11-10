@@ -356,8 +356,7 @@ export const productsApi = {
   update: (id, data) => api.put(`/products/${id}`, data),
   delete: (id) => api.delete(`/products/${id}`),
 };
-export const salesApi = {
-  list: (params) => api.get('/sales', { params }),
+export const salesApi = {  list: (params) => api.get('/sales', { params }),
   create: (data) => api.post('/sales', data),
   update: (id, data) => api.put(`/sales/${id}`, data),
   delete: (id) => api.delete(`/sales/${id}`),
@@ -374,6 +373,10 @@ export const salesApi = {
   undo: (id) => api.post(`/sales/${id}/undo`),
   // Return one line (or a few units of it) off a receipt
   refund: (id, data) => api.post(`/sales/${id}/refund`, data),
+  exchange: (id, data) => api.post(`/sales/${id}/exchange`, data),
+  refundReport: (params) => api.get('/sales/refund-report', { params }),
+  stockTransfers: (params) => api.get('/stock-transfers', { params }),
+  transferStock: (data) => api.post('/stock-transfers', data),
   // End-of-day takings for one till
   zReport: (params) => api.get('/sales/z-report', { params }),
 };
