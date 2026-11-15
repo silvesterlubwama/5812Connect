@@ -694,7 +694,7 @@ export default function HRPage() {
                   try {
                     const r = await api.post('/hr/payslips/recompute-statutory', {});
                     toast.success(`${r.data.updated} of ${r.data.drafts} drafts updated`);
-                    load();
+                    fetchAll();
                   } catch (e) { toast.error(e.response?.data?.detail || 'Recompute failed'); }
                 }}><RefreshCw size={14} /> Recompute Statutory</Button>
               <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowRemittance(true)} data-testid="remittance-btn"><FileText size={14} /> Statutory Remittance</Button>
@@ -1360,7 +1360,16 @@ export default function HRPage() {
                             )}
                           </td>
                           <td className="px-2 py-1.5 text-right hidden sm:table-cell text-emerald-700">+{r.allowances.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                          <td className="px-2 py-1.5 text-right hidden sm:table-cell text-amber-700">-{r.deductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                          <td className="px-2 py-1.5 text-right hidden sm:table-cell text-amber-700">
+                            -{r.deductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            {/* iter419 — say plainly when stock they lost is coming off this pay */}
+                            {!!(r.stock_loss_items || []).length && (
+                              <div className="text-[10px] font-normal text-destructive" data-testid={`preview-stock-loss-${r.staff_id}`}>
+                                incl. {(r.stock_loss_items || []).reduce((t, l) => t + Number(l.amount || 0), 0).toLocaleString()} stock loss
+                                {(r.stock_loss_items || []).some(l => l.details?.part_payment) ? ' (part)' : ''}
+                              </div>
+                            )}
+                          </td>
                           <td className="px-2 py-1.5 text-right font-semibold">{r.currency} {r.net.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td className="px-2 py-1.5 text-right hidden md:table-cell text-muted-foreground">{(r.employer_contributions || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                           <td className="px-2 py-1.5 text-right hidden md:table-cell">{(r.total_cost || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>

@@ -3283,3 +3283,48 @@ tests/test_iter418_kitchen.py (16) pass, cron endpoint returns 401 unauthorised 
 numbered), a batch auto-started on intake, a manual grow-on with deaths
 (chicks→broilers at the broiler price), and a kitchen ticket through tabs and
 stages. Restaurant mode was switched back off and all ZTMP data removed.
+
+## iter419 — 2026-11-15 — Negligence onto the payslip, mortality by week, the room plan
+
+**Payroll deductions.** A negligence write-off now comes off the next payslip by
+itself. `pending_loss_lines(staff_id, available)` in routers/stock_lifecycle.py
+turns what a person still owes into payslip deduction line items; `_generate_payslips_for`
+(hr.py) adds them to `deductions` and `line_items`, and `mark_loss_deductions`
+stamps each charge with the payslip and period ONLY after the payslip is saved —
+a preview must never swallow a debt. A charge bigger than what is left of the pay
+is taken in instalments (`recovered_amount`, name carries "(part)"), so nobody's
+net pay is pushed below zero. Deleting a draft payslip calls
+`unmark_loss_deductions` and the charge is owed again. `/payslips/preview` shows
+the charge per person (`stock_loss_items`, surfaced in HRPage's deductions cell)
+and de-duplicates across several salary rows for the same person. Fixed in
+passing: the Recompute Statutory button called an undefined `load()`.
+
+**Mortality by week.** `GET /api/stock-batches/mortality` reads deaths straight
+out of the recorded write-offs (`stock_losses.batches[]`, oldest batch first) and
+buckets them into the week of the batch's own life they fell in, with mortality %
+and a reason breakdown per batch, and names the weakest run.
+`MortalityChartDialog` draws it as bars per week behind a **Mortality** button on
+the growing panel.
+
+**Per the user: deaths are only ever entered as write-offs.** The deaths box at
+grow-on is gone — `POST /stock-batches/{id}/mature` no longer accepts `lost`,
+because a write-off has already taken that bird off the batch and the shelf;
+asking again double-counted it.
+
+**The room plan.** `TablePlan` sits at the top of the till in a restaurant store:
+every table from `restaurant_tables` (comma-separated, set under Store →
+Restaurant service) plus any table in use, each showing what it owes, how far the
+food has got (ordered / cooking / food up / eating) and how long it has waited —
+red past 20 minutes. Tapping a table brings its tab to the till; takeaways queue
+below. Tracks are sized with `minmax(96px, 1fr)` because Tailwind's `grid-cols-*`
+resolved to a single column here, which gave a phone one table per row.
+
+Verified: tests/test_iter419_deductions_and_mortality.py (13 — line built,
+preview changes nothing, marking clears the debt, instalments, no pay left,
+delete reopens, ordinary write-offs never touch pay, oldest first, deaths bucketed
+by week, clean batch, weakest run, reason breakdown, empty farm) plus 96 green
+across iter411-419. Live: a negligence write-off showed as a 12,000 deduction on
+that person's payslip preview exactly once across their two salary rows; the
+mortality chart read 6 of 100 (6%) in week 1; the room plan showed 2 of 7 tables
+busy at 1920px and tiled two-up at 390px. Seeded data removed and restaurant mode
+switched back off.

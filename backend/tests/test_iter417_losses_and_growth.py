@@ -238,12 +238,15 @@ def test_deaths_during_the_period_come_out_of_the_batch(farm):
     assert batch["remaining"] == 46 and batch["lost"] == 4
 
 
-def test_growing_on_by_hand_can_record_the_deaths(farm):
+def test_deaths_written_off_first_are_not_counted_twice_at_the_changeover(farm):
+    """Deaths only ever come from a write-off — the changeover must not ask
+    again, or the same bird is deducted twice (iter419)."""
     res = _batch()
-    out = _run(life.mature_batch_now(res["batch"]["id"], {"lost": 5}, _staff_user()))
+    _loss(5, "died")                             # 50 -> 45 on the shelf and in the batch
+    out = _run(life.mature_batch_now(res["batch"]["id"], {}, _staff_user()))
     assert out["qty"] == 45
     assert _stock(BROILERS) == 45
-    assert _stock(CHICKS) == 0                   # the five that died left stock as a write-off
+    assert _stock(CHICKS) == 0
     rep = _run(life.loss_report(TODAY, TODAY, SHOP, _staff_user()))
     assert rep["items_lost"] == 5 and rep["by_reason"][0]["reason"] == "died"
 

@@ -389,6 +389,7 @@ export const stockApi = {
   pendingDeductions: (params) => api.get('/stock-losses/pending-deductions', { params }),
   setRecovery: (id, data) => api.patch(`/stock-losses/${id}/recovery`, data),
   batches: (params) => api.get('/stock-batches', { params }),
+  mortality: (params) => api.get('/stock-batches/mortality', { params }),
   createBatch: (data) => api.post('/stock-batches', data),
   matureBatch: (id, data) => api.post(`/stock-batches/${id}/mature`, data || {}),
   transformations: (params) => api.get('/stock-transformations', { params }),

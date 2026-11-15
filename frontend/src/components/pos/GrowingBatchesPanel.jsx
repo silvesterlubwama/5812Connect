@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Button } from '../ui/button';
-import { Input } from '../ui/input';
 import { Badge } from '../ui/badge';
-import { Egg, ArrowRight, Check } from 'lucide-react';
+import { Egg, ArrowRight, Check, Activity } from 'lucide-react';
+import { MortalityChartDialog } from './MortalityChartDialog';
 import { toast } from 'sonner';
 import { stockApi } from '../../services/api';
 
@@ -14,8 +14,8 @@ import { stockApi } from '../../services/api';
 export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, refreshKey }) => {
   const [batches, setBatches] = useState([]);
   const [recent, setRecent] = useState([]);
-  const [lostBy, setLostBy] = useState({});
   const [busy, setBusy] = useState('');
+  const [showMortality, setShowMortality] = useState(false);
 
   const load = useCallback(() => {
     stockApi.batches({ location_id: locationId || undefined, status: 'growing' })
@@ -29,8 +29,7 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
   const matureNow = async (batch) => {
     setBusy(batch.id);
     try {
-      const lost = Number(lostBy[batch.id] || 0);
-      const res = await stockApi.matureBatch(batch.id, lost > 0 ? { lost } : {});
+      const res = await stockApi.matureBatch(batch.id, {});
       toast.success(res.data?.message || 'Grown on');
       load(); onChanged?.();
     } catch (e) {
@@ -54,7 +53,12 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
         <Egg size={16} className="text-amber-600" />
         <h3 className="text-base font-semibold">Growing on</h3>
         <Badge variant="secondary" data-testid="growing-count">{batches.length}</Badge>
+        <Button size="sm" variant="outline" className="ml-auto h-7 gap-1 text-xs"
+                onClick={() => setShowMortality(true)} data-testid="mortality-chart-btn">
+          <Activity size={12} /> Mortality
+        </Button>
       </div>
+      <MortalityChartDialog open={showMortality} onOpenChange={setShowMortality} locationId={locationId} />
 
       {recent.map(t => (
         <div key={t.id} className="flex items-start justify-between gap-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 px-3 py-2"
@@ -63,9 +67,7 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
             <span className="font-semibold">{t.qty} {t.from_product_name}</span> became{' '}
             <span className="font-semibold">{t.to_product_name}</span> on {String(t.created_at).slice(0, 10)} —
             now worth {money(t.to_value)}.
-            {t.lost_on_the_way > 0
-              ? ` ${t.lost_on_the_way} were lost on the way.`
-              : ` Any deaths? Write them off against ${t.to_product_name}.`}
+            {t.lost_on_the_way > 0 ? ` ${t.lost_on_the_way} were lost on the way.` : ''}
           </p>
           <Button size="sm" variant="ghost" className="h-7 gap-1 shrink-0" onClick={() => acknowledge(t)}
                   data-testid={`grown-ack-${t.id}`}>
@@ -87,9 +89,6 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
               {b.lost > 0 ? ` · ${b.lost} lost so far` : ''}
             </p>
           </div>
-          <Input type="number" min="0" placeholder="deaths" className="h-8 w-24"
-                 value={lostBy[b.id] || ''} onChange={(e) => setLostBy(m => ({ ...m, [b.id]: e.target.value }))}
-                 data-testid={`batch-lost-input-${b.id}`} />
           <Button size="sm" variant="outline" className="h-8" disabled={busy === b.id}
                   onClick={() => matureNow(b)} data-testid={`batch-mature-btn-${b.id}`}>
             {busy === b.id ? 'Working…' : 'Grow on now'}

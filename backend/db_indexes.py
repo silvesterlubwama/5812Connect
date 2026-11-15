@@ -229,6 +229,12 @@ async def _ensure_finance_indexes():
     await db.stock_transfers.create_index([("from_location_id", 1), ("created_at", -1)])
     await db.stock_transfers.create_index([("to_location_id", 1), ("created_at", -1)])
     await db.stock_transfers.create_index("product_id")
+    # iter419 — payroll asks "what does this person still owe?" once per salary row.
+    await db.stock_losses.create_index([("employee_id", 1), ("recovery_status", 1)])
+    await db.stock_losses.create_index([("location_id", 1), ("created_at", -1)])
+    await db.stock_batches.create_index([("status", 1), ("matures_at", 1)])
+    await db.stock_batches.create_index([("location_id", 1), ("received_at", -1)])
+    await db.kitchen_orders.create_index([("location_id", 1), ("created_at", 1)])
     await db.sales.create_index("receipt_number")
     await db.sales.create_index("customer_id")
     await db.sales.create_index([("deposit_to_account_id", 1), ("voided", 1)])

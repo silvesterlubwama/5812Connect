@@ -2511,3 +2511,14 @@ Re-running a move is therefore safe and repeatable.
 - Stores that serve food show tables, open tabs and per-dish notes at the till,
   send tickets to a kitchen printer (or the counter roll), and have a kitchen
   screen at /kitchen where cooks move each dish from cooking to ready to served.
+
+### 2026-11-15 (later) — Deductions, mortality, the room
+- Stock lost through an employee's negligence now comes off their next payslip by
+  itself, in instalments if it is more than that month's pay, and goes back on
+  the owed list if the payslip is deleted.
+- A mortality chart shows deaths per batch week by week, with the weakest
+  hatchery run named. Deaths are only ever entered as write-offs — the
+  changeover no longer asks, so nothing is counted twice.
+- Waiters get a picture of the room: every table with what it owes, how far the
+  food has got and how long it has waited, red past 20 minutes. Tap to bring the
+  tab to the till.

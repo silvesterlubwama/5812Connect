@@ -6,6 +6,9 @@ from typing import Optional, List, Tuple
 import calendar
 import uuid
 
+from routers.stock_lifecycle import (
+    pending_loss_lines, mark_loss_deductions, unmark_loss_deductions,
+)
 from routers.payroll_engine import (
     apply_statutory_lines, compliance_lines_for, employer_totals,
     DEFAULT_LIABILITY_CODE, EMPLOYER_TYPE,
@@ -1061,6 +1064,8 @@ async def generate_payslips(data: dict, current_user: dict = Depends(require_dir
 
 @router.post("/payslips/preview")
 async def preview_payslips(data: dict, current_user: dict = Depends(require_director)):
+    # Charges already shown on an earlier row of this same dry run.
+    previewed_losses: set = set()
     """Dry-run of `/payslips/generate` — computes every staffer's gross / net
     for the given period WITHOUT writing anything to the database. Used by the
     HR Preview dialog so directors can catch surprises before drafting.
@@ -1155,6 +1160,14 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
         stat = apply_statutory_lines(compliance_cache[sal_loc], sal, gross_for_pct, period=period)
         deductions += stat["employee_deductions"]
         allowances += stat["pay_additions"]
+        # iter419 — show any negligence charge that will come off, without
+        # marking it: a preview must never swallow a debt.
+        preview_loss_lines, preview_apps = await pending_loss_lines(
+            sal["staff_id"], max(0.0, base_gross + allowances - deductions),
+            exclude=previewed_losses)
+        previewed_losses.update(a["loss_id"] for a in preview_apps)
+        for line in preview_loss_lines:
+            deductions += float(line["amount"])
         net = base_gross + allowances - deductions
 
         rows.append({
@@ -1171,6 +1184,7 @@ async def preview_payslips(data: dict, current_user: dict = Depends(require_dire
             "deductions": round(deductions, 2),
             "net": round(net, 2),
             "statutory_items": stat["items"],
+            "stock_loss_items": preview_loss_lines,
             "employer_contributions": stat["employer_cost"],
             "total_cost": round(base_gross + allowances + stat["employer_cost"], 2),
             "unpaid_leave_days": unpaid_days,
@@ -1642,6 +1656,14 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
         deductions += stat["employee_deductions"]
         allowances += stat["pay_additions"]
         items.extend(stat["items"])
+        # iter419 — stock a staff member lost through negligence comes off this
+        # pay, in instalments if it is bigger than what is left of it. Nothing
+        # is marked until the payslip below is actually saved.
+        loss_lines, loss_apps = await pending_loss_lines(
+            sal["staff_id"], max(0.0, base_gross + allowances - deductions))
+        for line in loss_lines:
+            deductions += float(line["amount"])
+        items.extend(loss_lines)
         # Net is computed against original base for transparency: base + allowances - deductions
         # (deductions already includes the unpaid-leave proration + days-worked adjustment)
         net = base_gross + allowances - deductions
@@ -1682,6 +1704,8 @@ async def _generate_payslips_for(period: str, location_id: str, current_user: di
             "created_by": current_user["id"],
         }
         await db.hr_payslips.insert_one(payslip)
+        if loss_apps:
+            await mark_loss_deductions(loss_apps, payslip["id"], period)
         payslip.pop("_id", None)
         generated.append(payslip)
     await _audit(current_user["id"], "create", "payslips", period, {"count": len(generated)})
@@ -1869,8 +1893,10 @@ async def delete_payslip(payslip_id: str, current_user: dict = Depends(require_d
             detail="Only draft payslips can be deleted. Approved or paid payslips must be voided via edit.",
         )
     await db.hr_payslips.delete_one({"id": payslip_id})
+    # Any negligence charge taken on this payslip is owed again (iter419).
+    restored = await unmark_loss_deductions(payslip_id)
     await _audit(current_user["id"], "delete", "payslip", payslip_id, {"period": p.get("period"), "staff_id": p.get("staff_id")})
-    return {"deleted": True, "id": payslip_id}
+    return {"deleted": True, "id": payslip_id, "stock_losses_reopened": restored}
 
 
 @router.post("/payslips/recompute-statutory")

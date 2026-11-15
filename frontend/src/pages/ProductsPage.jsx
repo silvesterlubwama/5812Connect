@@ -38,6 +38,7 @@ import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer
 import TillPrinterDialog from '../components/pos/TillPrinterDialog';
 import { RefundDialog } from '../components/pos/RefundDialog';
 import { OpenTabsDialog } from '../components/pos/OpenTabsDialog';
+import { TablePlan } from '../components/pos/TablePlan';
 import { ReturnsReportDialog } from '../components/pos/ReturnsReportDialog';
 import { RecordLossDialog } from '../components/pos/RecordLossDialog';
 import { LossReportDialog } from '../components/pos/LossReportDialog';
@@ -1189,6 +1190,17 @@ export default function ProductsPage() {
 
         {/* POS TAB */}
         <TabsContent value="pos" className="mt-4">
+          {isRestaurant && (
+            <div className="mb-3">
+              <TablePlan
+                locationId={saleLocationId}
+                tableLabels={String(storeSettings?.restaurant_tables || '')
+                  .split(',').map(s => s.trim()).filter(Boolean)}
+                currency={storeSettings?.currency || activeCurrency || 'UGX'}
+                onPickUp={pickUpTab}
+              />
+            </div>
+          )}
           <div className="mb-3 space-y-2">
             <PeripheralPermissionBanner needs={['camera', 'scanner']} context="the POS terminal" testid="pos-perm-banner" />
             <div className="flex gap-2">
@@ -2252,6 +2264,18 @@ export default function ProductsPage() {
                 Individual dishes can also be marked "kitchen item" on the product, so a shop
                 that sells one hot item still sends that item to a cook.
               </p>
+              {!!storeSettings.restaurant_mode && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Tables in the room</Label>
+                  <Input value={storeSettings.restaurant_tables || ''}
+                    onChange={e => setStoreSettings({ ...storeSettings, restaurant_tables: e.target.value })}
+                    placeholder="1, 2, 3, 4, 5, 6, Terrace, Bar"
+                    data-testid="restaurant-tables-input" />
+                  <p className="text-[10px] text-muted-foreground">
+                    Separated by commas. These show as the room plan at the till, empty ones included.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* PERIPHERALS — auto-print receipts on sale completion, badge size when issuing kiosk badges. */}

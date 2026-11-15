@@ -236,6 +236,85 @@ async def update_loss_recovery(loss_id: str, data: dict, current_user: dict = De
     return {"message": f"Marked {status}", "id": loss_id, "status": status}
 
 
+async def pending_loss_lines(staff_id: str, available: float, exclude: Optional[set] = None) -> tuple:
+    """Negligence charges still owed by one person, as payslip deduction lines.
+
+    Returns `(lines, applications)`. Nothing is written — the caller marks them
+    only when a real payslip is saved, so a preview never swallows a charge.
+    A charge bigger than what is left of the pay is taken in instalments rather
+    than pushing someone's net pay below zero (iter419).
+    """
+    rows = await db.stock_losses.find(
+        {"employee_id": staff_id, "recoverable": True, "recovery_status": "pending"},
+        {"_id": 0}).sort("created_at", 1).to_list(200)
+    lines, applications = [], []
+    left = max(0.0, float(available))
+    for row in rows:
+        # A dry run over several salary rows for the same person must not show
+        # the same charge twice (iter419).
+        if exclude and row["id"] in exclude:
+            continue
+        owed = round(float(row.get("value") or 0) - float(row.get("recovered_amount") or 0), 2)
+        if owed <= 0:
+            continue
+        if left <= 0:
+            break
+        take = round(min(owed, left), 2)
+        left = round(left - take, 2)
+        part = take < owed
+        lines.append({
+            "name": f"Stock loss {row.get('slip_number')} — {row.get('product_name')}"
+                    + (" (part)" if part else ""),
+            "type": "deduction",
+            "amount": take,
+            "calculated_amount": take,
+            "is_percentage": False,
+            "auto_generated": True,
+            "source": "stock_loss",
+            "scope": "employee",
+            "details": {"loss_id": row["id"], "slip_number": row.get("slip_number"),
+                        "qty": row.get("qty"), "owed": owed, "part_payment": part},
+        })
+        applications.append({"loss_id": row["id"], "amount": take, "owed": owed})
+    return lines, applications
+
+
+async def mark_loss_deductions(applications: list, payslip_id: str, period: str = "") -> None:
+    """A payslip has been drafted — the charge is now coming off that pay."""
+    for app in applications:
+        row = await db.stock_losses.find_one({"id": app["loss_id"]}, {"_id": 0})
+        if not row:
+            continue
+        recovered = round(float(row.get("recovered_amount") or 0) + float(app["amount"]), 2)
+        done = recovered >= round(float(row.get("value") or 0), 2) - 0.01
+        await db.stock_losses.update_one({"id": app["loss_id"]}, {"$set": {
+            "recovered_amount": recovered,
+            "recovery_status": "recovered" if done else "pending",
+            "recovery_updated_at": _now(),
+            "recovery_note": f"Deducted on payslip {payslip_id}{f' ({period})' if period else ''}",
+        }, "$push": {"deductions": {"payslip_id": payslip_id, "period": period,
+                                    "amount": float(app["amount"]), "at": _now()}}})
+
+
+async def unmark_loss_deductions(payslip_id: str) -> int:
+    """That payslip was deleted — the charge goes back on the owed list."""
+    undone = 0
+    async for row in db.stock_losses.find({"deductions.payslip_id": payslip_id}, {"_id": 0}):
+        back = sum(float(d.get("amount") or 0) for d in (row.get("deductions") or [])
+                   if d.get("payslip_id") == payslip_id)
+        if back <= 0:
+            continue
+        await db.stock_losses.update_one({"id": row["id"]}, {
+            "$set": {"recovered_amount": max(0.0, round(float(row.get("recovered_amount") or 0) - back, 2)),
+                     "recovery_status": "pending",
+                     "recovery_updated_at": _now(),
+                     "recovery_note": f"Payslip {payslip_id} was deleted — still owed"},
+            "$pull": {"deductions": {"payslip_id": payslip_id}},
+        })
+        undone += 1
+    return undone
+
+
 @router.get("/stock-losses/pending-deductions")
 async def pending_deductions(staff_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     """What payroll still has to take off, per person."""
@@ -245,15 +324,20 @@ async def pending_deductions(staff_id: Optional[str] = None, current_user: dict 
     rows = await db.stock_losses.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
     by_staff: dict = {}
     for row in rows:
+        owed = round(float(row.get("value") or 0) - float(row.get("recovered_amount") or 0), 2)
+        if owed <= 0:
+            continue
         entry = by_staff.setdefault(row.get("employee_id"), {
             "employee_id": row.get("employee_id"),
             "employee_name": row.get("employee_name"),
             "total": 0.0, "items": [],
         })
-        entry["total"] = round(entry["total"] + float(row.get("value") or 0), 2)
+        entry["total"] = round(entry["total"] + owed, 2)
         entry["items"].append({"id": row["id"], "slip_number": row.get("slip_number"),
                                "product_name": row.get("product_name"), "qty": row.get("qty"),
-                               "value": row.get("value"), "created_at": row.get("created_at")})
+                               "value": row.get("value"), "owed": owed,
+                               "recovered_amount": float(row.get("recovered_amount") or 0),
+                               "created_at": row.get("created_at")})
     return {"staff": sorted(by_staff.values(), key=lambda s: -s["total"]),
             "total": round(sum(s["total"] for s in by_staff.values()), 2)}
 
@@ -495,27 +579,88 @@ async def mature_batch(batch: dict, actor: Optional[dict] = None, qty_override: 
     return {"ok": True, "qty": moved, "batch_id": batch["id"], "transformation": record["id"]}
 
 
+@router.get("/stock-batches/mortality")
+async def batch_mortality(product_id: Optional[str] = None, location_id: Optional[str] = None,
+                          weeks: int = 8, limit: int = 20,
+                          current_user: dict = Depends(get_current_user)):
+    """Deaths per batch, week by week — so a weak hatchery run shows itself.
+
+    The numbers come straight from recorded write-offs, which is the only place
+    a death is ever entered (iter419).
+    """
+    query: dict = {}
+    store = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    if store:
+        query["location_id"] = store
+    if product_id:
+        query["product_id"] = product_id
+    batches = await db.stock_batches.find(query, {"_id": 0}).sort("received_at", -1).limit(limit).to_list(limit)
+    if not batches:
+        return {"batches": [], "weeks": 0, "worst": None, "store_id": store}
+
+    ids = [b["id"] for b in batches]
+    losses = await db.stock_losses.find({"batches.batch_id": {"$in": ids}}, {"_id": 0}).to_list(2000)
+
+    rows = []
+    for batch in batches:
+        try:
+            start = datetime.fromisoformat(str(batch.get("received_at")).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        buckets: dict = {}
+        detail: dict = {}
+        for loss in losses:
+            hit = next((b for b in (loss.get("batches") or []) if b.get("batch_id") == batch["id"]), None)
+            if not hit:
+                continue
+            try:
+                when = datetime.fromisoformat(str(loss.get("created_at")).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            week = max(1, int((when - start).days // 7) + 1)
+            qty = float(hit.get("qty") or 0)
+            buckets[week] = round(buckets.get(week, 0) + qty, 2)
+            label = loss.get("reason_label") or loss.get("reason") or "Lost"
+            detail[label] = round(detail.get(label, 0) + qty, 2)
+        span = max(1, min(int(weeks or 8), 26))
+        started = float(batch.get("qty") or 0)
+        lost = round(sum(buckets.values()), 2)
+        rows.append({
+            "batch_id": batch["id"],
+            "product_name": batch.get("product_name"),
+            "becomes_product_name": batch.get("becomes_product_name"),
+            "received_at": batch.get("received_at"),
+            "status": batch.get("status"),
+            "started_with": started,
+            "remaining": float(batch.get("remaining") or 0),
+            "lost": lost,
+            "mortality_pct": round((lost / started) * 100, 1) if started else 0,
+            "by_reason": detail,
+            "weeks": [{"week": w, "deaths": buckets.get(w, 0)} for w in range(1, span + 1)],
+        })
+
+    worst = max(rows, key=lambda r: r["mortality_pct"], default=None)
+    return {
+        "store_id": store,
+        "weeks": max(1, min(int(weeks or 8), 26)),
+        "batches": rows,
+        "worst": worst if worst and worst["lost"] > 0 else None,
+    }
+
+
 @router.post("/stock-batches/{batch_id}/mature")
 async def mature_batch_now(batch_id: str, data: dict = None, current_user: dict = Depends(require_staff)):
-    """Move a batch on early (or confirm one by hand)."""
+    """Move a batch on early (or confirm one by hand).
+
+    No deaths are entered here: the only place a death is ever recorded is a
+    write-off, which has already taken it off this batch and off the shelf.
+    Asking again would count the same bird twice (iter419).
+    """
     batch = await db.stock_batches.find_one({"id": batch_id}, {"_id": 0})
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     if batch.get("status") != "growing":
         raise HTTPException(status_code=400, detail=f"This batch is already {batch.get('status')}")
-    lost = float((data or {}).get("lost") or 0)
-    if lost > 0:
-        remaining = float(batch.get("remaining") or 0)
-        if lost > remaining:
-            raise HTTPException(status_code=400, detail=f"Only {remaining:g} in this batch")
-        # Birds that died must leave stock too, not just the batch — otherwise
-        # the shelf keeps counting phantom chicks (iter417).
-        await record_stock_loss(LossCreate(
-            product_id=batch["product_id"], qty=lost, reason="died",
-            location_id=batch.get("location_id"), batch_id=batch_id,
-            note="Died before growing on",
-        ), current_user)
-        batch = await db.stock_batches.find_one({"id": batch_id}, {"_id": 0})
     res = await mature_batch(batch, current_user)
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail={

@@ -30,6 +30,8 @@ DEFAULTS = {
     # iter418 — a store that serves food: the till shows tables and open tabs,
     # and kitchen items print a ticket for the cooks.
     "restaurant_mode": False,
+    # Comma-separated table labels, so the room plan can show empty tables too.
+    "restaurant_tables": "",
 }
 
 
