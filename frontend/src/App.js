@@ -84,6 +84,7 @@ import WalletBadgePage from './pages/WalletBadgePage';
 import ReceiptViewPage from './pages/ReceiptViewPage';
 import ResourceViewPage from './pages/ResourceViewPage';
 import PosKioskPage from './pages/PosKioskPage';
+import ScreenPage from './pages/ScreenPage';
 import PosKioskSetupPage from './pages/PosKioskSetupPage';
 import QuoteAcceptPage from './pages/QuoteAcceptPage';
 import AccountsReceivablePage from './pages/AccountsReceivablePage';
@@ -119,7 +120,7 @@ const ProtectedRoute = ({ children }) => {
 function ConditionalSoftphone() {
   const location = useLocation();
   const path = location.pathname || '';
-  const publicPrefixes = ['/public-bookings', '/marketplace', '/shared/', '/badge/', '/receipt/', '/resource/', '/kiosk', '/login', '/register', '/reset-password'];
+  const publicPrefixes = ['/public-bookings', '/marketplace', '/shared/', '/badge/', '/receipt/', '/resource/', '/kiosk', '/login', '/register', '/reset-password', '/screen/'];
   if (publicPrefixes.some(p => path === p || path.startsWith(p))) return null;
   return <SoftphonePanel />;
 }
@@ -164,6 +165,8 @@ function AppRoutes() {
       <Route path="/p/calendar/location/:locationId/:token" element={<PublicCalendarPage />} />
       <Route path="/p/calendar/user/:userToken" element={<PublicCalendarPage />} />
       <Route path="/pos/:storeId" element={<PosKioskPage />} />
+      {/* A screen on the wall — paired once by the store, no sign-in (iter420) */}
+      <Route path="/screen/:token" element={<ScreenPage />} />
       <Route path="/sales-portal" element={<SalesPortalPage />} />
       <Route path="/security-checkpoint" element={<SecurityCheckpointPage />} />
       <Route path="/" element={<ProtectedRoute><StaffRoute><Layout /></StaffRoute></ProtectedRoute>}>

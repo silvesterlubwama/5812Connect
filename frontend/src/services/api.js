@@ -391,6 +391,8 @@ export const stockApi = {
   batches: (params) => api.get('/stock-batches', { params }),
   mortality: (params) => api.get('/stock-batches/mortality', { params }),
   createBatch: (data) => api.post('/stock-batches', data),
+  updateBatch: (id, data) => api.patch(`/stock-batches/${id}`, data),
+  compareBatches: (ids, weeks = 8) => api.get('/stock-batches/compare', { params: { ids: ids.join(','), weeks } }),
   matureBatch: (id, data) => api.post(`/stock-batches/${id}/mature`, data || {}),
   transformations: (params) => api.get('/stock-transformations', { params }),
   acknowledgeTransformation: (id) => api.patch(`/stock-transformations/${id}/acknowledge`),
@@ -403,8 +405,27 @@ export const kitchenApi = {
   addItems: (id, items) => api.post(`/kitchen/orders/${id}/items`, { items }),
   setOrderStatus: (id, status) => api.patch(`/kitchen/orders/${id}/status`, { status }),
   setItemStatus: (id, lineId, status) => api.patch(`/kitchen/orders/${id}/items/${lineId}/status`, { status }),
-  settle: (id, saleId) => api.patch(`/kitchen/orders/${id}/settle`, { sale_id: saleId }),
+  settle: (id, saleId, tip = 0) => api.patch(`/kitchen/orders/${id}/settle`, { sale_id: saleId, tip }),
   cancel: (id) => api.delete(`/kitchen/orders/${id}`),
+  servers: (params) => api.get('/kitchen/servers', { params }),
+};
+
+// ---- WALL SCREENS: kitchen board + customer-facing display (iter420) ----
+// A screen is paired once by someone signed in to that store; the link it gets
+// back is the credential, so no cook or customer needs a password.
+export const screensApi = {
+  list: (params) => api.get('/screens', { params }),
+  pair: (data) => api.post('/screens', data),
+  revoke: (id) => api.delete(`/screens/${id}`),
+  pushSale: (data) => api.post('/screens/live-sale', data),
+  // Public — used by the paired screen itself, no sign-in
+  info: (token) => api.get(`/screens/${token}`),
+  orders: (token) => api.get(`/screens/${token}/orders`),
+  advanceItem: (token, orderId, lineId, status) =>
+    api.patch(`/screens/${token}/orders/${orderId}/items/${lineId}`, status ? { status } : {}),
+  advanceOrder: (token, orderId, status) =>
+    api.patch(`/screens/${token}/orders/${orderId}`, status ? { status } : {}),
+  sale: (token) => api.get(`/screens/${token}/sale`),
 };
 
 export const cashDropsApi = {

@@ -53,6 +53,7 @@ class BatchCreate(BaseModel):
     location_id: Optional[str] = None
     received_at: Optional[str] = None
     note: Optional[str] = ""
+    supplier: Optional[str] = ""        # which hatchery this run came from
 
 
 def _now() -> str:
@@ -262,6 +263,16 @@ async def pending_loss_lines(staff_id: str, available: float, exclude: Optional[
         take = round(min(owed, left), 2)
         left = round(left - take, 2)
         part = take < owed
+        # The staff member's own copy has to say what this money is for, in
+        # words, or a deduction looks like the shop helping itself (iter420).
+        note = (f"{float(row.get('qty') or 0):g} × {row.get('product_name')} written off on "
+                f"{str(row.get('created_at'))[:10]} — {str(row.get('reason_label') or 'loss').lower()}"
+                f", recorded by {row.get('created_by_name') or 'the shop'}.")
+        if (row.get("note") or "").strip():
+            note += f" “{row['note'].strip()}”"
+        note += f" Charged {float(row.get('value') or 0):,.0f}"
+        note += (f"; {take:,.0f} off this payslip, {owed - take:,.0f} still to come."
+                 if part else f", taken in full on this payslip.")
         lines.append({
             "name": f"Stock loss {row.get('slip_number')} — {row.get('product_name')}"
                     + (" (part)" if part else ""),
@@ -272,8 +283,14 @@ async def pending_loss_lines(staff_id: str, available: float, exclude: Optional[
             "auto_generated": True,
             "source": "stock_loss",
             "scope": "employee",
+            "note": note,
             "details": {"loss_id": row["id"], "slip_number": row.get("slip_number"),
-                        "qty": row.get("qty"), "owed": owed, "part_payment": part},
+                        "product_name": row.get("product_name"),
+                        "qty": row.get("qty"), "reason": row.get("reason_label"),
+                        "recorded_on": str(row.get("created_at"))[:10],
+                        "recorded_by": row.get("created_by_name") or "",
+                        "charged": float(row.get("value") or 0),
+                        "owed": owed, "part_payment": part, "note": note},
         })
         applications.append({"loss_id": row["id"], "amount": take, "owed": owed})
     return lines, applications
@@ -492,6 +509,7 @@ async def create_batch(data: BatchCreate, current_user: dict = Depends(require_s
         "becomes_product_name": (target or {}).get("name"),
         "grow_after_days": rule["days"],
         "note": (data.note or "").strip()[:300],
+        "supplier": (data.supplier or "").strip()[:120] or None,
         "events": [],
         "created_at": _now(),
         "created_by": current_user["id"],
@@ -573,34 +591,22 @@ async def mature_batch(batch: dict, actor: Optional[dict] = None, qty_override: 
             "matures_at": (datetime.now(timezone.utc) + timedelta(days=next_rule["days"])).isoformat(),
             "becomes_product_id": next_rule["to"], "becomes_product_name": (nxt or {}).get("name"),
             "grow_after_days": next_rule["days"], "note": f"Grew on from {source.get('name')}",
+            "supplier": batch.get("supplier"),
             "events": [], "created_at": now, "created_by": record["created_by"],
             "created_by_name": record["created_by_name"],
         })
     return {"ok": True, "qty": moved, "batch_id": batch["id"], "transformation": record["id"]}
 
 
-@router.get("/stock-batches/mortality")
-async def batch_mortality(product_id: Optional[str] = None, location_id: Optional[str] = None,
-                          weeks: int = 8, limit: int = 20,
-                          current_user: dict = Depends(get_current_user)):
-    """Deaths per batch, week by week — so a weak hatchery run shows itself.
+async def _mortality_rows(batches: list, weeks: int = 8) -> list:
+    """One row per batch: what came in, what died, in which week of its life.
 
     The numbers come straight from recorded write-offs, which is the only place
     a death is ever entered (iter419).
     """
-    query: dict = {}
-    store = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
-    if store:
-        query["location_id"] = store
-    if product_id:
-        query["product_id"] = product_id
-    batches = await db.stock_batches.find(query, {"_id": 0}).sort("received_at", -1).limit(limit).to_list(limit)
-    if not batches:
-        return {"batches": [], "weeks": 0, "worst": None, "store_id": store}
-
     ids = [b["id"] for b in batches]
     losses = await db.stock_losses.find({"batches.batch_id": {"$in": ids}}, {"_id": 0}).to_list(2000)
-
+    span = max(1, min(int(weeks or 8), 26))
     rows = []
     for batch in batches:
         try:
@@ -622,23 +628,109 @@ async def batch_mortality(product_id: Optional[str] = None, location_id: Optiona
             buckets[week] = round(buckets.get(week, 0) + qty, 2)
             label = loss.get("reason_label") or loss.get("reason") or "Lost"
             detail[label] = round(detail.get(label, 0) + qty, 2)
-        span = max(1, min(int(weeks or 8), 26))
         started = float(batch.get("qty") or 0)
         lost = round(sum(buckets.values()), 2)
         rows.append({
             "batch_id": batch["id"],
             "product_name": batch.get("product_name"),
             "becomes_product_name": batch.get("becomes_product_name"),
+            "supplier": batch.get("supplier"),
             "received_at": batch.get("received_at"),
             "status": batch.get("status"),
             "started_with": started,
             "remaining": float(batch.get("remaining") or 0),
             "lost": lost,
             "mortality_pct": round((lost / started) * 100, 1) if started else 0,
+            "survival_pct": round(100 - (lost / started) * 100, 1) if started else 0,
             "by_reason": detail,
             "weeks": [{"week": w, "deaths": buckets.get(w, 0)} for w in range(1, span + 1)],
         })
+    return rows
 
+
+@router.get("/stock-batches/compare")
+async def compare_batches(ids: str = "", weeks: int = 8,
+                          current_user: dict = Depends(get_current_user)):
+    """Two runs side by side, so a weak supplier shows itself.
+
+    `ids` is a comma-separated list of batch ids (two is the useful number).
+    """
+    wanted = [i.strip() for i in (ids or "").split(",") if i.strip()][:4]
+    if len(wanted) < 2:
+        raise HTTPException(status_code=400, detail="Pick two runs to compare")
+    batches = await db.stock_batches.find({"id": {"$in": wanted}}, {"_id": 0}).to_list(4)
+    if len(batches) < 2:
+        raise HTTPException(status_code=404, detail="One of those runs no longer exists")
+    batches.sort(key=lambda b: wanted.index(b["id"]))
+    rows = await _mortality_rows(batches, weeks)
+    by_supplier: dict = {}
+    for row in rows:
+        key = row.get("supplier") or "Not recorded"
+        agg = by_supplier.setdefault(key, {"supplier": key, "batches": 0, "started_with": 0.0, "lost": 0.0})
+        agg["batches"] += 1
+        agg["started_with"] = round(agg["started_with"] + row["started_with"], 2)
+        agg["lost"] = round(agg["lost"] + row["lost"], 2)
+    for agg in by_supplier.values():
+        agg["mortality_pct"] = round((agg["lost"] / agg["started_with"]) * 100, 1) if agg["started_with"] else 0
+
+    verdict = ""
+    if len(rows) >= 2:
+        best = min(rows, key=lambda r: r["mortality_pct"])
+        worst = max(rows, key=lambda r: r["mortality_pct"])
+        gap = round(worst["mortality_pct"] - best["mortality_pct"], 1)
+        if gap <= 0:
+            verdict = "Both runs lost the same share — nothing to choose between them."
+        else:
+            who = f" ({worst['supplier']})" if worst.get("supplier") else ""
+            keeps = f" ({best['supplier']})" if best.get("supplier") else ""
+            verdict = (f"The run booked in {str(worst['received_at'])[:10]}{who} lost "
+                       f"{gap:g} percentage points more than the one from "
+                       f"{str(best['received_at'])[:10]}{keeps} — "
+                       f"{worst['lost']:g} of {worst['started_with']:g} against "
+                       f"{best['lost']:g} of {best['started_with']:g}.")
+    return {"batches": rows, "weeks": max(1, min(int(weeks or 8), 26)),
+            "by_supplier": sorted(by_supplier.values(), key=lambda s: -s["mortality_pct"]),
+            "verdict": verdict}
+
+
+@router.patch("/stock-batches/{batch_id}")
+async def update_batch(batch_id: str, data: dict, current_user: dict = Depends(require_staff)):
+    """Name the hatchery a run came from — often known a day after it arrived."""
+    fields = {}
+    if "supplier" in (data or {}):
+        fields["supplier"] = (data.get("supplier") or "").strip()[:120] or None
+    if "note" in (data or {}):
+        fields["note"] = (data.get("note") or "").strip()[:300]
+    if not fields:
+        raise HTTPException(status_code=400, detail="Nothing to change")
+    fields["updated_at"] = _now()
+    fields["updated_by_name"] = current_user.get("name", "")
+    res = await db.stock_batches.update_one({"id": batch_id}, {"$set": fields})
+    if not res.matched_count:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return {"message": "Saved", "batch": await db.stock_batches.find_one({"id": batch_id}, {"_id": 0})}
+
+
+@router.get("/stock-batches/mortality")
+async def batch_mortality(product_id: Optional[str] = None, location_id: Optional[str] = None,
+                          weeks: int = 8, limit: int = 20,
+                          current_user: dict = Depends(get_current_user)):
+    """Deaths per batch, week by week — so a weak hatchery run shows itself.
+
+    The numbers come straight from recorded write-offs, which is the only place
+    a death is ever entered (iter419).
+    """
+    query: dict = {}
+    store = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    if store:
+        query["location_id"] = store
+    if product_id:
+        query["product_id"] = product_id
+    batches = await db.stock_batches.find(query, {"_id": 0}).sort("received_at", -1).limit(limit).to_list(limit)
+    if not batches:
+        return {"batches": [], "weeks": 0, "worst": None, "store_id": store}
+
+    rows = await _mortality_rows(batches, weeks)
     worst = max(rows, key=lambda r: r["mortality_pct"], default=None)
     return {
         "store_id": store,

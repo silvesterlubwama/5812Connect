@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from deps import db, get_current_user, require_staff
+from store_access import is_store_member
 
 router = APIRouter(prefix="/api", tags=["kitchen"])
 
@@ -43,6 +44,8 @@ class OrderCreate(BaseModel):
     customer_name: Optional[str] = None
     sale_id: Optional[str] = None      # set when the money was taken first
     note: Optional[str] = ""
+    server_id: Optional[str] = None    # the waiter signed in at the till
+    server_name: Optional[str] = None
     model_config = {"extra": "allow"}
 
 
@@ -79,8 +82,12 @@ def _ticket_line(item: dict, seq: int) -> dict:
 
 
 async def _store_id(current_user: dict, given: Optional[str]) -> str:
-    return (given or current_user.get("active_campus_id")
-            or current_user.get("location_id") or "")
+    store = (given or current_user.get("active_campus_id")
+             or current_user.get("location_id") or "")
+    # A kitchen belongs to the people who work in it (iter420).
+    if store and not await is_store_member(current_user, store):
+        raise HTTPException(status_code=403, detail="You are not signed in to this store's kitchen")
+    return store
 
 
 @router.get("/kitchen/orders")
@@ -127,7 +134,11 @@ async def create_order(data: OrderCreate, current_user: dict = Depends(require_s
         "created_at": _now(),
         "created_by": current_user["id"],
         "created_by_name": current_user.get("name", ""),
-        "server_name": current_user.get("name", ""),
+        # Who is actually serving this table: the waiter signed in at the till
+        # with their own PIN, otherwise whoever is on the till (iter420).
+        "server_id": data.server_id or current_user["id"],
+        "server_name": (data.server_name or "").strip() or current_user.get("name", ""),
+        "tip": 0.0,
     }
     await db.kitchen_orders.insert_one(dict(order))
     order["total"] = round(sum(i["price"] * i["qty"] for i in items), 2)
@@ -208,16 +219,60 @@ async def set_item_status(order_id: str, line_id: str, data: dict,
 
 @router.patch("/kitchen/orders/{order_id}/settle")
 async def settle_order(order_id: str, data: dict, current_user: dict = Depends(require_staff)):
-    """The tab has been paid — tie it to the sale that took the money."""
+    """The tab has been paid — tie it to the sale that took the money, and put
+    any tip against the waiter who served the table (iter420)."""
     sale_id = (data or {}).get("sale_id")
     if not sale_id:
         raise HTTPException(status_code=400, detail="Which sale paid it?")
-    res = await db.kitchen_orders.update_one({"id": order_id}, {"$set": {
-        "paid": True, "sale_id": sale_id, "settled_at": _now(),
-        "settled_by": current_user.get("name", "")}})
-    if not res.matched_count:
+    order = await db.kitchen_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    return {"message": "Tab settled", "id": order_id, "sale_id": sale_id}
+    try:
+        tip = round(float((data or {}).get("tip") or 0), 2)
+    except (TypeError, ValueError):
+        tip = 0.0
+    fields = {"paid": True, "sale_id": sale_id, "settled_at": _now(),
+              "settled_by": current_user.get("name", "")}
+    if tip > 0:
+        fields["tip"] = round(float(order.get("tip") or 0) + tip, 2)
+    await db.kitchen_orders.update_one({"id": order_id}, {"$set": fields})
+    message = "Tab settled"
+    if tip > 0:
+        message += f" — {tip:,.0f} tip to {order.get('server_name') or 'the waiter'}"
+    return {"message": message, "id": order_id, "sale_id": sale_id, "tip": tip}
+
+
+@router.get("/kitchen/servers")
+async def server_report(location_id: Optional[str] = None, date_from: Optional[str] = None,
+                        date_to: Optional[str] = None,
+                        current_user: dict = Depends(require_staff)):
+    """Tables, takings and tips per waiter — who served what (iter420)."""
+    store = await _store_id(current_user, location_id)
+    start = (date_from or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    end = (date_to or start)[:10]
+    query: dict = {"created_at": {"$gte": start, "$lte": end + "T23:59:59.999999+00:00"},
+                   "cancelled": {"$ne": True}}
+    if store:
+        query["location_id"] = store
+    rows = await db.kitchen_orders.find(query, {"_id": 0}).to_list(1000)
+    servers: dict = {}
+    for row in rows:
+        key = row.get("server_id") or row.get("created_by") or "—"
+        agg = servers.setdefault(key, {
+            "server_id": key, "server_name": row.get("server_name") or row.get("created_by_name") or "—",
+            "tables": 0, "open_tabs": 0, "takings": 0.0, "tips": 0.0, "dishes": 0})
+        agg["tables"] += 1
+        if not row.get("paid"):
+            agg["open_tabs"] += 1
+        items = [i for i in (row.get("items") or []) if not i.get("cancelled")]
+        agg["dishes"] += len(items)
+        agg["takings"] = round(agg["takings"] + sum(float(i.get("price") or 0) * float(i.get("qty") or 0)
+                                                    for i in items), 2)
+        agg["tips"] = round(agg["tips"] + float(row.get("tip") or 0), 2)
+    out = sorted(servers.values(), key=lambda s: -s["takings"])
+    return {"from": start, "to": end, "store_id": store, "servers": out,
+            "tips_total": round(sum(s["tips"] for s in out), 2),
+            "takings_total": round(sum(s["takings"] for s in out), 2)}
 
 
 @router.delete("/kitchen/orders/{order_id}")

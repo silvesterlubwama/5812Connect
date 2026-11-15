@@ -183,15 +183,19 @@ async def list_products(location_id: Optional[str] = None, current_user: dict = 
     rows = await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(500)
     return [resolve_for_store(p, location_id or "") for p in rows]
 
-async def _start_batch_if_growing(product: dict, qty: float, current_user: dict, note: str) -> None:
+async def _start_batch_if_growing(product: dict, qty: float, current_user: dict, note: str,
+                                  supplier: str = "") -> None:
     """Stock arriving for a product that grows on (chicks → broilers) starts its
-    own dated batch, so the clock runs from when THESE birds came in (iter417)."""
+    own dated batch, so the clock runs from when THESE birds came in (iter417).
+    The supplier travels with it, so one hatchery's run can be set against
+    another's later (iter420)."""
     if qty <= 0 or not product.get("grows_into_product_id") or not product.get("grow_after_days"):
         return
     try:
         from routers.stock_lifecycle import BatchCreate, create_batch
         await create_batch(BatchCreate(product_id=product["id"], qty=qty,
                                        location_id=product.get("location_id") or None,
+                                       supplier=supplier or "",
                                        note=note), current_user)
     except Exception as ex:
         logger.error(f"[grow] could not start a batch for {product.get('id')}: {ex}")
@@ -417,6 +421,7 @@ async def record_stock_movement(product_id: str, data: dict, current_user: dict 
         "reason": reason,
         "notes": (data.get("notes") or "")[:500],
         "reference": (data.get("reference") or "")[:120],
+        "supplier": (data.get("supplier") or "").strip()[:120] or None,
         "location_id": (data.get("location_id") or "").strip() or product.get("location_id"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "created_by": current_user["id"],
@@ -426,7 +431,8 @@ async def record_stock_movement(product_id: str, data: dict, current_user: dict 
     movement.pop("_id", None)
     if delta > 0 and reason in {"purchase", "initial", "adjustment", "transfer", "count"}:
         await _start_batch_if_growing({**product, "location_id": movement["location_id"]},
-                                      float(delta), current_user, f"Stock in ({reason})")
+                                      float(delta), current_user, f"Stock in ({reason})",
+                                      supplier=(data.get("supplier") or "").strip())
     return movement
 
 

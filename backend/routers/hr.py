@@ -4492,7 +4492,19 @@ async def _generate_payslip_pdf_bytes(payslip_id: str, fx: dict = None) -> bytes
     employer_rows = ""
     for li in (p.get("line_items") or []):
         amt = li.get("calculated_amount", li.get("amount", 0)) or 0
-        details = f" <span class='meta'>({li['details']})</span>" if li.get("details") else ""
+        raw_details = li.get("details")
+        if isinstance(raw_details, dict):
+            # A stock-loss charge carries its story as a dict — the staff
+            # member's own copy must read it out in words, not print a dict
+            # (iter420).
+            detail_text = raw_details.get("note") or ""
+        else:
+            detail_text = str(raw_details or "")
+        details = f" <span class='meta'>({detail_text})</span>" if detail_text and len(detail_text) < 60 else ""
+        note_row = ""
+        if detail_text and not details:
+            note_row = (f"<tr><td colspan='2' class='meta' style='padding-top:0;border-bottom:1px solid #e2e8f0'>"
+                        f"{detail_text}</td></tr>")
         if li.get("type") == "employer_contribution":
             mode_note = "paid with salary" if (li.get("mode") or "employer_cost") == "add_to_pay" else "employer cost"
             employer_rows += (f"<tr><td>{li.get('name','')}{details} <span class='meta'>· {mode_note}</span></td>"
@@ -4503,7 +4515,7 @@ async def _generate_payslip_pdf_bytes(payslip_id: str, fx: dict = None) -> bytes
             continue
         sign = "&minus;" if li.get("type") == "deduction" else "+"
         color = "#b45309" if li.get("type") == "deduction" else "#047857"
-        line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{(float(amt) * fx_rate):,.2f}</td></tr>"
+        line_rows += f"<tr><td>{li.get('name','')}{details}</td><td style='text-align:right;color:{color}'>{sign}{(float(amt) * fx_rate):,.2f}</td></tr>" + note_row
     if not line_rows:
         line_rows = "<tr><td colspan='2' style='text-align:center;color:#94a3b8'>No adjustments</td></tr>"
     # Iter 335: parse the canonical period string into a human "Covers work

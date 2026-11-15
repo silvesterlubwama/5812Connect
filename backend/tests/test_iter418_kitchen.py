@@ -167,7 +167,11 @@ def test_a_tab_can_be_cancelled_but_a_paid_one_cannot():
 
 def test_one_restaurants_tickets_do_not_show_at_another():
     _order()
-    assert _run(kitchen.list_orders(OTHER, "open", 50, _waiter())) == []
+    # iter420 — asking for another store's kitchen is now refused outright,
+    # rather than quietly returning nothing.
+    with pytest.raises(Exception) as err:
+        _run(kitchen.list_orders(OTHER, "open", 50, _waiter()))
+    assert "not signed in" in str(err.value)
     assert len(_run(kitchen.list_orders(SHOP, "open", 50, _waiter()))) == 1
 
 

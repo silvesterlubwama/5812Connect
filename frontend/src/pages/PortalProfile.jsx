@@ -714,10 +714,27 @@ export default function PortalProfile() {
                 <div className="flex justify-between text-sm text-green-700"><span>+ Allowances</span><span className="font-mono">{(viewingPayslip.allowances || 0).toLocaleString()}</span></div>
                 <div className="flex justify-between text-sm text-red-700"><span>− Deductions</span><span className="font-mono">{(viewingPayslip.deductions || 0).toLocaleString()}</span></div>
                 {(viewingPayslip.line_items || []).length > 0 && (
-                  <div className="text-[11px] text-muted-foreground pl-3 space-y-0.5 pt-1 border-t">
-                    {viewingPayslip.line_items.map((li, i) => (
-                      <div key={i} className="flex justify-between"><span>· {li.name}{li.details ? ` (${li.details})` : ''}</span><span className="font-mono">{li.type === 'deduction' ? '−' : '+'}{(li.calculated_amount || li.amount || 0).toLocaleString()}</span></div>
-                    ))}
+                  <div className="text-[11px] text-muted-foreground pl-3 space-y-1 pt-1 border-t">
+                    {viewingPayslip.line_items.map((li, i) => {
+                      // A stock-loss charge carries its story with it — the
+                      // staff member's own copy says what the money is for.
+                      const story = typeof li.details === 'object' && li.details !== null
+                        ? (li.details.note || '')
+                        : (li.details ? String(li.details) : '');
+                      const inline = story && story.length < 60;
+                      return (
+                        <div key={i} data-testid={`payslip-line-${i}`}>
+                          <div className="flex justify-between">
+                            <span>· {li.name}{inline ? ` (${story})` : ''}</span>
+                            <span className="font-mono">{li.type === 'deduction' ? '−' : '+'}{(li.calculated_amount || li.amount || 0).toLocaleString()}</span>
+                          </div>
+                          {story && !inline && (
+                            <p className="pl-3 text-[11px] text-amber-700 dark:text-amber-400"
+                               data-testid={`payslip-line-note-${i}`}>{story}</p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 <div className="flex justify-between text-lg font-bold border-t pt-2 mt-2"><span>Net Pay</span><span className="font-mono">{viewingPayslip.currency} {(viewingPayslip.net_salary || 0).toLocaleString()}</span></div>

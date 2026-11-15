@@ -44,6 +44,10 @@ import { RecordLossDialog } from '../components/pos/RecordLossDialog';
 import { LossReportDialog } from '../components/pos/LossReportDialog';
 import { GrowingBatchesPanel } from '../components/pos/GrowingBatchesPanel';
 import { TransferStockDialog } from '../components/pos/TransferStockDialog';
+import { ServerSignInDialog } from '../components/pos/ServerSignInDialog';
+import { ServersReportDialog } from '../components/pos/ServersReportDialog';
+import { ScreensSettings } from '../components/pos/ScreensSettings';
+import { screensApi } from '../services/api';
 import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText, printQuoteSlip, quoteSlipText, printLossSlip, lossSlipText, printKitchenTicket, kitchenTicketText } from '../utils/tillPrinter';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
@@ -659,6 +663,61 @@ export default function ProductsPage() {
   const [activeTabId, setActiveTabId] = useState(null);
   const [showTabs, setShowTabs] = useState(false);
   const [sendingKitchen, setSendingKitchen] = useState(false);
+  // ---- who is serving this table (iter420) ----
+  // A waiter signs on with their own PIN, so the tab and any tip belong to the
+  // person who carried the plates, not to whoever opened the till this morning.
+  const [activeServer, setActiveServer] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('5812_pos_server') || 'null'); } catch { return null; }
+  });
+  const [showServerSignIn, setShowServerSignIn] = useState(false);
+  const [showServersReport, setShowServersReport] = useState(false);
+  const [tabTip, setTabTip] = useState('');
+  const [hasCustomerScreen, setHasCustomerScreen] = useState(false);
+  useEffect(() => {
+    if (activeServer) localStorage.setItem('5812_pos_server', JSON.stringify(activeServer));
+    else localStorage.removeItem('5812_pos_server');
+  }, [activeServer]);
+  const serving = activeServer || activeCashier || (user ? { id: user.id, name: user.name } : null);
+
+  // ---- the customer's own screen (iter420) ----
+  // Only mirrors the basket when a display is actually paired to this store,
+  // so a shop without one never pays for the traffic.
+  const paidHoldRef = useRef(0);
+  useEffect(() => {
+    if (!saleLocationId) { setHasCustomerScreen(false); return; }
+    screensApi.list({ location_id: saleLocationId })
+      .then(r => setHasCustomerScreen((r.data || []).some(s => s.kind === 'sales')))
+      .catch(() => setHasCustomerScreen(false));
+  }, [saleLocationId]);
+
+  const pushDisplay = (patch = {}) => {
+    if (!hasCustomerScreen || !saleLocationId) return Promise.resolve();
+    return screensApi.pushSale({
+      location_id: saleLocationId,
+      lines: cartLines().map(l => ({ name: l.name, qty: l.qty, price: l.price, line_total: l.line_total })),
+      subtotal: cartTotals.subtotal,
+      discount: cartTotals.discount_total,
+      total: cartTotals.total,
+      currency: storeSettings?.currency || activeCurrency || 'UGX',
+      state: cart.length ? 'selling' : 'idle',
+      customer_name: customerName === 'Walk-in Customer' ? '' : customerName,
+      store_name: storeSettings?.store_name || '',
+      cashier: serving?.name || '',
+      ...patch,
+    }).catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!hasCustomerScreen || !saleLocationId) return undefined;
+    const t = setTimeout(() => {
+      // A finished sale holds its "thank you" on screen for a few seconds
+      // before the next basket takes over.
+      if (Date.now() < paidHoldRef.current) return;
+      pushDisplay();
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cart, customerName, hasCustomerScreen, saleLocationId]);
   // Lines a cook has to make: either the product says so, or the store runs as
   // a restaurant and everything in the basket is served.
   const kitchenLines = () => cartLines().filter(l => {
@@ -705,6 +764,8 @@ export default function ProductsPage() {
           table_label: tableLabel.trim() || null, order_type: orderType,
           customer_name: customerName !== 'Walk-in Customer' ? customerName : null,
           sale_id: saleId,
+          server_id: serving?.id || null,
+          server_name: serving?.name || null,
         });
         if (!silent) toast.success(r.data?.message || 'Sent to the kitchen');
         await printTicket(r.data.order);
@@ -894,14 +955,24 @@ export default function ProductsPage() {
       // A tab being settled: tie the ticket to the sale that paid it, and send
       // any late items the cook has not seen yet (iter418).
       if (activeTabId) {
-        try { await kitchenApi.settle(activeTabId, res.data.id); } catch { /* the sale stands either way */ }
-        setActiveTabId(null); setTableLabel('');
+        const tip = parseFloat(tabTip) || 0;
+        try { await kitchenApi.settle(activeTabId, res.data.id, tip); } catch { /* the sale stands either way */ }
+        if (tip > 0) toast.success(`${fmt(tip, storeSettings?.currency || activeCurrency)} tip recorded for ${serving?.name || 'the waiter'}`);
+        setActiveTabId(null); setTableLabel(''); setTabTip('');
       } else if (kitchenLines().length && (storeSettings?.restaurant_mode || true)) {
         // Paid first, then cooked — the kitchen still needs its ticket.
         try { await sendToKitchen({ saleId: res.data.id, silent: true }); } catch { /* ticket can be reprinted */ }
       }
       // Auto-set paper size override on receipt if user picked one (otherwise use store default)
       const receiptStoreSettings = receiptPaperSize !== 'auto' ? { ...storeSettings, receipt_paper_size: receiptPaperSize } : storeSettings;
+      // The customer's screen says thank you, with their change, before the
+      // next basket takes it over (iter420).
+      paidHoldRef.current = Date.now() + 20000;
+      pushDisplay({
+        state: 'paid', total: cartTotals.total,
+        change_due: cashInfo?.change_due ?? null,
+        receipt_number: res.data.receipt_number || res.data.id || '',
+      });
       setLastReceipt(res.data); setLastStoreSettings(receiptStoreSettings); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
       SOUNDS.saleComplete();
       haptic([30, 50, 30]);
@@ -1417,6 +1488,23 @@ export default function ProductsPage() {
                   <div className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-950/20 p-2.5 space-y-2"
                        data-testid="restaurant-panel">
                     <div className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Serving</p>
+                        <p className="text-xs font-semibold truncate" data-testid="active-server-name">
+                          {serving?.name || 'Nobody signed on'}
+                        </p>
+                      </div>
+                      <Button size="sm" variant="outline" className="h-7 text-[11px] px-2"
+                        onClick={() => setShowServerSignIn(true)} data-testid="server-signin-btn">
+                        {activeServer ? 'Switch' : 'Sign on'}
+                      </Button>
+                      {activeServer && (
+                        <Button size="sm" variant="ghost" className="h-7 text-[11px] px-2"
+                          onClick={() => { setActiveServer(null); toast.success('Signed off the till'); }}
+                          data-testid="server-signoff-btn">Off</Button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
                       <Input value={tableLabel} onChange={(e) => setTableLabel(e.target.value)}
                         placeholder="Table no." className="h-8 text-xs" data-testid="table-label-input" />
                       <Select value={orderType} onValueChange={setOrderType}>
@@ -1428,9 +1516,16 @@ export default function ProductsPage() {
                       </Select>
                     </div>
                     {activeTabId && (
-                      <p className="text-[11px] text-amber-700 dark:text-amber-400" data-testid="active-tab-note">
-                        Working on an open tab — finishing the sale will settle it.
-                      </p>
+                      <>
+                        <p className="text-[11px] text-amber-700 dark:text-amber-400" data-testid="active-tab-note">
+                          Working on an open tab — finishing the sale will settle it.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground shrink-0">Tip</Label>
+                          <Input value={tabTip} onChange={(e) => setTabTip(e.target.value)} type="number" min="0"
+                            placeholder="0" className="h-8 text-xs" data-testid="tab-tip-input" />
+                        </div>
+                      </>
                     )}
                     <div className="flex gap-2">
                       <Button size="sm" className="flex-1 gap-1 text-xs" disabled={cart.length === 0 || sendingKitchen}
@@ -1440,6 +1535,10 @@ export default function ProductsPage() {
                       <Button size="sm" variant="outline" className="gap-1 text-xs"
                         onClick={() => setShowTabs(true)} data-testid="open-tabs-btn">
                         <Utensils size={13} /> Tabs
+                      </Button>
+                      <Button size="sm" variant="outline" className="gap-1 text-xs"
+                        onClick={() => setShowServersReport(true)} data-testid="servers-report-btn">
+                        Waiters
                       </Button>
                     </div>
                   </div>
@@ -2076,6 +2175,18 @@ export default function ProductsPage() {
         currency={storeSettings?.currency || activeCurrency || 'UGX'}
         onPickUp={pickUpTab}
       />
+      <ServerSignInDialog
+        open={showServerSignIn}
+        onOpenChange={setShowServerSignIn}
+        storeId={saleLocationId}
+        onSignedIn={(u) => { setActiveServer({ id: u.id, name: u.name }); toast.success(`${u.name} is on the floor`); }}
+      />
+      <ServersReportDialog
+        open={showServersReport}
+        onOpenChange={setShowServersReport}
+        locationId={saleLocationId}
+        currency={storeSettings?.currency || activeCurrency || 'UGX'}
+      />
       <TransferStockDialog
         product={transferProduct}
         locations={locations}
@@ -2249,7 +2360,16 @@ export default function ProductsPage() {
               </div>
             </div>
 
-            {/* RESTAURANT — tables, tabs and tickets to the cooks */}
+            {/* RESTAURANT — tables, tabs and tickets to the cooks. Only the
+                people who actually work at this store see the setup (iter420). */}
+            {storeSettings.can_manage_restaurant === false ? (
+              <div className="p-3 rounded-lg border border-border bg-muted/40 space-y-1" data-testid="restaurant-settings-locked">
+                <p className="text-xs font-semibold flex items-center gap-2"><ChefHat size={13} /> Restaurant service</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Only someone signed in to this store can set up its kitchen. Ask the manager who works here.
+                </p>
+              </div>
+            ) : (
             <div className="p-3 rounded-lg border border-amber-200 dark:border-amber-900/40 bg-amber-50/40 dark:bg-amber-950/20 space-y-2" data-testid="restaurant-settings-block">
               <p className="text-xs font-semibold flex items-center gap-2">
                 <ChefHat size={13} /> Restaurant service
@@ -2277,6 +2397,11 @@ export default function ProductsPage() {
                 </div>
               )}
             </div>
+            )}
+
+            {/* SCREENS — the kitchen board and the customer-facing display */}
+            <ScreensSettings locationId={storeSettingsLoc}
+                             canManage={storeSettings.can_manage_restaurant !== false} />
 
             {/* PERIPHERALS — auto-print receipts on sale completion, badge size when issuing kiosk badges. */}
             <div className="p-3 rounded-lg border border-blue-200 dark:border-blue-900/40 bg-blue-50/40 dark:bg-blue-950/20 space-y-2" data-testid="peripheral-settings-block">
