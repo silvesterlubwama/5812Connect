@@ -1,0 +1,13 @@
+PRINT_HOOK = """
+window.__printed = [];
+window.print = () => { window.__printed.push({top: document.title}); };
+new MutationObserver(muts => {
+  for (const m of muts) for (const n of m.addedNodes) {
+    if (n.tagName === 'IFRAME') {
+      try { n.contentWindow.print = () => { window.__printed.push({html: n.contentDocument.body ? n.contentDocument.body.innerText : ''}); }; } catch(e) {}
+      setTimeout(() => { try { window.__printed.push({snap: n.contentDocument.body.innerText}); n.contentWindow.print = () => {}; } catch(e) {} }, 100);
+    }
+  }
+}).observe(document.documentElement, {childList: true, subtree: true});
+window.open = (u) => { window.__printed.push({open: u}); return null; };
+"""

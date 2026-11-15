@@ -157,3 +157,26 @@ async def cron_calendar_sync(
         return {"accepted": True, "duplicate": True}
     background.add_task(run_for_every_org, sync_subscribed_calendars)
     return {"accepted": True}
+
+
+# ---------- livestock / lifecycle maturation ----------
+
+@router.post("/mature-batches")
+async def cron_mature_batches(
+    request: Request, background: BackgroundTasks,
+    authorization: str = Header(None), x_webhook_id: str = Header(None),
+):
+    """Move every batch whose day has come onto the grown product — brooder
+    chicks become 4-week broilers, at the broiler price (iter417)."""
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    _authorize(authorization)
+    try:
+        envelope = await request.json()
+    except Exception:
+        envelope = {}
+    run_id = x_webhook_id or envelope.get("run_id") or ""
+    if await _seen_before(run_id, "mature-batches"):
+        return {"accepted": True, "duplicate": True}
+    from routers.stock_lifecycle import run_due_maturations
+    background.add_task(run_for_every_org, run_due_maturations)
+    return {"accepted": True}

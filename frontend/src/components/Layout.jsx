@@ -6,7 +6,7 @@ import useIdleTimeout from '../utils/kioskMode';
 import {
   LayoutDashboard, Users, Calendar, CheckSquare, CalendarDays,
   UserCheck, Settings, LogOut, Menu, X, Bell, ChevronDown, ChevronRight,
-  DollarSign, ShoppingCart, Heart, MapPin, Shield, Search,
+  DollarSign, ShoppingCart, ChefHat, Heart, MapPin, Shield, Search,
   User, ExternalLink, CheckCheck, BarChart3, Megaphone,
   Globe, Building2, TrendingUp, Sun, Moon, ScanLine, FileText, Wifi, WifiOff, CircleUser, Sliders,
   PieChart, FileSpreadsheet, Clock, Mail, CreditCard, Lock, Phone, PhoneCall, Voicemail, Server,
@@ -102,6 +102,7 @@ const NAV_SECTIONS = [
     roles: STAFF_PLUS,
     items: [
       { to: '/sales', icon: ShoppingCart, label: 'Marketplace', module: 'sales' },
+      { to: '/kitchen', icon: ChefHat, label: 'Kitchen', module: 'sales' },
     ]
   },
   {
@@ -188,7 +189,8 @@ export default function Layout() {
   const [expandedSections, setExpandedSections] = useState({});
   const navMemoryLoaded = useRef(false);
   const [campuses, setCampuses] = useState([]);
-  const [activeCampus, setActiveCampus] = useState(() => localStorage.getItem('5812_active_campus') || '');
+  const [activeCampus, setActiveCampus] = useState(() =>
+    localStorage.getItem('5812_active_campus') || user?.active_campus_id || '');
 
   // Inactivity logout — privileged roles get the strictest timeout; rank-and-file staff
   // get a generous default. Disabled for kiosk roles (they have their own lock screen).
@@ -284,7 +286,7 @@ export default function Layout() {
         setCampuses(locs);
         // Auto-migrate legacy "All my campuses" state — no such option any more.
         // If active campus is blank or invalid, snap to the user's home campus.
-        let activeId = activeCampus || user?.location_id;
+        let activeId = activeCampus || user?.active_campus_id || user?.location_id;
         if (activeId && !locs.find(l => l.id === activeId)) activeId = user?.location_id || (locs[0] && locs[0].id) || '';
         if (!activeCampus && activeId) {
           setActiveCampus(activeId);
@@ -298,7 +300,7 @@ export default function Layout() {
       } catch (e) { console.warn(e.message || e); }
     };
     loadCampuses();
-  }, [activeCampus, user?.location_id]);
+  }, [activeCampus, user?.active_campus_id, user?.location_id]);
 
   // Restore the groups this person had open, once we know who they are.
   useEffect(() => {

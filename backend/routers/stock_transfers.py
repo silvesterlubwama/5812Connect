@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from deps import db, get_current_user, require_staff, get_campus_filter
+from deps import db, get_current_user, require_staff
 from routers.product_scope import is_shared, stock_at, stock_field
 
 router = APIRouter(prefix="/api", tags=["stock-transfers"])
@@ -28,13 +28,17 @@ class TransferCreate(BaseModel):
 @router.get("/stock-transfers")
 async def list_stock_transfers(location_id: Optional[str] = None, limit: int = 50,
                                current_user: dict = Depends(get_current_user)):
-    """Transfers touching a store — sent or received."""
-    query: dict = {**await get_campus_filter(current_user)}
-    query.pop("location_id", None)
-    if location_id:
-        query = {"$and": [query, {"$or": [{"from_location_id": location_id},
-                                          {"to_location_id": location_id}]}]} if query else \
-            {"$or": [{"from_location_id": location_id}, {"to_location_id": location_id}]}
+    """Transfers touching a store — sent or received.
+
+    A transfer has no `location_id` of its own (it has two), so the usual campus
+    filter never matched and the list came back empty for anyone pinned to a
+    campus. Scope on the two ends instead; organisation isolation is handled by
+    the db wrapper (iter416).
+    """
+    store = location_id or current_user.get("active_campus_id") or current_user.get("location_id") or ""
+    query: dict = {}
+    if store:
+        query = {"$or": [{"from_location_id": store}, {"to_location_id": store}]}
     return await db.stock_transfers.find(query, {"_id": 0}).sort("created_at", -1).limit(limit).to_list(limit)
 
 

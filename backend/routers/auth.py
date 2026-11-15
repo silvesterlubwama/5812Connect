@@ -416,8 +416,11 @@ async def login(data: UserLogin, request: Request) -> dict:
             or "The system is down for maintenance. Please try again shortly.",
         )
 
-    # Always default to user's primary campus on login
-    user_loc = user.get("location_id") or (user.get("location_ids") or [None])[0]
+    # Keep the campus this person was last working in. Resetting it to the
+    # primary campus on every sign-in left the switcher (which remembers the
+    # choice in this browser) and the data disagreeing — the sidebar said Zimba
+    # Farm while the till was ringing up at Uganda (iter416).
+    user_loc = user.get("active_campus_id") or user.get("location_id") or (user.get("location_ids") or [None])[0]
     if not user_loc:
         # No location assigned — find the first campus
         first_campus = await db.locations.find_one({"type": {"$in": ["campus", "main"]}}, {"_id": 0, "id": 1})

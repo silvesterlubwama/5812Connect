@@ -131,8 +131,34 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
             </div>
           )}
 
-          {needsPairing && !unsupported && (
-            <Button onClick={handleConnect} disabled={busy === 'connect'} className="w-full gap-2" data-testid="till-connect-btn">
+          {/* A kitchen printer is almost always a network box of its own. Leave
+              it blank and tickets come off the counter roll instead (iter418). */}
+          <div className="grid grid-cols-3 gap-2 rounded-lg border border-amber-200 dark:border-amber-900/40 p-2.5">
+            <p className="col-span-3 text-xs font-semibold">Kitchen printer (optional)</p>
+            <div className="col-span-2 space-y-1">
+              <Label className="text-xs">Address</Label>
+              <Input
+                value={cfg.kitchenNetwork?.host || ''}
+                onChange={e => update({ kitchenNetwork: { ...cfg.kitchenNetwork, host: e.target.value.trim() } })}
+                placeholder="192.168.1.60"
+                data-testid="till-kitchen-host"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Port</Label>
+              <Input
+                value={cfg.kitchenNetwork?.port ?? 9100}
+                onChange={e => update({ kitchenNetwork: { ...cfg.kitchenNetwork, port: e.target.value.replace(/\D/g, '') } })}
+                data-testid="till-kitchen-port"
+              />
+            </div>
+            <p className="col-span-3 text-[11px] text-muted-foreground">
+              Kitchen tickets go here. Leave it empty — or if this printer is off — and they
+              come off the counter roll instead, so no order is ever lost.
+            </p>
+          </div>
+
+          {needsPairing && !unsupported && (            <Button onClick={handleConnect} disabled={busy === 'connect'} className="w-full gap-2" data-testid="till-connect-btn">
               {busy === 'connect' ? <Loader2 size={14} className="animate-spin" /> : <Wifi size={14} />}
               {cfg.bluetoothName && cfg.connection === 'bluetooth' ? `Reconnect ${cfg.bluetoothName}` : 'Choose the printer'}
             </Button>

@@ -19,6 +19,7 @@ import MembersPage from './pages/MembersPage';
 // Lazy-load heavy pages — code-split per route so first load is small.
 const UnifiedPeoplePage = lazy(() => import('./pages/UnifiedPeoplePage'));
 const ProductsPage = lazy(() => import('./pages/ProductsPage'));
+const KitchenPage = lazy(() => import('./pages/KitchenPage'));
 const FinancePage = lazy(() => import('./pages/FinancePage'));
 const DonorsPage = lazy(() => import('./pages/DonorsPage'));
 const VendorsPage = lazy(() => import('./pages/VendorsPage'));
@@ -188,6 +189,7 @@ function AppRoutes() {
         <Route path="social-work" element={<SocialWorkPage />} />
         <Route path="banking" element={<BankPage />} />
         <Route path="sales" element={<ProductsPage />} />
+        <Route path="kitchen" element={<KitchenPage />} />
         <Route path="pos-setup" element={<PosKioskSetupPage />} />
         {/* accounts-receivable, reconciliation, customer-statements now redirect to unified finance */}
         <Route path="accounts-receivable" element={<FinancePage />} />

@@ -496,12 +496,20 @@ export default function CalendarPage() {
     catch { /* silent */ }
     setShareConfigsLoading(false);
   };
-  const backend = process.env.REACT_APP_BACKEND_URL || '';
+  // A self-hosted build often has no REACT_APP_BACKEND_URL baked in, which left
+  // the share box showing a half link like "/api/public/calendar/global.ics?..."
+  // that no calendar app can subscribe to. Fall back to wherever the app is
+  // being served from, and never leave a trailing slash behind (iter417).
+  const backend = (process.env.REACT_APP_BACKEND_URL || '').trim().replace(/\/+$/, '')
+    || window.location.origin;
   const buildIcalUrl = (scope, id, token, passcode) => {
     if (scope === 'global') return `${backend}/api/public/calendar/global.ics?token=${token}`;
     if (scope === 'user') return `${backend}/api/public/calendar/user/${token}.ics${passcode ? `?passcode=${encodeURIComponent(passcode)}` : ''}`;
     return `${backend}/api/public/calendar/location/${id}.ics?token=${token}`;
   };
+  // Same address as webcal:// — tapping this subscribes in Apple/Outlook/Google
+  // instead of downloading a one-off copy of the file.
+  const toWebcal = (url) => String(url || '').replace(/^https?:\/\//i, 'webcal://');
   const buildViewUrl = (scope, id, token) => {
     if (scope === 'global') return `${window.location.origin}/p/calendar/global/${token}`;
     if (scope === 'user') return `${window.location.origin}/p/calendar/user/${token}`;
@@ -1148,9 +1156,9 @@ export default function CalendarPage() {
             <p className="text-xs text-muted-foreground">Fixed links — always work, always public-only. Rotate the server SECRET_KEY to invalidate.</p>
             {shareLinks ? (
               <div className="space-y-3">
-                <ShareBlock title="Global — all campuses" viewUrl={buildViewUrl('global', '', shareLinks.global.token)} icalUrl={buildIcalUrl('global', '', shareLinks.global.token)} />
+                <ShareBlock title="Global — all campuses" viewUrl={buildViewUrl('global', '', shareLinks.global.token)} icalUrl={buildIcalUrl('global', '', shareLinks.global.token)} webcalUrl={toWebcal(buildIcalUrl('global', '', shareLinks.global.token))} />
                 {shareLinks.locations?.map(loc => (
-                  <ShareBlock key={loc.location_id} title={loc.location_name} viewUrl={buildViewUrl('location', loc.location_id, loc.token)} icalUrl={buildIcalUrl('location', loc.location_id, loc.token)} />
+                  <ShareBlock key={loc.location_id} title={loc.location_name} viewUrl={buildViewUrl('location', loc.location_id, loc.token)} icalUrl={buildIcalUrl('location', loc.location_id, loc.token)} webcalUrl={toWebcal(buildIcalUrl('location', loc.location_id, loc.token))} />
                 ))}
               </div>
             ) : <div className="animate-pulse h-24 bg-muted rounded" />}
@@ -1197,21 +1205,26 @@ export default function CalendarPage() {
   );
 }
 
-function ShareBlock({ title, viewUrl, icalUrl }) {
+function ShareBlock({ title, viewUrl, icalUrl, webcalUrl }) {
   const [copied, setCopied] = useState('');
   const copy = (which, url) => { navigator.clipboard.writeText(url); setCopied(which); setTimeout(() => setCopied(''), 1500); };
   return (
     <div className="rounded-lg border border-border p-3 space-y-2" data-testid="share-block">
       <p className="text-sm font-semibold">{title}</p>
       <div className="flex items-center gap-2">
-        <Input readOnly value={viewUrl} className="text-xs font-mono" />
+        <Input readOnly value={viewUrl} className="text-xs font-mono" data-testid="share-view-url" />
         <Button size="sm" variant="outline" onClick={() => copy('view', viewUrl)}>{copied === 'view' ? <Check size={14} /> : <Copy size={14} />}</Button>
       </div>
       <div className="flex items-center gap-2">
-        <Input readOnly value={icalUrl} className="text-xs font-mono" />
-        <Button size="sm" variant="outline" onClick={() => copy('ics', icalUrl)}>{copied === 'ics' ? <Check size={14} /> : <Copy size={14} />}</Button>
+        <Input readOnly value={icalUrl} className="text-xs font-mono" data-testid="share-ical-url" />
+        <Button size="sm" variant="outline" onClick={() => copy('ics', icalUrl)} data-testid="copy-ical-btn">{copied === 'ics' ? <Check size={14} /> : <Copy size={14} />}</Button>
+        {webcalUrl && (
+          <Button size="sm" variant="outline" asChild data-testid="subscribe-ical-btn">
+            <a href={webcalUrl}>Subscribe</a>
+          </Button>
+        )}
       </div>
-      <p className="text-[10px] text-muted-foreground">Top row = read-only page. Bottom = subscribe URL for Google/Apple Calendar.</p>
+      <p className="text-[10px] text-muted-foreground">Top row = read-only page. Bottom = subscribe URL for Google/Apple Calendar — or tap Subscribe to add it here.</p>
     </div>
   );
 }

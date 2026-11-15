@@ -381,6 +381,31 @@ export const salesApi = {  list: (params) => api.get('/sales', { params }),
   zReport: (params) => api.get('/sales/z-report', { params }),
 };
 
+// ---- STOCK LOSSES & LIFECYCLE (spoilage, deaths, donations, growing on) ----
+export const stockApi = {
+  losses: (params) => api.get('/stock-losses', { params }),
+  recordLoss: (data) => api.post('/stock-losses', data),
+  lossReport: (params) => api.get('/stock-losses/report', { params }),
+  pendingDeductions: (params) => api.get('/stock-losses/pending-deductions', { params }),
+  setRecovery: (id, data) => api.patch(`/stock-losses/${id}/recovery`, data),
+  batches: (params) => api.get('/stock-batches', { params }),
+  createBatch: (data) => api.post('/stock-batches', data),
+  matureBatch: (id, data) => api.post(`/stock-batches/${id}/mature`, data || {}),
+  transformations: (params) => api.get('/stock-transformations', { params }),
+  acknowledgeTransformation: (id) => api.patch(`/stock-transformations/${id}/acknowledge`),
+};
+
+// ---- KITCHEN / RESTAURANT SERVICE ----
+export const kitchenApi = {
+  orders: (params) => api.get('/kitchen/orders', { params }),
+  createOrder: (data) => api.post('/kitchen/orders', data),
+  addItems: (id, items) => api.post(`/kitchen/orders/${id}/items`, { items }),
+  setOrderStatus: (id, status) => api.patch(`/kitchen/orders/${id}/status`, { status }),
+  setItemStatus: (id, lineId, status) => api.patch(`/kitchen/orders/${id}/items/${lineId}/status`, { status }),
+  settle: (id, saleId) => api.patch(`/kitchen/orders/${id}/settle`, { sale_id: saleId }),
+  cancel: (id) => api.delete(`/kitchen/orders/${id}`),
+};
+
 export const cashDropsApi = {
   list: (params) => api.get('/cash-drops', { params }),
   create: (data) => api.post('/cash-drops', data),

@@ -1,7 +1,7 @@
 """Product CRUD + variant management — extracted from financial.py"""
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
-from deps import db, get_current_user, get_campus_filter, is_system_admin, require_sales_view, default_creation_location
+from deps import db, get_current_user, get_campus_filter, is_system_admin, require_sales_view, default_creation_location, logger
 from datetime import datetime, timezone
 from typing import Optional, List
 import uuid
@@ -108,6 +108,16 @@ class ProductCreate(BaseModel):
     store_ids: Optional[List[str]] = None
     store_stock: Optional[dict] = None
     store_prices: Optional[dict] = None
+    # iter417 livestock/lifecycle: this product becomes another one after a set
+    # time — brooder chicks become 4-week broilers, at a different price. Each
+    # intake becomes a dated batch that a nightly cron moves on when due.
+    grows_into_product_id: Optional[str] = None
+    grow_after_days: Optional[int] = None
+    grow_ratio: Optional[float] = 1
+    # iter418 restaurant: this is cooked to order, so it goes to the kitchen on
+    # a ticket rather than straight off the shelf.
+    is_kitchen_item: bool = False
+    prep_station: Optional[str] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None; description: Optional[str] = None; price: Optional[float] = None
@@ -126,6 +136,11 @@ class ProductUpdate(BaseModel):
     store_ids: Optional[List[str]] = None
     store_stock: Optional[dict] = None
     store_prices: Optional[dict] = None
+    grows_into_product_id: Optional[str] = None
+    grow_after_days: Optional[int] = None
+    grow_ratio: Optional[float] = None
+    is_kitchen_item: Optional[bool] = None
+    prep_station: Optional[str] = None
 
 # ========== PRODUCTS ==========
 
@@ -168,13 +183,29 @@ async def list_products(location_id: Optional[str] = None, current_user: dict = 
     rows = await db.products.find(query, {"_id": 0}).sort("name", 1).to_list(500)
     return [resolve_for_store(p, location_id or "") for p in rows]
 
+async def _start_batch_if_growing(product: dict, qty: float, current_user: dict, note: str) -> None:
+    """Stock arriving for a product that grows on (chicks → broilers) starts its
+    own dated batch, so the clock runs from when THESE birds came in (iter417)."""
+    if qty <= 0 or not product.get("grows_into_product_id") or not product.get("grow_after_days"):
+        return
+    try:
+        from routers.stock_lifecycle import BatchCreate, create_batch
+        await create_batch(BatchCreate(product_id=product["id"], qty=qty,
+                                       location_id=product.get("location_id") or None,
+                                       note=note), current_user)
+    except Exception as ex:
+        logger.error(f"[grow] could not start a batch for {product.get('id')}: {ex}")
+
+
 @router.post("/products")
 async def create_product(data: ProductCreate, current_user: dict = Depends(get_current_user)):
     doc = {"id": f"prod_{str(uuid.uuid4())[:8]}", **data.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
     doc["location_id"] = default_creation_location(current_user, doc.get("location_id"))
     _guard_shared(doc)
     _seed_store_stock(doc)
-    await db.products.insert_one(doc); doc.pop("_id", None); return doc
+    await db.products.insert_one(doc); doc.pop("_id", None)
+    await _start_batch_if_growing(doc, float(doc.get("stock") or 0), current_user, "Opening stock")
+    return doc
 
 @router.put("/products/{product_id}")
 async def update_product(product_id: str, data: ProductUpdate, current_user: dict = Depends(get_current_user)):
@@ -393,6 +424,9 @@ async def record_stock_movement(product_id: str, data: dict, current_user: dict 
     }
     await db.stock_movements.insert_one(movement)
     movement.pop("_id", None)
+    if delta > 0 and reason in {"purchase", "initial", "adjustment", "transfer", "count"}:
+        await _start_batch_if_growing({**product, "location_id": movement["location_id"]},
+                                      float(delta), current_user, f"Stock in ({reason})")
     return movement
 
 

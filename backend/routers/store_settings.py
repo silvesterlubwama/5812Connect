@@ -27,6 +27,9 @@ DEFAULTS = {
     "default_cash_account_id": "",
     "default_bank_account_id": "",
     "default_momo_account_id": "",
+    # iter418 — a store that serves food: the till shows tables and open tabs,
+    # and kitchen items print a ticket for the cooks.
+    "restaurant_mode": False,
 }
 
 

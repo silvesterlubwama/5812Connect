@@ -108,6 +108,13 @@ export function buildReceiptBytes(sale, opts = {}) {
   if (sale.tax) push(row('Tax', money(sale.tax, currency), columns));
   push(BOLD_ON, DOUBLE_ON, row('TOTAL', money(sale.total, currency), Math.floor(columns / 2)), DOUBLE_OFF, BOLD_OFF);
   if (sale.payment_method) push(row('Paid by', String(sale.payment_method).toUpperCase(), columns));
+  if (sale.exchange_of) {
+    push('-'.repeat(columns) + '\n');
+    push(row('Exchange for', String(sale.exchange_of).slice(0, 22), columns));
+    push(row('Credit given', money(sale.exchange_credit, currency), columns));
+    const diff = Number(sale.exchange_difference || 0);
+    push(row(diff >= 0 ? 'Paid now' : 'Given back', money(Math.abs(diff), currency), columns));
+  }
   if (sale.amount_tendered) push(row('Cash', money(sale.amount_tendered, currency), columns));
   if (sale.change_due) push(row('Change', money(sale.change_due, currency), columns));
 
@@ -126,6 +133,10 @@ const DEFAULTS = {
   paper: '80mm',               // 80mm → 48 cols, 58mm → 32 cols
   openDrawerOnCash: true,
   network: { host: '', port: 9100 },
+  // A restaurant's kitchen printer, if it has its own. Empty means the kitchen
+  // ticket comes off the counter roll (iter418).
+  kitchenNetwork: { host: '', port: 9100 },
+  kitchenPaper: '80mm',
   bluetoothName: '',
 };
 
@@ -263,7 +274,13 @@ async function sendBluetooth(payload) {
 
 async function sendNetwork(payload) {
   const { network } = getTillConfig();
-  if (!network?.host) return { printed: false, transport: 'network', reason: 'No printer address set' };
+  return sendNetworkTo(network?.host, network?.port, payload);
+}
+
+/** Raw bytes to a named printer on the shop network (counter or kitchen). */
+async function sendNetworkTo(host, port, payload) {
+  if (!host) return { printed: false, transport: 'network', reason: 'No printer address set' };
+  const network = { host, port };
   let binary = '';
   payload.forEach(b => { binary += String.fromCharCode(b); });
   try {
@@ -537,6 +554,130 @@ export function refundSlipText(sale, opts = {}) {
 export function zReportText(report, opts = {}) {
   return _decode(buildZReportBytes(report, opts));
 }
+/**
+ * Stock written off: spoiled, dead, stolen, eaten or donated. The farm keeps
+ * the slip, so a write-off always has paper behind it. A donation prints as a
+ * receipt with the value on it; everything else prints as a loss record with a
+ * signature line (iter417).
+ */
+export function buildLossSlipBytes(loss, opts = {}) {
+  const {
+    storeName = '58:12 Global Connect', currency = 'UGX', columns = 48, storeLabel = '',
+  } = opts;
+  const donation = loss.reason === 'donated';
+  const parts = [bytes(
+    INIT, ALIGN_CENTER, BOLD_ON, `${storeName}\n`,
+    DOUBLE_ON, donation ? 'DONATION\nRECEIPT\n' : 'STOCK LOSS\n', DOUBLE_OFF, BOLD_OFF,
+  )];
+  const push = (...p) => parts.push(bytes(...p));
+
+  if (loss.slip_number) push(`${loss.slip_number}\n`);
+  push(ALIGN_LEFT, '-'.repeat(columns) + '\n');
+  push(row('When', String(loss.created_at || '').slice(0, 19).replace('T', ' '), columns));
+  if (storeLabel) push(row('Store', storeLabel.slice(0, 22), columns));
+  push(row('Recorded by', String(loss.created_by_name || '').slice(0, 20), columns));
+  push('-'.repeat(columns) + '\n');
+
+  push(`${String(loss.product_name || 'Item').slice(0, columns)}\n`);
+  push(row(`  ${loss.qty} x ${Number(loss.unit_value || 0).toLocaleString()}`,
+           money(loss.value, currency), columns));
+  push('-'.repeat(columns) + '\n');
+  push(row('Reason', String(loss.reason_label || loss.reason || '').slice(0, 24), columns));
+  if (donation) push(row('Donated to', String(loss.donated_to || '').slice(0, 22), columns));
+  if (loss.employee_name) push(row('Charged to', String(loss.employee_name).slice(0, 22), columns));
+  if (loss.note) push(`Note: ${String(loss.note).slice(0, columns * 2)}\n`);
+  push(BOLD_ON, row(donation ? 'VALUE DONATED' : 'VALUE LOST', money(loss.value, currency), columns), BOLD_OFF);
+
+  push('\n');
+  if (donation) {
+    push('Received with thanks. No payment was\nmade or is due for these goods.\n');
+  } else if (loss.recoverable) {
+    push('This loss is charged to the named staff\nmember and will be deducted from pay.\n');
+  } else {
+    push('These goods left stock without a sale.\n');
+  }
+  push('\n');
+  push(`Signed: ${'_'.repeat(Math.max(8, columns - 10))}\n`);
+  push(`Witness: ${'_'.repeat(Math.max(8, columns - 11))}\n`);
+  push('\n\n\n', CUT);
+  return bytes(...parts);
+}
+
+export async function printLossSlip(loss, storeSettings = {}, extra = {}) {
+  const cfg = getTillConfig();
+  if (cfg.connection === 'none') return { printed: false, transport: 'none', reason: 'No till printer set up' };
+  return sendBytes(buildLossSlipBytes(loss, {
+    storeName: storeSettings.store_name || '58:12 Global Connect',
+    currency: storeSettings.currency || 'UGX',
+    columns: columnsFor(cfg.paper),
+    storeLabel: extra.storeLabel || '',
+  }));
+}
+
+export function lossSlipText(loss, opts = {}) {
+  return _decode(buildLossSlipBytes(loss, opts));
+}
+
+/**
+ * The cooks' copy: big, no prices, with the table and every special request.
+ * Printed on the kitchen printer when one is set, otherwise the same roll as
+ * the receipts (iter418).
+ */
+export function buildKitchenTicketBytes(order, opts = {}) {
+  const { columns = 48, storeLabel = '', reprint = false, onlyItems = null } = opts;
+  const items = onlyItems || (order.items || []).filter(i => !i.cancelled);
+  const parts = [bytes(INIT, ALIGN_CENTER, BOLD_ON, DOUBLE_ON,
+                       order.order_type === 'takeaway' ? 'TAKEAWAY\n' : 'KITCHEN\n', DOUBLE_OFF)];
+  const push = (...p) => parts.push(bytes(...p));
+
+  if (order.table_label) push(DOUBLE_ON, `TABLE ${String(order.table_label).toUpperCase()}\n`, DOUBLE_OFF);
+  push(`${order.ticket_number || ''}\n`, BOLD_OFF);
+  if (reprint) push('** REPRINT **\n');
+  push(ALIGN_LEFT, '-'.repeat(columns) + '\n');
+  push(row('Time', String(order.created_at || new Date().toISOString()).slice(11, 19), columns));
+  if (order.server_name) push(row('Server', String(order.server_name).slice(0, 20), columns));
+  if (storeLabel) push(row('Store', String(storeLabel).slice(0, 22), columns));
+  if (order.customer_name) push(row('For', String(order.customer_name).slice(0, 20), columns));
+  push('='.repeat(columns) + '\n');
+
+  items.forEach(it => {
+    push(BOLD_ON, DOUBLE_ON, `${it.qty} x ${String(it.name).slice(0, Math.floor(columns / 2) - 5)}\n`,
+         DOUBLE_OFF, BOLD_OFF);
+    if (it.station) push(`   [${String(it.station).slice(0, 20)}]\n`);
+    if (it.notes) push(BOLD_ON, `   >> ${String(it.notes).slice(0, columns - 6)}\n`, BOLD_OFF);
+  });
+
+  push('='.repeat(columns) + '\n');
+  if (order.note) push(`Order note: ${String(order.note).slice(0, columns * 2)}\n`);
+  push('No prices on this ticket.\n');
+  push('\n\n\n', CUT);
+  return bytes(...parts);
+}
+
+/** Kitchen printer if one is set up, otherwise the receipt roll. */
+export async function printKitchenTicket(order, storeSettings = {}, extra = {}) {
+  const cfg = getTillConfig();
+  const payload = buildKitchenTicketBytes(order, {
+    columns: columnsFor(cfg.kitchenNetwork?.host ? (cfg.kitchenPaper || cfg.paper) : cfg.paper),
+    storeLabel: extra.storeLabel || storeSettings.store_name || '',
+    reprint: !!extra.reprint,
+    onlyItems: extra.onlyItems || null,
+  });
+  if (cfg.kitchenNetwork?.host) {
+    const res = await sendNetworkTo(cfg.kitchenNetwork.host, cfg.kitchenNetwork.port, payload);
+    if (res.printed) return { ...res, where: 'kitchen' };
+    // The kitchen printer is off or unplugged — the food still has to get
+    // cooked, so fall through to the counter roll rather than lose the ticket.
+  }
+  if (cfg.connection === 'none') return { printed: false, transport: 'none', reason: 'No till printer set up' };
+  const res = await sendBytes(payload);
+  return { ...res, where: 'counter' };
+}
+
+export function kitchenTicketText(order, opts = {}) {
+  return _decode(buildKitchenTicketBytes(order, opts));
+}
+
 export function quoteSlipText(quote, opts = {}) {
   return _decode(buildQuoteBytes(quote, opts));
 }

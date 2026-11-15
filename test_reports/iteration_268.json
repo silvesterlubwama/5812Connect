@@ -1,0 +1,46 @@
+{
+  "summary": "Frontend-only UI test of /5812global/sales (admin@5812uganda.org): Quote/presale slip, Returns (refund reasons) report, part refund, exchange, store transfers, store separation via campus switcher, Z-report scoping. All 6 requested flows work end to end. Found and fixed 1 bug (quote printed '1 x 0' unit price). Found 2 open issues: (a) the campus switcher and the till disagree after logout/login (store-separation regression), (b) GET /api/stock-transfers always returns [] for a campus-pinned user, so the transfer dialog never shows its 'Recent moves' list.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/stock-transfers", "issue": "Always returns [] for a user with active_campus_id. list_stock_transfers adds get_campus_filter(current_user), which comes back as {'$or':[{location_id:{$in:[...]}},{location_ids:{$in:[...]}}]}. query.pop('location_id') does nothing to it because the key is '$or'. stock_transfers docs only have from_location_id/to_location_id, so nothing matches. Verified: Mongo holds trf_2410b5055b and trf_1791c45b02 (Uganda->Zimba), but the API with location_id=loc_419f5d5e returns []. Effect: TransferStockDialog 'Recent moves of this item' never shows. Fix: build the scope from the campus id list against from_location_id/to_location_id, or scope only by organisation."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "printQuote (ProductsPage.jsx ~L565)", "issue": "FIXED by testing agent. Quote lines printed '1 x 0' because cart items hold the price in unit_price, not price. Changed to price: item.unit_price ?? item.price. Re-verified: '2 x 12,000   24,000'.", "selector": "[data-testid='print-quote-btn']", "priority": "MEDIUM"},
+      {"component": "Layout campus switcher vs POS store", "issue": "Store-separation regression. Steps: switch to 'Zimba Farm', then log out and back in. The sidebar still says 'Zimba Farm' because localStorage 5812_active_campus=loc_4bf833e0. But the till, products, history and Z-report are on 58:12 Uganda: pos-bound-store reads '58:12 Uganda · Zimba Farm' and the header shows 11 sales. Cause: backend login (routers/auth.py ~L419-428) always resets users.active_campus_id to the primary campus, while Layout.jsx L191 starts activeCampus from localStorage. Fix: clear 5812_active_campus on login, or have Layout start from user.active_campus_id / PUT the stored campus back to the backend on load.", "selector": "[data-testid='campus-switcher'], [data-testid='pos-bound-store']", "priority": "HIGH"},
+      {"component": "Layout campus switcher initial label", "issue": "On a fresh browser the switcher shows 'Choose campus' even though the backend active_campus_id is 58:12 Uganda. The fallback is user.location_id, which this admin does not have. It should fall back to user.active_campus_id.", "selector": "[data-testid='campus-switcher']", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Exchange receipt", "issue": "The receipt for the new exchange sale (INV-20261110-0018) shows TOTAL UGX 9,000 'Paid: Cash' and nothing links it to the exchange. In reality the customer got 3,000 back against INV-20261110-0017. Consider printing 'Exchange for INV-…, credit 12,000, change 3,000' on the receipt.", "affected_selectors": ["[data-testid='refund-submit-btn']"]},
+      {"flow": "Transfer history", "issue": "'Recent moves of this item' (transfer-history-*) never shows. Cause is the backend GET /api/stock-transfers filter bug above.", "affected_selectors": ["[data-testid^='transfer-history-']"]}
+    ],
+    "design_issues": [
+      {"screen": "Store naming", "issues": ["The trading name of store '58:12 Uganda' in Store Settings is 'Zimba Farm'. So every Uganda receipt, quote and refund slip is headed 'Zimba Farm', and the cart store line reads '58:12 Uganda · Zimba Farm'. That is easy to confuse with the real Zimba Farm store. This is data, not code, but worth telling the user."]},
+      {"screen": "Returns report dialog", "issues": ["Uses the browser's native date inputs (type=date) instead of the shadcn calendar picker"]},
+      {"screen": "Sales History rows", "issues": ["Row action icons are stacked vertically and are very small (tiny orange/grey glyphs plus 'Del' text), which makes rows about 130px tall"]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "HIGH: Keep the campus switcher and the POS store in sync after login (Layout.jsx L191 localStorage vs auth.py login reset of active_campus_id)",
+    "Fix GET /api/stock-transfers scoping (campus filter $or on location_id/location_ids never matches transfer docs) so 'Recent moves' shows",
+    "Switcher fallback label: use user.active_campus_id when there is no user.location_id",
+    "Optional: show the exchange context (original receipt, credit, change) on the exchange sale receipt",
+    "Optional: replace the native date inputs in ReturnsReportDialog with the shadcn calendar"
+  ],
+  "critical_code_review_comments": [
+    "ProductsPage.jsx is 2400+ lines; split POS, Products tab, History tab and dialogs into modules",
+    "RefundDialog exchange sends raw cart objects (unit_price, price_source, ...) as items to /exchange. The backend works it out from data.total, but the items saved on the new sale have no price/line_total unless the backend normalises them. The receipt showed the unit 9,000, so it is fine today, but this is fragile.",
+    "TransferStockDialog on-hand uses product.stock. That is correct only because the list API returns per-store stock when given location_id. storeStock(p, fromLocationId) would be safer.",
+    "returnsRange default uses toISOString (UTC). Near midnight in Kampala (UTC+3) the 'today' end date can be yesterday."
+  ],
+  "updated_files": ["/app/frontend/src/pages/ProductsPage.jsx (printQuote unit price fix)"],
+  "success_rate": {"backend": "N/A (frontend only)", "frontend": "92% - all 6 requested flows pass; store separation fails only on the re-login scenario"},
+  "seed_data_creation": "Created via UI at 58:12 Uganda: sale INV-20261110-0017 (customer 'ZTMP UI Tester', 2x ZTMP Swap Beans, fully returned: 1 refunded with reason 'ZTMP Damaged', 1 exchanged); exchange sale INV-20261110-0018 (1x ZTMP Transfer Rice, 9,000); stock transfer trf_1791c45b02 (2x ZTMP Transfer Rice, Uganda->Zimba, note 'ZTMP UI transfer'). Final counts: Uganda Rice 11, Zimba Rice 7, Uganda Beans 19. A 2x Beans cart may be left in a browser session (not saved).",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Login at /5812global/login with admin@5812uganda.org / Admin@5812. Uganda=loc_419f5d5e; Zimba Farm=loc_4bf833e0 (child of Uganda). Products: ZTMP Swap Beans prod_83ec8bda, ZTMP Transfer Rice prod_777336be. To capture prints, add an init script with a MutationObserver on `document` (not documentElement) that overrides iframe.contentWindow.print and reads contentDocument.body.innerText. Refund testids use the receipt number (refund-sale-INV-...). The campus switcher option for Zimba is labelled '↳ Zimba Farm'.",
+  "rca of the issue": "1) Quote '1 x 0': cart lines store unit_price, but printQuote mapped item.price. Fixed. 2) Switcher/till mismatch: Layout keeps the chosen campus in localStorage across sessions, but the backend login always resets active_campus_id, and the POS uses user.active_campus_id first. Repro: switch to Zimba, log out, log in: the sidebar says Zimba and the till is Uganda. 3) Empty transfer history: get_campus_filter returns an $or on location_id/location_ids, which the transfer documents do not have."
+}

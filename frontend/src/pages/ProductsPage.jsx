@@ -28,18 +28,22 @@ import DeviceDiagnosticsDialog from '../components/DeviceDiagnosticsDialog';
 import PeripheralPermissionBanner from '../components/PeripheralPermissionBanner';
 import { calcLine, calcCart, pickTierDiscount } from '../utils/cartCalc';
 import { CrossCampusMoveDialog } from '../components/CrossCampusMoveDialog';
-import { ArrowRightLeft, Store, FileText, RotateCcw, PackageX, Truck } from 'lucide-react';
+import { ArrowRightLeft, Store, FileText, RotateCcw, PackageX, Truck, ChefHat, Utensils } from 'lucide-react';
 import PinNumpad from '../components/PinNumpad';
 import useIdleTimeout, { enterKioskFullscreen } from '../utils/kioskMode';
-import { authApi, cashDropsApi, shiftsApi } from '../services/api';
+import { authApi, cashDropsApi, shiftsApi, stockApi, kitchenApi } from '../services/api';
 import ChangeCalculator from '../components/ChangeCalculator';
 import { COUNTRY_TO_CURRENCY } from '../utils/cashDenominations';
 import { SOUNDS, haptic, isWebSerialSupported, requestSerialPort, kickCashDrawer, describePeripheralSupport } from '../utils/posPeripherals';
 import TillPrinterDialog from '../components/pos/TillPrinterDialog';
 import { RefundDialog } from '../components/pos/RefundDialog';
+import { OpenTabsDialog } from '../components/pos/OpenTabsDialog';
 import { ReturnsReportDialog } from '../components/pos/ReturnsReportDialog';
+import { RecordLossDialog } from '../components/pos/RecordLossDialog';
+import { LossReportDialog } from '../components/pos/LossReportDialog';
+import { GrowingBatchesPanel } from '../components/pos/GrowingBatchesPanel';
 import { TransferStockDialog } from '../components/pos/TransferStockDialog';
-import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText, printQuoteSlip, quoteSlipText } from '../utils/tillPrinter';
+import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText, printQuoteSlip, quoteSlipText, printLossSlip, lossSlipText, printKitchenTicket, kitchenTicketText } from '../utils/tillPrinter';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
@@ -56,7 +60,7 @@ const stockLabel = (stock, reorder) => {
   return `${stock} in stock`;
 };
 
-const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false, images: [], is_universal: false, store_ids: [], store_stock: {}, store_prices: {} };
+const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false, images: [], is_universal: false, store_ids: [], store_stock: {}, store_prices: {}, grows_into_product_id: '', grow_after_days: '', is_kitchen_item: false, prep_station: '' };
 
 // A shared product is one catalogue entry several stores sell. Name, SKU and
 // the base price travel with it; stock is counted per store, and a store may
@@ -555,15 +559,26 @@ export default function ProductsPage() {
     }
   };
 
+  // Cart lines with the price actually being charged, ready for a quote, an
+  // exchange or a receipt (cart rows hold `unit_price`, not `price`).
+  const cartLines = () => cart.map(item => {
+    const calc = calcLine(item, cart, productsById[item.product_id] || null);
+    return {
+      ...item,
+      name: item.name,
+      qty: item.qty,
+      price: item.unit_price ?? item.price,
+      line_total: calc.line_total,
+      units_per_pack: item.units_per_pack || 1,
+    };
+  });
+
   // "What would this cost?" — the basket, priced up, watermarked so it can
   // never pass as a receipt. Nothing is saved, nothing leaves the shelf.
   const printQuote = async () => {
     if (!cart.length) return;
     const settings = storeSettings || {};
-    const items = cart.map(item => {
-      const calc = calcLine(item, cart, productsById[item.product_id] || null);
-      return { name: item.name, qty: item.qty, price: item.price, line_total: calc.line_total };
-    });
+    const items = cartLines().map(l => ({ name: l.name, qty: l.qty, price: l.price, line_total: l.line_total }));
     const quote = {
       quote_number: `QUOTE-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now().toString().slice(-4)}`,
       created_at: new Date().toISOString(),
@@ -594,6 +609,36 @@ export default function ProductsPage() {
   const [returnsLoading, setReturnsLoading] = useState(false);
   const [showReturns, setShowReturns] = useState(false);
   const [transferProduct, setTransferProduct] = useState(null);
+  const [lossProduct, setLossProduct] = useState(null);
+  const [showLossReport, setShowLossReport] = useState(false);
+  const [lossReport, setLossReport] = useState(null);
+  const [lossLoading, setLossLoading] = useState(false);
+  const [lossRange, setLossRange] = useState(() => {
+    const d = (t) => new Date(Date.now() - t * 86400000).toLocaleDateString('en-CA');
+    return { start: d(29), end: d(0) };
+  });
+  const openLossReport = async (range = lossRange) => {
+    setLossLoading(true);
+    try {
+      const r = await stockApi.lossReport({ ...range, location_id: saleLocationId || undefined });
+      setLossReport(r.data);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not build the losses report');
+    } finally { setLossLoading(false); }
+  };
+  // Every write-off prints — a donation as a receipt with its value, anything
+  // else as a loss record with a signature line.
+  const printLoss = async (loss) => {
+    const settings = storeSettings || {};
+    const storeLabel = locations.find(l => l.id === (loss.location_id || saleLocationId))?.name || '';
+    const res = await printLossSlip(loss, settings, { storeLabel });
+    if (res.printed) return;
+    printSlipFallback(loss.slip_number || 'Stock loss', lossSlipText(loss, {
+      storeName: settings.store_name || '58:12 Global Connect',
+      currency: settings.currency || activeCurrency || 'UGX',
+      columns: 48, storeLabel,
+    }));
+  };
   const openReturnsReport = async (range = returnsRange) => {
     setReturnsLoading(true);
     try {
@@ -602,6 +647,73 @@ export default function ProductsPage() {
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Could not build the returns report');
     } finally { setReturnsLoading(false); }
+  };
+
+  // ---- restaurant service: tables, tabs and tickets to the cooks (iter418) ----
+  const [tableLabel, setTableLabel] = useState('');
+  const [orderType, setOrderType] = useState('dine_in');
+  const [activeTabId, setActiveTabId] = useState(null);
+  const [showTabs, setShowTabs] = useState(false);
+  const [sendingKitchen, setSendingKitchen] = useState(false);
+  // Lines a cook has to make: either the product says so, or the store runs as
+  // a restaurant and everything in the basket is served.
+  const kitchenLines = () => cartLines().filter(l => {
+    const p = productsById[l.product_id];
+    return p?.is_kitchen_item || (storeSettings?.restaurant_mode && !!p);
+  });
+  const isRestaurant = !!storeSettings?.restaurant_mode || kitchenLines().length > 0;
+
+  const printTicket = async (order, extra = {}) => {
+    const settings = storeSettings || {};
+    const res = await printKitchenTicket(order, settings, {
+      storeLabel: locations.find(l => l.id === saleLocationId)?.name || '', ...extra,
+    });
+    if (res.printed) return res;
+    printSlipFallback(order.ticket_number || 'Kitchen ticket',
+      kitchenTicketText(order, { columns: 48, storeLabel: settings.store_name || '', ...extra }));
+    return res;
+  };
+
+  const sendToKitchen = async ({ saleId = null, silent = false } = {}) => {
+    const lines = kitchenLines();
+    if (!lines.length) { if (!silent) toast.error('Nothing in the basket for the kitchen'); return; }
+    const items = lines.map(l => ({
+      product_id: l.product_id, name: l.name, qty: l.qty, price: l.price,
+      notes: l.kitchen_notes || '', station: productsById[l.product_id]?.prep_station || null,
+    }));
+    setSendingKitchen(true);
+    try {
+      if (activeTabId && !saleId) {
+        const r = await kitchenApi.addItems(activeTabId, items);
+        toast.success(r.data?.message || 'Sent to the kitchen');
+        await printTicket(r.data.order, { onlyItems: r.data.added });
+      } else {
+        const r = await kitchenApi.createOrder({
+          items, location_id: saleLocationId || undefined,
+          table_label: tableLabel.trim() || null, order_type: orderType,
+          customer_name: customerName !== 'Walk-in Customer' ? customerName : null,
+          sale_id: saleId,
+        });
+        if (!silent) toast.success(r.data?.message || 'Sent to the kitchen');
+        await printTicket(r.data.order);
+        if (!saleId) setActiveTabId(r.data.order.id);     // it is now an open tab
+      }
+      if (!saleId) setCart([]);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not send it to the kitchen');
+    } finally { setSendingKitchen(false); }
+  };
+
+  const pickUpTab = (tab) => {
+    setActiveTabId(tab.id);
+    setTableLabel(tab.table_label || '');
+    setOrderType(tab.order_type || 'dine_in');
+    setCart((tab.items || []).filter(i => !i.cancelled).map(i => ({
+      product_id: i.product_id, name: i.name, qty: i.qty,
+      unit_price: i.price, price: i.price, units_per_pack: 1,
+      kitchen_notes: i.notes || '',
+    })));
+    toast.success(`${tab.table_label ? `Table ${tab.table_label}` : 'Takeaway'} brought to the till — take the payment`);
   };
 
   const openZReport = async () => {
@@ -759,6 +871,15 @@ export default function ProductsPage() {
       }
 
       const res = await salesApi.create(payload);
+      // A tab being settled: tie the ticket to the sale that paid it, and send
+      // any late items the cook has not seen yet (iter418).
+      if (activeTabId) {
+        try { await kitchenApi.settle(activeTabId, res.data.id); } catch { /* the sale stands either way */ }
+        setActiveTabId(null); setTableLabel('');
+      } else if (kitchenLines().length && (storeSettings?.restaurant_mode || true)) {
+        // Paid first, then cooked — the kitchen still needs its ticket.
+        try { await sendToKitchen({ saleId: res.data.id, silent: true }); } catch { /* ticket can be reprinted */ }
+      }
       // Auto-set paper size override on receipt if user picked one (otherwise use store default)
       const receiptStoreSettings = receiptPaperSize !== 'auto' ? { ...storeSettings, receipt_paper_size: receiptPaperSize } : storeSettings;
       setLastReceipt(res.data); setLastStoreSettings(receiptStoreSettings); setShowReceipt(true); setCart([]); setCustomerName('Walk-in Customer');
@@ -785,14 +906,18 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online, images: p.images || [], is_universal: !!p.is_universal, store_ids: p.store_ids || [], store_stock: p.store_stock || {}, store_prices: p.store_prices || {} });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online, images: p.images || [], is_universal: !!p.is_universal, store_ids: p.store_ids || [], store_stock: p.store_stock || {}, store_prices: p.store_prices || {}, grows_into_product_id: p.grows_into_product_id || '', grow_after_days: p.grow_after_days ? String(p.grow_after_days) : '', is_kitchen_item: !!p.is_kitchen_item, prep_station: p.prep_station || '' });
     setShowProductModal(true);
   };
 
   const handleSaveProduct = async (e) => {
     e.preventDefault(); setSaving(true);
     try {
-      const data = { ...productForm, price: parseFloat(productForm.price), stock: parseInt(productForm.stock), reorder_level: parseInt(productForm.reorder_level) || 5 };
+      const data = { ...productForm, price: parseFloat(productForm.price), stock: parseInt(productForm.stock), reorder_level: parseInt(productForm.reorder_level) || 5,
+        grows_into_product_id: productForm.grows_into_product_id || null,
+        grow_after_days: productForm.grow_after_days ? parseInt(productForm.grow_after_days) : null,
+        is_kitchen_item: !!productForm.is_kitchen_item,
+        prep_station: productForm.prep_station || null };
       // Blank cells mean "no override" / "nothing here yet" — don't send them.
       data.store_stock = Object.fromEntries(
         Object.entries(productForm.store_stock || {}).filter(([, v]) => v !== '' && v !== null)
@@ -976,6 +1101,15 @@ export default function ProductsPage() {
           >
             <PackageX size={12} /> Returns
           </Button>
+          {/* What is being written off */}
+          <Button
+            variant="outline" size="sm" className="h-8 text-xs gap-1"
+            onClick={() => { setShowLossReport(true); openLossReport(); }}
+            data-testid="loss-report-btn"
+            title="Spoilage, deaths, theft and donations"
+          >
+            <PackageX size={12} /> Losses
+          </Button>
           {/* Till printer — straight to the roll, no browser dialog */}
           <Button
             variant="outline" size="sm"
@@ -1114,6 +1248,19 @@ export default function ProductsPage() {
                   const lineCalc = calcLine(item, cart, product);
                   return (
                   <div key={_cartKey(item)} className="flex flex-col gap-1.5 p-2.5 rounded-lg bg-secondary/40 hover:bg-secondary/60 transition-colors">
+                    {(product?.is_kitchen_item || storeSettings?.restaurant_mode) && (
+                      <Input
+                        value={item.kitchen_notes || ''}
+                        placeholder="No onions, well done…"
+                        className="h-7 text-[11px] order-last"
+                        data-testid={`kitchen-note-${item.product_id}`}
+                        onChange={(e) => {
+                          const key = _cartKey(item);
+                          const v = e.target.value;
+                          setCart(prev => prev.map(i => _cartKey(i) === key ? { ...i, kitchen_notes: v } : i));
+                        }}
+                      />
+                    )}
                     <div className="flex items-center gap-2">
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium truncate">{item.name}</p>
@@ -1254,6 +1401,37 @@ export default function ProductsPage() {
                   disabled={cart.length === 0} onClick={printQuote} data-testid="print-quote-btn">
                   <FileText size={13} /> Price it up (not a receipt)
                 </Button>
+                {isRestaurant && (
+                  <div className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-950/20 p-2.5 space-y-2"
+                       data-testid="restaurant-panel">
+                    <div className="flex items-center gap-2">
+                      <Input value={tableLabel} onChange={(e) => setTableLabel(e.target.value)}
+                        placeholder="Table no." className="h-8 text-xs" data-testid="table-label-input" />
+                      <Select value={orderType} onValueChange={setOrderType}>
+                        <SelectTrigger className="h-8 text-xs w-32" data-testid="order-type-select"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="dine_in">Dine in</SelectItem>
+                          <SelectItem value="takeaway">Takeaway</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {activeTabId && (
+                      <p className="text-[11px] text-amber-700 dark:text-amber-400" data-testid="active-tab-note">
+                        Working on an open tab — finishing the sale will settle it.
+                      </p>
+                    )}
+                    <div className="flex gap-2">
+                      <Button size="sm" className="flex-1 gap-1 text-xs" disabled={cart.length === 0 || sendingKitchen}
+                        onClick={() => sendToKitchen()} data-testid="send-to-kitchen-btn">
+                        <ChefHat size={13} /> {sendingKitchen ? 'Sending…' : (activeTabId ? 'Send more' : 'Send to kitchen')}
+                      </Button>
+                      <Button size="sm" variant="outline" className="gap-1 text-xs"
+                        onClick={() => setShowTabs(true)} data-testid="open-tabs-btn">
+                        <Utensils size={13} /> Tabs
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1261,6 +1439,13 @@ export default function ProductsPage() {
 
         {/* PRODUCTS TAB */}
         <TabsContent value="products" className="mt-4">
+          <div className="mb-3">
+            <GrowingBatchesPanel
+              locationId={saleLocationId}
+              currency={storeSettings?.currency || activeCurrency || 'UGX'}
+              onChanged={fetchAll}
+            />
+          </div>
           <div className="flex justify-end mb-3">
             <Button size="sm" className="gap-2" onClick={openAddProduct} data-testid="add-product-btn"><Plus size={14} /> Add Product</Button>
           </div>
@@ -1281,6 +1466,10 @@ export default function ProductsPage() {
                             <Truck size={11} />
                           </Button>
                         )}
+                        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive/80" onClick={() => setLossProduct(p)}
+                          data-testid={`write-off-${p.id}`} title="Write off — spoiled, died, donated…">
+                          <PackageX size={11} />
+                        </Button>
                         {(user?.role === 'admin' || user?.role === 'system_admin') && (
                           <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setMoveProduct(p)} data-testid="move-product-btn" title="Move to another campus">
                             <ArrowRightLeft size={11} />
@@ -1529,6 +1718,57 @@ export default function ProductsPage() {
             <div className="space-y-2"><Label>SKU</Label>
               <Input placeholder="Product SKU (optional)" value={productForm.sku} onChange={e => setProductForm({...productForm, sku: e.target.value})} />
             </div>
+            {/* Restaurant: cooked to order, so it goes to the kitchen on a ticket */}
+            <div className="rounded-lg border border-border p-3 space-y-2">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input type="checkbox" className="mt-1 accent-primary" checked={!!productForm.is_kitchen_item}
+                  onChange={e => setProductForm({ ...productForm, is_kitchen_item: e.target.checked })}
+                  data-testid="is-kitchen-item-checkbox" />
+                <span>
+                  <span className="text-sm font-medium">Kitchen item — cooked to order</span>
+                  <span className="block text-[11px] text-muted-foreground">
+                    Selling it sends a ticket to the cooks and opens a tab on the table.
+                  </span>
+                </span>
+              </label>
+              {productForm.is_kitchen_item && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Station (optional)</Label>
+                  <Input placeholder="Kitchen, Grill, Bar…" value={productForm.prep_station}
+                    onChange={e => setProductForm({ ...productForm, prep_station: e.target.value })}
+                    data-testid="prep-station-input" />
+                </div>
+              )}
+            </div>
+            {/* Livestock & produce: this becomes something else, at another price */}
+            <div className="rounded-lg border border-border p-3 space-y-2">
+              <Label className="text-xs uppercase text-muted-foreground">Grows into (livestock & produce)</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Becomes</Label>
+                  <Select value={productForm.grows_into_product_id || 'none'}
+                    onValueChange={v => setProductForm({ ...productForm, grows_into_product_id: v === 'none' ? '' : v })}>
+                    <SelectTrigger data-testid="grows-into-select"><SelectValue placeholder="Nothing — it stays as it is" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Nothing — it stays as it is</SelectItem>
+                      {products.filter(p => p.id !== editingProduct?.id).map(p => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">After how many days</Label>
+                  <Input type="number" min="1" placeholder="28" value={productForm.grow_after_days}
+                    onChange={e => setProductForm({ ...productForm, grow_after_days: e.target.value })}
+                    data-testid="grow-after-days-input" />
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Each intake starts its own batch. When the days are up the count moves onto the grown
+                product by itself — brooder chicks become 4 week broilers, at the broiler price.
+              </p>
+            </div>
             <SharedStoresEditor
               form={productForm}
               locations={locations}
@@ -1750,7 +1990,7 @@ export default function ProductsPage() {
         open={!!refundSale}
         onOpenChange={(v) => { if (!v) setRefundSale(null); }}
         currency={storeSettings?.currency || 'UGX'}
-        cart={cart}
+        cart={cart.length ? cartLines() : []}
         cartTotal={cartTotals.total}
         onExchanged={async (res, lines, amount, reason) => {
           const sale = refundSale;
@@ -1778,6 +2018,31 @@ export default function ProductsPage() {
         onOpenChange={setShowReturns}
         onRefresh={openReturnsReport}
         currency={storeSettings?.currency || activeCurrency || 'UGX'}
+      />
+      <RecordLossDialog
+        product={lossProduct}
+        locationId={saleLocationId}
+        open={!!lossProduct}
+        onOpenChange={(v) => { if (!v) setLossProduct(null); }}
+        currency={storeSettings?.currency || activeCurrency || 'UGX'}
+        onDone={async (loss) => { await printLoss(loss); fetchAll(); }}
+      />
+      <LossReportDialog
+        report={lossReport}
+        range={lossRange}
+        setRange={setLossRange}
+        loading={lossLoading}
+        open={showLossReport}
+        onOpenChange={setShowLossReport}
+        onRefresh={openLossReport}
+        currency={storeSettings?.currency || activeCurrency || 'UGX'}
+      />
+      <OpenTabsDialog
+        open={showTabs}
+        onOpenChange={setShowTabs}
+        locationId={saleLocationId}
+        currency={storeSettings?.currency || activeCurrency || 'UGX'}
+        onPickUp={pickUpTab}
       />
       <TransferStockDialog
         product={transferProduct}
@@ -1943,6 +2208,23 @@ export default function ProductsPage() {
                   Show tracking QR code
                 </label>
               </div>
+            </div>
+
+            {/* RESTAURANT — tables, tabs and tickets to the cooks */}
+            <div className="p-3 rounded-lg border border-amber-200 dark:border-amber-900/40 bg-amber-50/40 dark:bg-amber-950/20 space-y-2" data-testid="restaurant-settings-block">
+              <p className="text-xs font-semibold flex items-center gap-2">
+                <ChefHat size={13} /> Restaurant service
+              </p>
+              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                <input type="checkbox" checked={!!storeSettings.restaurant_mode}
+                  onChange={e => setStoreSettings({ ...storeSettings, restaurant_mode: e.target.checked })}
+                  data-testid="restaurant-mode-checkbox" />
+                This store serves food — show tables and open tabs at the till
+              </label>
+              <p className="text-[10px] text-muted-foreground">
+                Individual dishes can also be marked "kitchen item" on the product, so a shop
+                that sells one hot item still sends that item to a cook.
+              </p>
             </div>
 
             {/* PERIPHERALS — auto-print receipts on sale completion, badge size when issuing kiosk badges. */}
