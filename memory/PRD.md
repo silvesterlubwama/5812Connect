@@ -2497,3 +2497,17 @@ Re-running a move is therefore safe and repeatable.
   between shops shows that shop's own on-hand rather than the chain total.
 - Customers are shared across the whole organisation: one account, every receipt
   from every store on it.
+
+### 2026-11-15 — iCal link, write-offs, growing on, restaurant service
+- The calendar subscribe link is now a full web address on any deployment, with
+  a Subscribe button that adds it straight to Apple/Outlook/Google.
+- Stock can be written off with a reason — spoiled, died, stolen, eaten by the
+  farm, employee negligence, donated. Every write-off prints a slip; a donation
+  prints a receipt showing the value and who received it. Only negligence moves
+  money: it is charged to that employee for payroll to deduct.
+- A product can grow into another: brooder chicks become 4 week broilers 28 days
+  after they came in, at the broiler price, by themselves each morning. Deaths
+  along the way are recorded against the batch.
+- Stores that serve food show tables, open tabs and per-dish notes at the till,
+  send tickets to a kitchen printer (or the counter roll), and have a kitchen
+  screen at /kitchen where cooks move each dish from cooking to ready to served.

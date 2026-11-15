@@ -280,8 +280,11 @@ export default function ProductsPage() {
   // Admin/Director/Manager can issue & edit product barcodes manually
   const canIssueProductBarcodes = ['admin', 'system_admin', 'Executive Director', 'Adviser', 'Director', 'Manager', 'Leader', 'Coordinator'].includes(user?.role);
 
+  // Bumped on every refresh so child panels (growing batches) reload with it.
+  const [dataVersion, setDataVersion] = useState(0);
   const fetchAll = async () => {
     setLoading(true);
+    setDataVersion(v => v + 1);
     try {
       // Promise.allSettled — sales endpoint can 403 for non-finance users
       // (POS page is still useful without the historical sales feed).
@@ -674,9 +677,17 @@ export default function ProductsPage() {
     return res;
   };
 
+  // Lines the cook has not seen. A tab brought back to the till arrives with
+  // its dishes already made, so re-sending them would cook the meal twice
+  // (iter418 fix).
+  const unsentKitchenLines = () => kitchenLines().filter(l => !l.sent_line_id);
+
   const sendToKitchen = async ({ saleId = null, silent = false } = {}) => {
-    const lines = kitchenLines();
-    if (!lines.length) { if (!silent) toast.error('Nothing in the basket for the kitchen'); return; }
+    const lines = saleId ? kitchenLines() : unsentKitchenLines();
+    if (!lines.length) {
+      if (!silent) toast.error(activeTabId ? 'The kitchen already has all of these' : 'Nothing in the basket for the kitchen');
+      return;
+    }
     const items = lines.map(l => ({
       product_id: l.product_id, name: l.name, qty: l.qty, price: l.price,
       notes: l.kitchen_notes || '', station: productsById[l.product_id]?.prep_station || null,
@@ -696,7 +707,9 @@ export default function ProductsPage() {
         });
         if (!silent) toast.success(r.data?.message || 'Sent to the kitchen');
         await printTicket(r.data.order);
-        if (!saleId) setActiveTabId(r.data.order.id);     // it is now an open tab
+        // A fresh ticket is now the table's own open tab. The till moves on to
+        // the next customer; the tab is picked up again from Tabs when they pay.
+        if (!saleId) { setActiveTabId(null); setTableLabel(''); }
       }
       if (!saleId) setCart([]);
     } catch (e) {
@@ -704,7 +717,12 @@ export default function ProductsPage() {
     } finally { setSendingKitchen(false); }
   };
 
-  const pickUpTab = (tab) => {
+  const pickUpTab = async (tab) => {
+    if (cart.length && !await confirm({
+      title: 'Clear the basket?',
+      message: 'This table\u2019s order replaces what is in the basket now.',
+      confirmLabel: 'Bring it to the till',
+    })) return;
     setActiveTabId(tab.id);
     setTableLabel(tab.table_label || '');
     setOrderType(tab.order_type || 'dine_in');
@@ -712,6 +730,7 @@ export default function ProductsPage() {
       product_id: i.product_id, name: i.name, qty: i.qty,
       unit_price: i.price, price: i.price, units_per_pack: 1,
       kitchen_notes: i.notes || '',
+      sent_line_id: i.line_id,            // already cooked — never send it again
     })));
     toast.success(`${tab.table_label ? `Table ${tab.table_label}` : 'Takeaway'} brought to the till — take the payment`);
   };
@@ -1061,7 +1080,7 @@ export default function ProductsPage() {
             </div>
           )}
           {isAdmin && (
-            <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => openStoreSettings(locationFilter)} data-testid="store-settings-btn">
+            <Button variant="outline" size="sm" className="h-8 text-xs gap-1" onClick={() => openStoreSettings(saleLocationId || user?.location_id || '')} data-testid="store-settings-btn">
               <Settings size={12} /> Store
             </Button>
           )}
@@ -1382,25 +1401,6 @@ export default function ProductsPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Total</span>
-                  <span className="font-bold text-lg text-primary">{fmt(cartTotal, activeCurrency)}</span>
-                </div>
-                <Button className="w-full gap-2" disabled={cart.length === 0 || checkoutLoading} onClick={handleCheckout} data-testid="checkout-btn">
-                  <Receipt size={15} />{checkoutLoading ? 'Processing...' : 'Complete Sale'}
-                </Button>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" className="flex-1 gap-1 text-xs" disabled={cart.length === 0} onClick={parkSale} data-testid="park-sale-btn">
-                    Park Sale
-                  </Button>
-                  <Button variant="outline" size="sm" className="flex-1 gap-1 text-xs" onClick={() => setShowDrafts(true)} data-testid="open-parked-sales-btn">
-                    Parked ({drafts.length})
-                  </Button>
-                </div>
-                <Button variant="ghost" size="sm" className="w-full gap-1.5 text-xs text-muted-foreground"
-                  disabled={cart.length === 0} onClick={printQuote} data-testid="print-quote-btn">
-                  <FileText size={13} /> Price it up (not a receipt)
-                </Button>
                 {isRestaurant && (
                   <div className="rounded-lg border border-amber-300/60 bg-amber-50/50 dark:bg-amber-950/20 p-2.5 space-y-2"
                        data-testid="restaurant-panel">
@@ -1432,6 +1432,25 @@ export default function ProductsPage() {
                     </div>
                   </div>
                 )}
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Total</span>
+                  <span className="font-bold text-lg text-primary">{fmt(cartTotal, activeCurrency)}</span>
+                </div>
+                <Button className="w-full gap-2" disabled={cart.length === 0 || checkoutLoading} onClick={handleCheckout} data-testid="checkout-btn">
+                  <Receipt size={15} />{checkoutLoading ? 'Processing...' : 'Complete Sale'}
+                </Button>
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" className="flex-1 gap-1 text-xs" disabled={cart.length === 0} onClick={parkSale} data-testid="park-sale-btn">
+                    Park Sale
+                  </Button>
+                  <Button variant="outline" size="sm" className="flex-1 gap-1 text-xs" onClick={() => setShowDrafts(true)} data-testid="open-parked-sales-btn">
+                    Parked ({drafts.length})
+                  </Button>
+                </div>
+                <Button variant="ghost" size="sm" className="w-full gap-1.5 text-xs text-muted-foreground"
+                  disabled={cart.length === 0} onClick={printQuote} data-testid="print-quote-btn">
+                  <FileText size={13} /> Price it up (not a receipt)
+                </Button>
               </div>
             </div>
           </div>
@@ -1441,6 +1460,7 @@ export default function ProductsPage() {
         <TabsContent value="products" className="mt-4">
           <div className="mb-3">
             <GrowingBatchesPanel
+              refreshKey={products.length ? `${products.length}:${dataVersion}` : dataVersion}
               locationId={saleLocationId}
               currency={storeSettings?.currency || activeCurrency || 'UGX'}
               onChanged={fetchAll}
@@ -2085,7 +2105,14 @@ export default function ProductsPage() {
       </Dialog>
 
       {/* Store Settings Modal */}
-      <Dialog open={showStoreSettings} onOpenChange={setShowStoreSettings}>
+      <Dialog open={showStoreSettings} onOpenChange={(v) => {
+        setShowStoreSettings(v);
+        // The dialog borrows the POS's settings state to edit another store's
+        // config; put the till's own store back when it closes (iter418 fix).
+        if (!v && saleLocationId && storeSettingsLoc !== saleLocationId) {
+          storeSettingsApi.get(saleLocationId).then(r => setStoreSettings(r.data || {})).catch(() => {});
+        }
+      }}>
         <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center justify-between gap-2"><span className="flex items-center gap-2"><Settings size={16} /> Store Settings</span>
             <div className="flex gap-2 text-xs flex-wrap">

@@ -1135,8 +1135,11 @@ export default function CalendarPage() {
                     <Button size="sm" variant="outline" className="h-8" onClick={() => { navigator.clipboard.writeText(buildViewUrl('user', '', cfg.token)); toast.success('Link copied'); }}><Copy size={14} /></Button>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Input readOnly value={buildIcalUrl('user', '', cfg.token, sharePasscodes[cfg.id])} className="text-xs font-mono h-8" />
+                    <Input readOnly value={buildIcalUrl('user', '', cfg.token, sharePasscodes[cfg.id])} className="text-xs font-mono h-8" data-testid={`share-ical-url-${cfg.id}`} />
                     <Button size="sm" variant="outline" className="h-8" onClick={() => { navigator.clipboard.writeText(buildIcalUrl('user', '', cfg.token, sharePasscodes[cfg.id])); toast.success('Subscribe URL copied'); }}><Copy size={14} /></Button>
+                    <Button size="sm" variant="outline" className="h-8" asChild data-testid={`subscribe-ical-btn-${cfg.id}`}>
+                      <a href={toWebcal(buildIcalUrl('user', '', cfg.token, sharePasscodes[cfg.id]))}>Subscribe</a>
+                    </Button>
                   </div>
                   {cfg.requires_passcode && (
                     <p className="text-[10px] text-amber-600" data-testid={`share-passcode-note-${cfg.id}`}>

@@ -354,7 +354,11 @@ async def list_batches(location_id: Optional[str] = None, product_id: Optional[s
     for row in rows:
         try:
             due = datetime.fromisoformat(str(row.get("matures_at")).replace("Z", "+00:00"))
-            row["days_to_go"] = max(0, (due - now).days)
+            # Round UP: a batch booked in today with 28 days to run has 28 days
+            # to go, not 27 (iter418 fix).
+            secs = (due - now).total_seconds()
+            row["days_to_go"] = max(0, -(-secs // 86400)) if secs > 0 else 0
+            row["days_to_go"] = int(row["days_to_go"])
             row["due"] = due <= now
         except (TypeError, ValueError):
             row["days_to_go"] = None

@@ -3218,3 +3218,68 @@ test_iter411/412/414 still green (32 total). Live: sold 3 → stock 10→7, retu
 1 → 8, JE posted, Z-report net 10,000 off gross 15,000; Zimba Farm's till showed
 0 sales and 0 products while Uganda's showed 5; refund dialog checked at 1920px
 and 390px. All ZTMP test data removed.
+
+## iter417-418 — 2026-11-15 — iCal link, losses & growing on, restaurant service
+
+**iCal link half-formed on Ubuntu.** CalendarPage built every subscribe URL from
+`process.env.REACT_APP_BACKEND_URL`, which a self-hosted build often has empty —
+so the share box showed `/api/public/calendar/global.ics?token=…`, which no
+calendar app can subscribe to. It now falls back to `window.location.origin`,
+strips trailing slashes, and each share row has a **Subscribe** button pointing
+at the same address over `webcal://` so a tap adds it in Apple/Outlook/Google
+instead of downloading one dead copy (`buildIcalUrl`/`toWebcal`,
+CalendarPage.jsx; `share-ical-url`, `subscribe-ical-btn`).
+
+**Stock losses** (`routers/stock_lifecycle.py`). `POST /api/stock-losses` writes
+off stock with a reason — spoiled, died, stolen, eaten/used by the farm,
+employee negligence, donated, other — takes it off THAT store's count, decrements
+the oldest batch first, writes a `stock_movements` row and numbers a slip
+(`LOSS-…`, or `DON-…` for a donation). Per the user: only negligence moves money
+— it is charged to the named employee (`recoverable`, `recovery_status`) and
+listed by `GET /stock-losses/pending-deductions` for payroll to take off; a
+donation needs to say where it went and prints a receipt with its value.
+`GET /stock-losses/report` groups by reason and product with `to_recover` and
+`donated_value`. UI: write-off button on every product card (`write-off-<id>`),
+`RecordLossDialog` (conditional employee / donated-to fields), `LossReportDialog`
+behind the **Losses** toolbar button, and `buildLossSlipBytes` prints both slip
+types with a signature line.
+
+**Growing on (livestock).** A product can say what it becomes and after how long
+(`grows_into_product_id`, `grow_after_days` — "Brooder Chicks → 4 Week Broilers
+after 28 days"). Stock arriving starts a dated batch automatically
+(`_start_batch_if_growing`, hooked into product create and every positive stock
+movement). A 6am Kampala cron (`.emergent/crons.yml` → `POST /api/cron/mature-batches`
+→ `run_due_maturations`) moves due batches onto the grown product at that
+product's price, records a `stock_transformations` row with the before/after
+value, chains on if the grown product itself grows, and is idempotent. Deaths
+during the period come off the batch; declaring deaths at a manual grow-on books
+them as a `died` write-off so no phantom birds stay on the shelf.
+`GrowingBatchesPanel` shows batches, days to go and "Grow on now".
+
+**Restaurant service** (`routers/kitchen.py`). A store is a restaurant when
+Store Settings says so (`restaurant_mode`) AND/OR an item is flagged
+`is_kitchen_item` with an optional `prep_station` — both, as the user asked.
+Kitchen orders carry a table, dine-in/takeaway, per-dish notes and a stage per
+dish (new → cooking → ready → served); the ticket is only as far on as its
+slowest dish. An unpaid order IS the table's tab: `scope=tabs` lists what each
+table owes, `…/items` adds a second round, `…/settle` ties it to the sale that
+paid, so both pay-at-the-end and pay-first work. `/5812global/kitchen`
+(KitchenPage, linked in the sidebar) is the no-paper kitchen screen, refreshing
+itself every 20s, with per-dish taps, reprint and cancel. Tickets print via
+`printKitchenTicket` to the kitchen printer (`kitchenNetwork` in the till
+config) and fall back to the counter roll when it is unset or offline, so no
+order is lost.
+
+Fixes after the UI test pass (iteration_269): "Send more" no longer re-cooks
+dishes a tab already contains (`sent_line_id`); a fresh send now leaves the tab
+so the next customer is not added to — or settled against — the last table;
+bringing a tab to the till asks before replacing a basket; the Store button
+opens the till's own store and restores it on close; the growing panel refreshes
+with the product list; days-to-go rounds up.
+
+Verified: tests/test_iter417_losses_and_growth.py (21) and
+tests/test_iter418_kitchen.py (16) pass, cron endpoint returns 401 unauthorised /
+200 with the secret, and live runs covered a write-off (stock 100→99, slip
+numbered), a batch auto-started on intake, a manual grow-on with deaths
+(chicks→broilers at the broiler price), and a kitchen ticket through tabs and
+stages. Restaurant mode was switched back off and all ZTMP data removed.

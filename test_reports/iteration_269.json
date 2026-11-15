@@ -1,0 +1,54 @@
+{
+  "summary": "Frontend-only test of iter415-418 UI (iCal absolute URL, stock losses, loss report, kitchen/grows-into product fields, growing batches panel, restaurant panel, kitchen tickets/tabs, kitchen screen, till kitchen printer). Tested at 1920x1080 as admin@5812uganda.org on store 58:12 Uganda (loc_419f5d5e). All 8 requested flows pass at the happy-path level. I found 3 real logic bugs in the restaurant tab flow and 1 refresh bug in the growing panel.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProductsPage restaurant panel / pickUpTab + sendToKitchen", "issue": "After 'Bring to till' the cart holds the tab's dishes that were already sent, and the button reads 'Send more' and is enabled. Clicking it sends every dish to the kitchen a second time. Reproduced: tab Z7 went from 1 to 2 Chicken & Chips lines and its total from UGX 18,000 to 36,000 (toast '1 more sent to the kitchen'). It also empties the cart, so the cashier loses the payment context. Fix: mark picked-up lines as already sent (e.g. sent_line_id) and only send lines without one, or disable Send more until a new line is added.", "selector": "[data-testid='send-to-kitchen-btn']", "priority": "HIGH"},
+      {"component": "ProductsPage sendToKitchen (new order)", "issue": "Once a new ticket is sent, activeTabId and tableLabel stay set, and there is no 'New order' or 'Leave tab' button. The next customer's basket therefore goes onto the previous table's tab as 'Send more'. Completing an unrelated sale then calls kitchenApi.settle(activeTabId), which ties it to the old table. Confirmed in the UI: after sending table Z7 the panel still showed 'Working on an open tab' with Z7 filled in. Fix: clear activeTabId and tableLabel after a fresh send unless the user chose to keep the tab, and add a clear/new-order control.", "selector": "[data-testid='active-tab-note']", "priority": "HIGH"},
+      {"component": "ProductsPage pickUpTab", "issue": "'Bring to till' replaces whatever is already in the cart without asking (setCart overwrite). An item already in the basket was silently dropped. Fix: confirm first, or park the current cart.", "selector": "[data-testid^='tab-settle-']", "priority": "MEDIUM"},
+      {"component": "Store Settings dialog (toolbar 'Store' button)", "issue": "The toolbar button calls openStoreSettings(locationFilter), and locationFilter defaults to 'all'. The dialog therefore opens with no store picked and empty settings, so restaurant-mode-checkbox shows UNCHECKED for a store that has it on (it only shows checked after picking 58:12 Uganda in the select). The dialog also writes into the same storeSettings state the POS uses, so just opening and closing it switches off restaurant_mode and the receipt settings on the till until reload. Confirmed: with an empty cart the restaurant panel was hidden after opening the dialog but visible on a fresh load. Fix: default to saleLocationId and keep the dialog's settings in a separate state.", "selector": "[data-testid='store-settings-btn']", "priority": "MEDIUM"},
+      {"component": "GrowingBatchesPanel", "issue": "The panel loads only on mount or when locationId changes. After saving a product with grows-into and stock > 0 the batch is created (confirmed via API: batch_50bf6b56fe) but the panel does not appear until the page is reloaded. Fix: re-run load when products refresh (pass a refreshKey from fetchAll, or call load from the save handler).", "selector": "[data-testid='growing-batches-panel']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "POS cart (1920x1080)", "issues": ["The restaurant panel sits at the very bottom of the cart, underneath the sonner toasts and the 'No softphone' widget. A toast blocked clicks on open-tabs-btn for several seconds."]},
+      {"screen": "Growing on panel", "issues": ["A 28-day batch added today shows '27 day(s) to go' (floor rounding).", "After 'Grow on now' with deaths already entered, the notice still asks 'Any deaths? Write them off...', which is redundant."]},
+      {"screen": "Loss report dialog", "issues": ["From/To use native browser date inputs instead of the shadcn calendar."]},
+      {"screen": "Kitchen screen", "issues": ["'Start cooking' stays as the primary button on tickets that are already cooking.", "The cancel X has no confirmation."]},
+      {"screen": "Calendar share", "issues": ["The personalised (user) share links section has no Subscribe/webcal button and no data-testid on its iCal input, unlike the quick-share ShareBlock."]}
+    ]
+  },
+  "passed_tests": [
+    "Calendar share: both share-ical-url values are absolute https:// URLs and both subscribe-ical-btn hrefs start with webcal://",
+    "Sidebar: Kitchen link is under Marketplace and opens /5812global/kitchen",
+    "Write-off: dialog opens and lists all 7 reasons. Negligence shows the employee select (17 staff) and the deduction note. Donated shows donated-to and hides the employee select. Spoiled qty 1 shows a toast and stock went 100 -> 99 -> 98",
+    "Loss report: shows counts, value lost, to come off pay, biggest loss, by product and by reason",
+    "Product modal: kitchen checkbox shows/hides prep-station-input. Grows-into select and days input save correctly (grows_into_product_id and grow_after_days persisted)",
+    "Growing panel (after reload): lists the batch with days to go. Grow on now with 1 death showed toast '4 ... became ...' and target stock 98 -> 102",
+    "Restaurant panel: kitchen product in cart shows table input, order type (Dine in/Takeaway), send, tabs and per-dish note",
+    "Send to kitchen: toast 'Ticket K1511-002 sent to the kitchen - table Z7', cart cleared, ticket listed in open tabs with total, Bring to till loads items and notes back",
+    "Kitchen screen: dish click goes new -> cooking -> ready with toasts, All ready works, Served removes the card (the tab stays in open tabs for payment), special requests and station shown",
+    "print-quote-btn and returns-report-btn present; till printer dialog has till-kitchen-host and till-kitchen-port"
+  ],
+  "test_report_links": [],
+  "action_items": [
+    "HIGH: stop 'Send more' after Bring to till from re-sending dishes that were already sent; only send new lines",
+    "HIGH: clear activeTabId and tableLabel after a fresh send-to-kitchen (or add a New order / leave tab button) so the next customer is not added to the previous table's tab or settled against it",
+    "MEDIUM: confirm or park before pickUpTab replaces a non-empty cart",
+    "MEDIUM: open Store Settings on saleLocationId and keep the dialog's settings separate from the POS storeSettings state",
+    "MEDIUM: refresh GrowingBatchesPanel after a product save or stock intake",
+    "LOW: move the restaurant panel higher in the cart or offset it from the toasts and softphone widget; fix the days-to-go rounding; add the Subscribe button to personalised share links"
+  ],
+  "critical_code_review_comments": [
+    "ProductsPage.jsx is 2718 lines and should be split (restaurant panel, store settings dialog and product modal into their own components)",
+    "ProductsPage.jsx line 879: `(storeSettings?.restaurant_mode || true)` is always true, so the condition is dead code",
+    "RecordLossDialog checks qty against product.stock (the overall figure), not the per-store stock for locationId, which may wrongly allow or block a loss for multi-store products"
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "skipped (frontend only)", "frontend": "100% of the 8 requested flows pass the happy path; 5 logic bugs found in edge/follow-on flows"},
+  "seed_data_creation": "Created product ZTMP UI Chicks (prod_312ce8c8; its batch was grown on, then the product was deleted). Wrote off 2 ZTMP Chicken and Chips as spoiled. Ticket K1511-002 (ord_8b04b592c7, table Z7) was created, served and then cancelled. ZTMP Chicken and Chips stock went 100 -> 102. Left ord_1f2f93d44a (Table 7) untouched.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login admin@5812uganda.org / Admin@5812. The Marketplace sidebar section is collapsed: click it to see the Kitchen link. The toolbar Store button opens on 'all' and you must pick the store in store-settings-location-select. To retest the tab bugs: send a ticket, then check that active-tab-note is gone; Bring to till, then click send-to-kitchen-btn and check the kitchen order has no duplicate lines (GET /api/kitchen/orders?scope=tabs).",
+  "rca of the issue": "Duplicate dishes: pickUpTab copies the tab's items into the cart with no 'already sent' marker, and sendToKitchen sends every kitchen line in cart through addItems. Sticky tab: sendToKitchen calls setActiveTabId(order.id) after a new order and nothing clears it except a completed sale. Store-settings mix-up: openStoreSettings uses locationFilter ('all') and shares the storeSettings state with the POS."
+}

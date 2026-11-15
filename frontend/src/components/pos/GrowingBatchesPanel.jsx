@@ -11,7 +11,7 @@ import { stockApi } from '../../services/api';
  * product when its weeks are up. The move happens by itself overnight; this
  * panel is where the farm watches it coming and records any deaths.
  */
-export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged }) => {
+export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, refreshKey }) => {
   const [batches, setBatches] = useState([]);
   const [recent, setRecent] = useState([]);
   const [lostBy, setLostBy] = useState({});
@@ -24,7 +24,7 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged })
       .then(r => setRecent((r.data || []).filter(t => t.needs_loss_check))).catch(() => setRecent([]));
   }, [locationId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const matureNow = async (batch) => {
     setBusy(batch.id);
@@ -62,7 +62,10 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged })
           <p className="text-sm">
             <span className="font-semibold">{t.qty} {t.from_product_name}</span> became{' '}
             <span className="font-semibold">{t.to_product_name}</span> on {String(t.created_at).slice(0, 10)} —
-            now worth {money(t.to_value)}. Any deaths? Write them off against {t.to_product_name}.
+            now worth {money(t.to_value)}.
+            {t.lost_on_the_way > 0
+              ? ` ${t.lost_on_the_way} were lost on the way.`
+              : ` Any deaths? Write them off against ${t.to_product_name}.`}
           </p>
           <Button size="sm" variant="ghost" className="h-7 gap-1 shrink-0" onClick={() => acknowledge(t)}
                   data-testid={`grown-ack-${t.id}`}>

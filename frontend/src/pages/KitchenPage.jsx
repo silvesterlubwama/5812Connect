@@ -76,6 +76,8 @@ export default function KitchenPage() {
   };
 
   const cancel = async (order) => {
+    const where = order.table_label ? `table ${order.table_label}` : 'this takeaway';
+    if (!window.confirm(`Cancel ${order.ticket_number} for ${where}? The cooks will stop work on it.`)) return;
     try {
       await kitchenApi.cancel(order.id);
       toast.success('Ticket cancelled');
@@ -149,8 +151,11 @@ export default function KitchenPage() {
                   {order.note && <p className="text-xs text-muted-foreground">Note: {order.note}</p>}
 
                   <div className="flex flex-wrap gap-2">
-                    <Button size="sm" className="flex-1" onClick={() => advanceOrder(order, 'cooking')}
-                      data-testid={`kitchen-cooking-${order.id}`}>Start cooking</Button>
+                    <Button size="sm" className="flex-1" variant={order.status === 'new' ? 'default' : 'outline'}
+                      disabled={order.status !== 'new'} onClick={() => advanceOrder(order, 'cooking')}
+                      data-testid={`kitchen-cooking-${order.id}`}>
+                      {order.status === 'new' ? 'Start cooking' : 'Cooking'}
+                    </Button>
                     <Button size="sm" variant="outline" className="flex-1 gap-1" onClick={() => advanceOrder(order, 'ready')}
                       data-testid={`kitchen-ready-${order.id}`}><Check size={13} /> All ready</Button>
                     <Button size="sm" variant="ghost" onClick={() => advanceOrder(order, 'served')}
