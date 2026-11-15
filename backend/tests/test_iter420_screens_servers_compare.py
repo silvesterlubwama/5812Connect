@@ -305,3 +305,67 @@ def test_a_screen_only_shows_what_it_was_paired_for(shop):
     with pytest.raises(Exception) as err2:
         _run(scr.screen_orders(display["token"], 60))
     assert "customer display" in str(err2.value)
+
+
+# ------------------------------------------ one store cannot reach into another
+def _outsider():
+    return _user(role="Manager", loc=OTHER, uid="outsider")
+
+
+def test_another_stores_ticket_cannot_be_cooked_settled_or_cancelled(shop):
+    order = _order()
+    line = order["items"][0]["line_id"]
+    for call in (
+        lambda: kit.add_items(order["id"], {"items": [{"name": "Soda", "qty": 1}]}, _outsider()),
+        lambda: kit.set_order_status(order["id"], {"status": "ready"}, _outsider()),
+        lambda: kit.set_item_status(order["id"], line, {"status": "ready"}, _outsider()),
+        lambda: kit.settle_order(order["id"], {"sale_id": "sale_zz", "tip": 5000}, _outsider()),
+        lambda: kit.cancel_order(order["id"], _outsider()),
+    ):
+        with pytest.raises(Exception) as err:
+            _run(call())
+        assert "another store" in str(err.value)
+
+
+def test_another_stores_customer_display_cannot_be_hijacked(shop):
+    with pytest.raises(Exception) as err:
+        _run(scr.push_live_sale(scr.LiveSale(location_id=SHOP, total=1), _outsider()))
+    assert "signed in to this store" in str(err.value)
+
+
+def test_another_stores_runs_cannot_be_compared_or_renamed(shop):
+    a = _batch(days_ago=10, qty=20)
+    b = _batch(days_ago=2, qty=20)
+    with pytest.raises(Exception) as err:
+        _run(life.compare_batches(f"{a['id']},{b['id']}", 8, _outsider()))
+    assert "another store" in str(err.value)
+    with pytest.raises(Exception) as err2:
+        _run(life.update_batch(a["id"], {"supplier": "Sneaky"}, _outsider()))
+    assert "another store" in str(err2.value)
+
+
+def test_runs_of_different_ages_are_compared_with_a_caveat(shop):
+    old = _batch(days_ago=40, qty=50, supplier="Kabira Hatchery")
+    young = _batch(days_ago=1, qty=50, supplier="Nsambya Hatchery")
+    _loss(5, reason="died")
+    rep = _run(scr_compare([old["id"], young["id"]]))
+    assert "less time to lose anything" in rep["verdict"]
+    assert rep["batches"][1]["age_days"] <= 1
+
+
+def test_a_waiter_pin_is_checked_without_handing_out_a_session(shop):
+    from types import SimpleNamespace
+
+    from pin_security import pin_digest
+    from routers import auth as auth_router
+    pin = "913744"
+    with org_bypass():
+        _run(raw_db.users.update_one({"id": STAFF}, {"$set": {
+            "pin_lookup": pin_digest(pin), "status": "active", "location_ids": [SHOP]}}))
+    req = SimpleNamespace(headers={"x-forwarded-for": "203.0.113.9"}, client=None)
+    res = _run(auth_router.pin_verify({"pin": pin, "store_id": SHOP}, req))
+    assert res["user"]["name"] == "Moses"
+    assert "token" not in res
+    with pytest.raises(Exception) as err:
+        _run(auth_router.pin_verify({"pin": "000111", "store_id": SHOP}, req))
+    assert "Invalid PIN" in str(err.value)

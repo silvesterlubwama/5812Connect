@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from deps import db, get_current_user, require_staff, logger
 from routers.product_scope import is_shared, stock_at, stock_field
+from store_access import is_store_member
 
 router = APIRouter(prefix="/api", tags=["stock-lifecycle"])
 
@@ -643,6 +644,7 @@ async def _mortality_rows(batches: list, weeks: int = 8) -> list:
             "mortality_pct": round((lost / started) * 100, 1) if started else 0,
             "survival_pct": round(100 - (lost / started) * 100, 1) if started else 0,
             "by_reason": detail,
+            "age_days": max(0, (datetime.now(timezone.utc) - start).days),
             "weeks": [{"week": w, "deaths": buckets.get(w, 0)} for w in range(1, span + 1)],
         })
     return rows
@@ -661,6 +663,9 @@ async def compare_batches(ids: str = "", weeks: int = 8,
     batches = await db.stock_batches.find({"id": {"$in": wanted}}, {"_id": 0}).to_list(4)
     if len(batches) < 2:
         raise HTTPException(status_code=404, detail="One of those runs no longer exists")
+    for batch in batches:
+        if not await is_store_member(current_user, batch.get("location_id") or ""):
+            raise HTTPException(status_code=403, detail="One of those runs is at another store")
     batches.sort(key=lambda b: wanted.index(b["id"]))
     rows = await _mortality_rows(batches, weeks)
     by_supplier: dict = {}
@@ -688,6 +693,13 @@ async def compare_batches(ids: str = "", weeks: int = 8,
                        f"{str(best['received_at'])[:10]}{keeps} — "
                        f"{worst['lost']:g} of {worst['started_with']:g} against "
                        f"{best['lost']:g} of {best['started_with']:g}.")
+        # Two runs of different ages are not a fair fight: the younger one has
+        # had fewer weeks in which to lose anything (iter420).
+        young, old = min(rows, key=lambda r: r["age_days"]), max(rows, key=lambda r: r["age_days"])
+        if old["age_days"] - young["age_days"] >= 7:
+            verdict += (f" Mind the ages though: the {str(young['received_at'])[:10]} run is only "
+                        f"{young['age_days']} day(s) old against {old['age_days']}, so it has had "
+                        f"less time to lose anything.")
     return {"batches": rows, "weeks": max(1, min(int(weeks or 8), 26)),
             "by_supplier": sorted(by_supplier.values(), key=lambda s: -s["mortality_pct"]),
             "verdict": verdict}
@@ -696,6 +708,11 @@ async def compare_batches(ids: str = "", weeks: int = 8,
 @router.patch("/stock-batches/{batch_id}")
 async def update_batch(batch_id: str, data: dict, current_user: dict = Depends(require_staff)):
     """Name the hatchery a run came from — often known a day after it arrived."""
+    batch = await db.stock_batches.find_one({"id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if not await is_store_member(current_user, batch.get("location_id") or ""):
+        raise HTTPException(status_code=403, detail="That run is at another store")
     fields = {}
     if "supplier" in (data or {}):
         fields["supplier"] = (data.get("supplier") or "").strip()[:120] or None
@@ -705,9 +722,7 @@ async def update_batch(batch_id: str, data: dict, current_user: dict = Depends(r
         raise HTTPException(status_code=400, detail="Nothing to change")
     fields["updated_at"] = _now()
     fields["updated_by_name"] = current_user.get("name", "")
-    res = await db.stock_batches.update_one({"id": batch_id}, {"$set": fields})
-    if not res.matched_count:
-        raise HTTPException(status_code=404, detail="Batch not found")
+    await db.stock_batches.update_one({"id": batch_id}, {"$set": fields})
     return {"message": "Saved", "batch": await db.stock_batches.find_one({"id": batch_id}, {"_id": 0})}
 
 

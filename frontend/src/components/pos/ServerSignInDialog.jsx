@@ -16,7 +16,7 @@ export const ServerSignInDialog = ({ open, onOpenChange, storeId, onSignedIn }) 
   const submit = async (pin) => {
     setError(''); setBusy(true);
     try {
-      const res = await authApi.pinLogin(pin, storeId);
+      const res = await authApi.pinVerify(pin, storeId);
       onSignedIn(res.data.user);
       onOpenChange(false);
     } catch (e) {

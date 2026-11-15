@@ -22,17 +22,37 @@ POS = {"last_name": "Admin", "pin": "4917"}
 @pytest.fixture(scope="module", autouse=True)
 def clear_throttle():
     """The endpoint allows 10 attempts / 10 min per IP — clear the bucket so the
-    suite can be re-run straight away."""
+    suite can be re-run straight away.
+
+    iter420: the suite also sets PIN 4917 on the admin for the duration and puts
+    the real digest back afterwards. It used to assume 4917 was still on the
+    account; the owner has since changed it, which failed the suite for a reason
+    that had nothing to do with the code under test.
+    """
     import asyncio
     from motor.motor_asyncio import AsyncIOMotorClient
     load_dotenv("/app/backend/.env")
+    from pin_security import pin_digest
 
-    async def wipe():
+    state = {}
+
+    async def setup():
         db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
         await db.public_endpoint_hits.delete_many(
             {"action": {"$in": ["sales_portal_login", "pin_login"]}})
+        row = await db.users.find_one({"email": "admin@5812uganda.org"}, {"_id": 1, "pin_lookup": 1})
+        state["id"] = row["_id"]
+        state["pin_lookup"] = row.get("pin_lookup", "")
+        await db.users.update_one({"_id": row["_id"]}, {"$set": {"pin_lookup": pin_digest("4917")}})
 
-    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(wipe())
+    async def restore():
+        db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+        await db.users.update_one({"_id": state["id"]}, {"$set": {"pin_lookup": state["pin_lookup"]}})
+
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    loop.run_until_complete(setup())
+    yield
+    loop.run_until_complete(restore())
 
 
 def test_sales_portal_login_accepts_a_hashed_pin():

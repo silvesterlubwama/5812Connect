@@ -9,6 +9,14 @@ import { Delete, LogIn } from 'lucide-react';
 export default function PinNumpad({ onSubmit, title = 'Enter PIN', subtitle = '', maxLen = 6, minLen = 4, error = '', loading = false }) {
   const [pin, setPin] = useState('');
 
+  // A rejected PIN clears itself, so the next try starts from empty rather
+  // than making someone delete six digits first (iter420).
+  const lastError = React.useRef('');
+  React.useEffect(() => {
+    if (error && error !== lastError.current) setPin('');
+    lastError.current = error;
+  }, [error]);
+
   const handleKey = (k) => {
     if (k === 'del') return setPin(p => p.slice(0, -1));
     if (k === 'submit') {

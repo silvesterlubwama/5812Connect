@@ -23,6 +23,7 @@ api.interceptors.request.use(config => {
 const LOGIN_PATHS_SKIP_REDIRECT = [
   '/auth/login',
   '/auth/pin-login',
+  '/auth/pin-verify',
   '/auth/pos-login',
   '/auth/sales-portal-login',
   '/auth/2fa/verify',
@@ -69,6 +70,7 @@ export const authApi = {
   revokeOtherSessions: () => api.post('/auth/sessions/revoke-others'),
   // PIN-based cashier / kiosk login
   pinLogin: (pin, store_id) => api.post('/auth/pin-login', { pin, store_id }),
+  pinVerify: (pin, store_id) => api.post('/auth/pin-verify', { pin, store_id }),
 };
 
 // ---- MEMBERS ----

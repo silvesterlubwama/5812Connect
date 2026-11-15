@@ -2522,3 +2522,53 @@ Re-running a move is therefore safe and repeatable.
 - Waiters get a picture of the room: every table with what it owes, how far the
   food has got and how long it has waited, red past 20 minutes. Tap to bring the
   tab to the till.
+
+### 2026-11-15 (iter420) — The payslip note, two runs side by side, waiters and wall screens
+- **The deduction explains itself.** A stock-loss charge on a staff member's own
+  payslip copy now reads in words: how many of what were written off, on which
+  day, as what (negligence), who recorded it, their own note, the amount charged
+  and — when it is being taken in instalments — how much is still to come. The
+  PDF prints the same sentence under the line. (It used to print the raw record,
+  which rendered as `[object Object]`.)
+- **Two hatchery runs, side by side.** A batch can be told which supplier it came
+  from, either as the stock is booked in or named afterwards from the growing
+  panel. "Compare runs" sets any two against each other: what came in, what was
+  lost, survival share, week-by-week deaths, a rollup per supplier and a plain
+  verdict naming the weaker run — with a caveat when one run is younger and has
+  simply had less time to lose anything.
+- **Waiters sign on at the till.** A waiter enters their own PIN; every table,
+  tab and tip from then on is recorded against them, and bringing a tab to the
+  till follows the waiter who opened it. A tip is recorded against that waiter
+  and the ticket, NOT added to the sale total. A "Waiters" report shows tables,
+  dishes, takings and tips per person for any date window.
+  The PIN is checked by `POST /api/auth/pin-verify`, which returns the name only
+  and issues no session.
+- **Kitchen setup belongs to the store.** Only someone signed in to that store
+  can see or change its restaurant/kitchen setup (`can_manage_restaurant`), and
+  no one can read or touch another store's tickets, customer display or growing
+  runs — the whole kitchen surface is store-scoped by `store_access.py`.
+- **Screens on the wall, no sign-in.** A manager at the store pairs a device
+  once in Store settings → "Screens on the wall"; the link opens `/screen/{token}`
+  with no login and only ever shows that store:
+  - a **kitchen board** where cooks tap each dish from new → cooking → ready →
+    served, with the table, the waiter and the minutes waited (red past 20);
+  - a **customer display** that mirrors the basket live while the sale is rung
+    up and finishes on "Thank you" with the change due.
+  Tokens are revocable; a revoked link stops opening.
+
+Files: `backend/store_access.py`, `backend/routers/screens.py`,
+`routers/{kitchen,stock_lifecycle,store_settings,auth,hr,products}.py`,
+`frontend/src/pages/ScreenPage.jsx`,
+`frontend/src/components/pos/{ScreensSettings,ServerSignInDialog,ServersReportDialog,BatchCompareDialog,GrowingBatchesPanel}.jsx`,
+`frontend/src/pages/{ProductsPage,PortalProfile}.jsx`.
+Tests: `tests/test_iter420_screens_servers_compare.py` (27) and
+`tests/test_iter420_api_http.py` (13) — 123 green across iter371 + iter415-420.
+
+#### Still open / next
+- P1: one customer display per till (`till_id` is carried end to end but always
+  "main" — a two-till store would show both baskets on one screen).
+- P2: compare runs at equal age (cumulative mortality by week N) rather than
+  to date, so a young run can be judged fairly rather than caveated.
+- P2: Ubuntu iCal subscription still wants confirming against the live
+  deployment and a real calendar client.
+- P2: kitchen and receipt printers want configuring per store on real hardware.

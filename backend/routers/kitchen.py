@@ -90,6 +90,18 @@ async def _store_id(current_user: dict, given: Optional[str]) -> str:
     return store
 
 
+async def _owned_order(order_id: str, current_user: dict) -> dict:
+    """The ticket, and only if it belongs to a kitchen this person works in.
+    Without this, anyone holding a ticket id could cook, settle or cancel
+    another restaurant's table (iter420)."""
+    order = await db.kitchen_orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not await is_store_member(current_user, order.get("location_id") or ""):
+        raise HTTPException(status_code=403, detail="That ticket belongs to another store's kitchen")
+    return order
+
+
 @router.get("/kitchen/orders")
 async def list_orders(location_id: Optional[str] = None, scope: str = "open",
                       limit: int = 100, current_user: dict = Depends(get_current_user)):
@@ -150,9 +162,7 @@ async def create_order(data: OrderCreate, current_user: dict = Depends(require_s
 @router.post("/kitchen/orders/{order_id}/items")
 async def add_items(order_id: str, data: dict, current_user: dict = Depends(require_staff)):
     """A second round on the same tab."""
-    order = await db.kitchen_orders.find_one({"id": order_id}, {"_id": 0})
-    if not order:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+    order = await _owned_order(order_id, current_user)
     if order.get("paid") or order.get("cancelled"):
         raise HTTPException(status_code=400, detail="This tab is already closed")
     raw = data.get("items") or []
@@ -172,9 +182,7 @@ async def add_items(order_id: str, data: dict, current_user: dict = Depends(requ
 @router.patch("/kitchen/orders/{order_id}/status")
 async def set_order_status(order_id: str, data: dict, current_user: dict = Depends(require_staff)):
     """Move the whole ticket on — or straight to a named stage."""
-    order = await db.kitchen_orders.find_one({"id": order_id}, {"_id": 0})
-    if not order:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+    order = await _owned_order(order_id, current_user)
     status = (data or {}).get("status") or _next_stage(order.get("status") or "new")
     if status not in STAGES:
         raise HTTPException(status_code=400, detail="Unknown stage")
@@ -197,9 +205,7 @@ async def set_order_status(order_id: str, data: dict, current_user: dict = Depen
 async def set_item_status(order_id: str, line_id: str, data: dict,
                           current_user: dict = Depends(require_staff)):
     """One dish at a time — the chips are up before the chicken."""
-    order = await db.kitchen_orders.find_one({"id": order_id}, {"_id": 0})
-    if not order:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+    order = await _owned_order(order_id, current_user)
     items = order.get("items") or []
     item = next((i for i in items if i.get("line_id") == line_id), None)
     if not item:
@@ -224,9 +230,7 @@ async def settle_order(order_id: str, data: dict, current_user: dict = Depends(r
     sale_id = (data or {}).get("sale_id")
     if not sale_id:
         raise HTTPException(status_code=400, detail="Which sale paid it?")
-    order = await db.kitchen_orders.find_one({"id": order_id}, {"_id": 0})
-    if not order:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+    order = await _owned_order(order_id, current_user)
     try:
         tip = round(float((data or {}).get("tip") or 0), 2)
     except (TypeError, ValueError):
@@ -277,9 +281,7 @@ async def server_report(location_id: Optional[str] = None, date_from: Optional[s
 
 @router.delete("/kitchen/orders/{order_id}")
 async def cancel_order(order_id: str, current_user: dict = Depends(require_staff)):
-    order = await db.kitchen_orders.find_one({"id": order_id}, {"_id": 0})
-    if not order:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+    order = await _owned_order(order_id, current_user)
     if order.get("paid"):
         raise HTTPException(status_code=400, detail="This one was paid for — refund it on the receipt instead")
     await db.kitchen_orders.update_one({"id": order_id}, {"$set": {

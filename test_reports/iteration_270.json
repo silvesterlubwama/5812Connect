@@ -1,0 +1,47 @@
+{
+  "summary": "iter420 end-to-end: screens (pairing + public kitchen board + customer display), waiter sign-on/tabs/tips/waiters report, batch compare + hatchery naming, and the stock-loss note on a staff member's own payslip. Backend: new HTTP suite with 13 tests, all pass, plus the existing unit suite (22 tests, all pass). Frontend: every requested flow worked through the UI. The waiter PIN sign-on could only be checked with a wrong PIN, which shows a clear 'Invalid PIN' error: the admin PIN 4917 in test_credentials.md now returns Invalid PIN, and no other staff PIN was available. No functional bugs found. The findings below are security hardening and UX items.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/screens/live-sale", "issue": "Doesn't check that the user works at the store (no is_store_member call). Any staff member can overwrite any store's customer display by sending its location_id."},
+      {"endpoint": "POST /api/kitchen/orders/{id}/items, PATCH /status, PATCH /items/{line}/status, PATCH /settle, DELETE /api/kitchen/orders/{id}", "issue": "These endpoints don't check that the user works at the store. Only list/create/servers go through _store_id. Someone from another store who has an order id can advance, settle (including adding a tip) or cancel another kitchen's tickets."},
+      {"endpoint": "GET /api/stock-batches/compare, PATCH /api/stock-batches/{id}", "issue": "No check that the user works at the batch's store."},
+      {"endpoint": "POST /api/auth/pin-login (used by waiter sign-on)", "issue": "Every waiter sign-on creates a full session token (create_token_with_session) that ServerSignInDialog throws away. Unused but valid sessions pile up. A verify-only endpoint would be better."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "ProductsPage restaurant panel", "issue": "After 'Bring to till' on a tab, 'Serving' still shows the till operator (Admin), not the tab's waiter (ZTMP Waiter Ann). The tip field doesn't say who gets the tip. The backend does credit the tab's server correctly.", "selector": "[data-testid=active-server-name]", "priority": "LOW"},
+      {"component": "PinNumpad in ServerSignInDialog", "issue": "The entered digits stay after an 'Invalid PIN' error, so the user has to delete them before retrying.", "selector": "[data-testid=pin-error]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Customer display per till", "issue": "pushDisplay never sends till_id, and ScreensSettings has no till picker, so everything uses 'main'. A store with two tills would show both on one display.", "affected_selectors": ["[data-testid=screen-kind-select]"]}
+    ],
+    "design_issues": [
+      {"screen": "ServersReportDialog", "issues": ["servers-from / servers-to use the browser's native <input type=date> instead of the shadcn Calendar/Popover"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter420_api_http.py", "/app/backend/tests/test_iter420_screens_servers_compare.py", "/app/test_reports/pytest/iter420_http.xml"],
+  "action_items": [
+    "Add the is_store_member guard to POST /screens/live-sale and to the kitchen mutation endpoints (add_items, set_order_status, set_item_status, settle_order, cancel_order). Optionally add it to the stock-batches compare/update endpoints.",
+    "Waiter sign-on: verify the PIN without creating a session, or revoke the session that gets created.",
+    "When a tab is brought to the till, show its server_name under 'Serving', or name the waiter next to the Tip field.",
+    "Clear the PIN after an error in PinNumpad.",
+    "Use the shadcn date picker in ServersReportDialog.",
+    "Fix /app/memory/test_credentials.md: admin PIN 4917 now returns 'Invalid PIN' from /api/auth/pin-login.",
+    "Clean up your own leftover records: kitchen order ord_8271ed2e7b (Table 4, 'ZTMP Goat stew', loc_59a87857) and the ZTMP screens scr_22be6112c0 / scr_35e961ae42 when no longer needed."
+  ],
+  "critical_code_review_comments": [
+    "screens.py: device tokens are 12-byte urlsafe and can be revoked, and the public endpoints only expose that store's kitchen or sale feed. The design is fine.",
+    "Batch compare verdict sets a 30-day-old run against a 0-day run with no note that their ages differ. Consider comparing at equal age (cumulative mortality by week N) or adding a caveat.",
+    "ScreensSettings link is origin/screen/{token} with no org slug. It works because the app redirects to /5812global/screen/{token}.",
+    "ProductsPage.jsx is about 2,900 lines and should be split."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter420_api_http.py"],
+  "success_rate": {"backend": "100% (13/13 HTTP + 22/22 unit)", "frontend": "100% of the flows I could exercise (a successful waiter PIN sign-on wasn't tested: no valid staff PIN)"},
+  "seed_data_creation": "All temporary. Created ZTMP kitchen orders, ZTMP products, batches and a 'died' loss, a ZTMP UI screen, a ZTMP payslip for admin (ps_ztmp_*, period 2099), and one real sale INV-20261115-0022 from the tab-tip checkout. All deleted by id: the sale through DELETE /api/sales, which reversed its journal entry. Restaurant mode on loc_419f5d5e (the admin POS store '58:12 Uganda · Zimba Farm') was switched on for testing, then unset back to its original value. The customer-display feed loc_59a87857|main was left 'idle'.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "The admin POS is bound to loc_419f5d5e (label '58:12 Uganda · Zimba Farm'), not loc_59a87857. The growing panel and restaurant panel read that store. The kitchen screen tH5zRavYd8CG_jig and sales screen nNE8gzIBemy46ZCk belong to loc_59a87857. A public /screen/{token} redirects to /5812global/screen/{token} without asking for login. The admin PIN 4917 is invalid now. The payslip note shows on its own line (payslip-line-note-*) only when it is 60 characters or longer; shorter notes appear inline in brackets.",
+  "test_credentials": "admin@5812uganda.org / Admin@5812 works. Admin PIN 4917 is INVALID ('Invalid PIN')."
+}

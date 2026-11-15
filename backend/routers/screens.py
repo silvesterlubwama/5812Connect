@@ -124,6 +124,8 @@ async def push_live_sale(data: LiveSale, current_user: dict = Depends(require_st
     """What the customer is watching: the basket as it is being rung up."""
     if not data.location_id:
         raise HTTPException(status_code=400, detail="Which till is this?")
+    if not await is_store_member(current_user, data.location_id):
+        raise HTTPException(status_code=403, detail="You are not signed in to this store")
     doc = data.model_dump()
     doc["key"] = _key(data.location_id, data.till_id)
     doc["updated_at"] = _now()

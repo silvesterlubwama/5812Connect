@@ -10,20 +10,20 @@ import uuid
 router = APIRouter(prefix="/api", tags=["auth"])
 
 
-@router.post("/auth/pin-login")
-async def pin_login(data: dict, request: Request) -> dict:
-    """Cashier / Kiosk PIN sign-in. Used on POS to switch cashiers without typing email+password.
-    Body: {pin: "1234", store_id?: "loc_xxx"}
-    Returns a short-lived staff token (8h) + cashier info.
-    Requires the user to have an `active` status and a non-empty `pin` field.
-    Optionally restricts to staff at the given store/sub-location's parent campus."""
+async def _pin_staff(data: dict, request: Request, bucket: str = "pin_login") -> dict:
+    """Shared PIN check: who does this PIN belong to, and may they work here?
+
+    Used by the cashier sign-in (which then gets a session) and by the waiter
+    sign-on at the till (which needs the name only). Raises on anything wrong,
+    so neither route can drift from the other (iter420).
+    """
     pin = (data.get("pin") or "").strip()
     if not pin or len(pin) < 4:
         raise HTTPException(status_code=400, detail="PIN must be at least 4 digits")
     # iter371 — PINs have been stored as an HMAC digest since iter353; this
     # route was still querying the cleartext `pin` field that the migration
     # removed, so every cashier PIN sign-in failed.
-    await enforce_public_rate_limit(request, "pin_login", limit=10, window_minutes=10)
+    await enforce_public_rate_limit(request, bucket, limit=10, window_minutes=10)
     user = await db.users.find_one({**pin_query(pin), "status": "active"}, {"_id": 0, "password_hash": 0})
     if not user or not pin_matches(pin, user):
         raise HTTPException(status_code=401, detail="Invalid PIN")
@@ -50,6 +50,29 @@ async def pin_login(data: dict, request: Request) -> dict:
                 user_locs.add(s["id"])
         if store_id not in user_locs and not is_system_admin(user):
             raise HTTPException(status_code=403, detail=f"This PIN is not assigned to {store_id}")
+    return user
+
+
+@router.post("/auth/pin-verify")
+async def pin_verify(data: dict, request: Request) -> dict:
+    """Who is this PIN? Nothing more.
+
+    A waiter signing on at the till only needs their name against the tables
+    they serve — the till already has its own session, so issuing a second one
+    and throwing it away would leave live sessions lying about (iter420).
+    """
+    user = await _pin_staff(data, request, bucket="pin_verify")
+    return {"user": {"id": user["id"], "name": user.get("name", ""), "role": user.get("role", "")}}
+
+
+@router.post("/auth/pin-login")
+async def pin_login(data: dict, request: Request) -> dict:
+    """Cashier / Kiosk PIN sign-in. Used on POS to switch cashiers without typing email+password.
+    Body: {pin: "1234", store_id?: "loc_xxx"}
+    Returns a short-lived staff token (8h) + cashier info.
+    Requires the user to have an `active` status and a non-empty `pin` field.
+    Optionally restricts to staff at the given store/sub-location's parent campus."""
+    user = await _pin_staff(data, request)
     token = await create_token_with_session(user["id"], request)
     return {
         "token": token,

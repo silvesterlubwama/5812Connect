@@ -788,6 +788,11 @@ export default function ProductsPage() {
     setActiveTabId(tab.id);
     setTableLabel(tab.table_label || '');
     setOrderType(tab.order_type || 'dine_in');
+    // The tab already knows who served it — the till follows the table, not
+    // whoever happens to be standing at the screen (iter420).
+    if (tab.server_id || tab.server_name) {
+      setActiveServer({ id: tab.server_id || '', name: tab.server_name || '' });
+    }
     setCart((tab.items || []).filter(i => !i.cancelled).map(i => ({
       product_id: i.product_id, name: i.name, qty: i.qty,
       unit_price: i.price, price: i.price, units_per_pack: 1,
@@ -1521,7 +1526,9 @@ export default function ProductsPage() {
                           Working on an open tab — finishing the sale will settle it.
                         </p>
                         <div className="flex items-center gap-2">
-                          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground shrink-0">Tip</Label>
+                          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground shrink-0">
+                            Tip for {serving?.name || 'the waiter'}
+                          </Label>
                           <Input value={tabTip} onChange={(e) => setTabTip(e.target.value)} type="number" min="0"
                             placeholder="0" className="h-8 text-xs" data-testid="tab-tip-input" />
                         </div>
