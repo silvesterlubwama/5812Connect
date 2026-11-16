@@ -13,11 +13,12 @@ import {
   openDrawer, paperFor, saveTillConfig, storePaper, testPrint, testPrintViaBrowser,
 } from '../../utils/tillPrinter';
 import { unpairRole } from '../../utils/deviceRoles';
+import { ShopPrintHelper } from './ShopPrintHelper';
 
 const CONNECTIONS = [
   { id: 'usb', label: 'USB cable', icon: Usb, blurb: 'Plugged into this computer' },
   { id: 'bluetooth', label: 'Bluetooth', icon: Bluetooth, blurb: 'Portable printer paired over Bluetooth' },
-  { id: 'network', label: 'Network / Wi-Fi', icon: Network, blurb: "Printer's own address, reached by the server" },
+  { id: 'network', label: 'Network / Wi-Fi', icon: Network, blurb: "Printer's own address, via the shop helper" },
   { id: 'none', label: "This computer's printer", icon: Printer, blurb: 'Whatever is installed in Windows — can print silently' },
 ];
 
@@ -165,12 +166,15 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
                 />
               </div>
               <p className="sm:col-span-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2" data-testid="till-network-warning">
-                The receipt is sent by the app server, so the server has to be able to see that
-                address. If 58:12 runs in the cloud and the printer sits on the shop's own
-                network, it never can — use <strong>This computer's printer</strong> instead and
-                install the printer on the till in Windows.
+                A printer with its own address sits on the shop's network, which the app server
+                cannot see from the cloud. Set up the <strong>shop print helper</strong> below and
+                receipts reach it anyway — otherwise use <strong>This computer's printer</strong>.
               </p>
             </div>
+          )}
+
+          {cfg.connection === 'network' && (
+            <ShopPrintHelper locationId={storeSettings.location_id} />
           )}
 
           {cfg.connection === 'none' && (

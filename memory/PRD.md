@@ -2633,3 +2633,50 @@ NOT verifiable here: real paper out of a real printer — no hardware in preview
   still prints nothing, work down the Speed list.
 - P1: remember the working speed per paired printer automatically.
 - P1: a shop-side print bridge would make server→LAN printing genuinely work.
+
+### 2026-11-16 (iter422) — The shop's print helper
+A printer with its own IP lives on the shop's network; 58:12 runs in the cloud
+and cannot see it. So the till hands the receipt to the server and a small
+helper running at the shop collects it and walks it to the printer. The till
+computer can be off, or be a phone.
+
+- **Pairing** reuses the iter420 device model (`device_screens`, kind `bridge`),
+  so it is set up, named and revoked exactly like a kitchen screen. The link it
+  gets back is its only credential and reaches nothing else.
+- **Queue** (`db.print_jobs`): `POST /api/print-jobs` (staff, store-scoped) →
+  helper claims with `GET /api/screens/{token}/print-jobs` (claim increments
+  attempts; `ReturnDocument.AFTER`) → reports with
+  `POST /api/screens/{token}/print-jobs/{job_id}` `{ok, error}`.
+  Oldest first, claimed-but-abandoned released after 2 min, 3 attempts then
+  failed, anything uncollected after 10 min expires — a receipt must never
+  print an hour late.
+- **Never queues into the void**: with no helper paired, or none seen for 2
+  minutes, the queue returns 409 at once and the till falls back to its own
+  print window. That is what stops a sale being printed twice.
+- **The till waits ~8s** on `GET /api/print-jobs/{id}`; if it is still queued it
+  reports "handed to the shop print helper" rather than printing again.
+- **The helper itself** is generated per shop with its address and token already
+  in it: `GET /api/screens/{token}/helper?format=ps1|py&base=<origin>`.
+  PowerShell for Windows (nothing to install), Python 3 for Mac/Linux/Pi.
+  `base` comes from the browser because behind the ingress `request.base_url` is
+  the internal cluster name the helper could never reach; it is validated
+  against `https?://host[:port]` before being written into the script.
+  Both carry `User-Agent: 58-12-print-helper/1.0` — the default Python agent is
+  turned away by the firewall in front of 58:12 (403).
+
+Verified end to end in this pod: till queued → helper collected → printed to a
+socket the server reaches only through the helper → "printed" seen by the till,
+including a refused printer being retried and then succeeding. UI checked at
+1920 and 390px. Tests: `tests/test_iter422_print_helper.py` (15); 144 green
+across iter371, iter411, iter415-422.
+
+Files: `backend/routers/screens.py` (queue + helper scripts),
+`frontend/src/components/pos/{ShopPrintHelper,TillPrinterDialog,ScreensSettings}.jsx`,
+`frontend/src/utils/tillPrinter.js`.
+
+#### Still open / next
+- P1: the helper is a console window — a tray icon or Windows service would
+  survive a reboot without someone re-running it.
+- P2: let one helper serve several shops on the same LAN (one token per shop
+  today).
+- P2: queue depth / last-printed shown on the POS header, not only in the dialog.

@@ -322,18 +322,70 @@ async function sendBluetooth(payload) {
   }
 }
 
-async function sendNetwork(payload) {
+async function sendNetwork(payload, storeSettings = {}, title = 'Receipt') {
   const { network } = getTillConfig();
-  return sendNetworkTo(network?.host, network?.port, payload);
+  return sendNetworkTo(network?.host, network?.port, payload, storeSettings, title);
 }
 
 /** Raw bytes to a named printer on the shop network (counter or kitchen). */
 const netCooldown = new Map();          // host:port → { strikes, until } — per tab, cleared by a reload
 
-async function sendNetworkTo(host, port, payload) {
+/**
+ * Hand the receipt to the shop's own print helper (iter422).
+ *
+ * A printer with its own IP sits on the shop's network, which a server in the
+ * cloud cannot see. The helper runs at the shop, collects the job and walks it
+ * to the printer. If no helper is alive the server says so straight away and
+ * the till goes back to trying the socket itself.
+ */
+async function sendViaHelper(locationId, host, port, payload, title) {
+  let binary = '';
+  payload.forEach(b => { binary += String.fromCharCode(b); });
+  let jobId;
+  try {
+    const r = await api.post('/print-jobs', {
+      location_id: locationId, host, port: Number(port) || 9100,
+      data_b64: btoa(binary), title: title || 'Receipt',
+    });
+    jobId = r.data?.job_id;
+  } catch (e) {
+    if (e.response?.status === 409) return { helper: false, reason: e.response?.data?.detail };
+    return { helper: false, reason: 'Could not reach 58:12 to queue the receipt' };
+  }
+  // Wait for the paper, but not for ever: a till cannot stand still.
+  for (let i = 0; i < 7; i += 1) {
+    await new Promise(r => setTimeout(r, i === 0 ? 800 : 1200));
+    try {
+      const s = await api.get(`/print-jobs/${jobId}`);
+      if (s.data?.status === 'printed') return { helper: true, printed: true };
+      if (s.data?.status === 'failed') {
+        return { helper: true, printed: false, reason: s.data?.error || 'The printer did not answer the helper' };
+      }
+    } catch { /* keep waiting */ }
+  }
+  // Still in the queue: the helper has it, so do NOT print it a second time.
+  return { helper: true, printed: true, slow: true };
+}
+
+async function sendNetworkTo(host, port, payload, storeSettings = {}, title = 'Receipt') {
   if (!host) return { printed: false, transport: 'network', reason: 'No printer address set' };
   const network = { host, port };
   const where = `${network.host}:${Number(network.port) || 9100}`;
+
+  const locationId = storeSettings.location_id;
+  if (locationId) {
+    const viaHelper = await sendViaHelper(locationId, network.host, network.port, payload, title);
+    if (viaHelper.helper) {
+      netCooldown.delete(where);
+      return {
+        printed: viaHelper.printed,
+        transport: viaHelper.slow ? 'the shop print helper (still printing)' : 'the shop print helper',
+        reason: viaHelper.reason,
+      };
+    }
+    // No helper at this shop — fall through and try the socket from the server.
+  }
+
   // Two strikes, not one: a single network blip should not send every receipt
   // to the browser for the next two minutes (iter421).
   const until = netCooldown.get(where)?.until || 0;
@@ -374,11 +426,13 @@ async function sendNetworkTo(host, port, payload) {
 export function clearPrinterCooldown() { netCooldown.clear(); }
 
 /** Route raw bytes to whichever printer this till is set up with. */
-export async function sendBytes(payload) {
+export async function sendBytes(payload, storeSettings = {}, title = 'Receipt') {
   const cfg = getTillConfig();
   if (cfg.connection === 'usb') return sendUsb(payload);
   if (cfg.connection === 'bluetooth') return sendBluetooth(payload);
-  if (cfg.connection === 'network') return sendNetwork(payload);
+  // storeSettings carries the store id, which is how the shop's own print
+  // helper is found (iter422).
+  if (cfg.connection === 'network') return sendNetwork(payload, storeSettings, title);
   return { printed: false, transport: 'none', reason: 'No till printer set up' };
 }
 
@@ -411,7 +465,7 @@ export async function printSaleReceipt(sale, storeSettings = {}, extra = {}) {
     showQr: storeSettings.receipt_show_qr !== false,
     trackingUrl: extra.trackingUrl || (sale.receipt_number ? `${window.location.origin}/receipt/${sale.receipt_number}` : ''),
   });
-  return sendBytes(payload);
+  return sendBytes(payload, storeSettings, `Receipt ${sale.receipt_number || ''}`.trim());
 }
 
 /** ESC/POS drawer pulse down the same cable as the receipt. */
@@ -572,7 +626,7 @@ export async function printQuoteSlip(quote, storeSettings = {}, extra = {}) {
     preparedBy: extra.preparedBy || '',
     validDays: extra.validDays || 7,
     note: extra.note || '',
-  }));
+  }), storeSettings, quote.quote_number || 'Quote');
 }
 
 export async function printRefundSlip(sale, storeSettings = {}, extra = {}) {
@@ -587,7 +641,7 @@ export async function printRefundSlip(sale, storeSettings = {}, extra = {}) {
     voidedBy: extra.voidedBy || '',
     reason: extra.reason || '',
     partial: !!extra.partial,
-  }));
+  }), storeSettings, `Refund ${sale.receipt_number || ''}`.trim());
 }
 
 export async function printZReport(report, storeSettings = {}) {
@@ -597,7 +651,7 @@ export async function printZReport(report, storeSettings = {}) {
     storeName: storeSettings.store_name || '58:12 Global Connect',
     currency: storeSettings.currency || 'UGX',
     columns: columnsFor(paperFor(cfg, storeSettings)),
-  }));
+  }), storeSettings, `Z-Report ${report.date || ''}`.trim());
 }
 
 /**
@@ -682,7 +736,7 @@ export async function printLossSlip(loss, storeSettings = {}, extra = {}) {
     currency: storeSettings.currency || 'UGX',
     columns: columnsFor(paperFor(cfg, storeSettings)),
     storeLabel: extra.storeLabel || '',
-  }));
+  }), storeSettings, loss.slip_number || 'Stock loss');
 }
 
 export function lossSlipText(loss, opts = {}) {
@@ -735,13 +789,14 @@ export async function printKitchenTicket(order, storeSettings = {}, extra = {}) 
     onlyItems: extra.onlyItems || null,
   });
   if (cfg.kitchenNetwork?.host) {
-    const res = await sendNetworkTo(cfg.kitchenNetwork.host, cfg.kitchenNetwork.port, payload);
+    const res = await sendNetworkTo(cfg.kitchenNetwork.host, cfg.kitchenNetwork.port, payload,
+      storeSettings, order.ticket_number || 'Kitchen ticket');
     if (res.printed) return { ...res, where: 'kitchen' };
     // The kitchen printer is off or unplugged — the food still has to get
     // cooked, so fall through to the counter roll rather than lose the ticket.
   }
   if (cfg.connection === 'none') return { printed: false, transport: 'none', reason: 'No till printer set up' };
-  const res = await sendBytes(payload);
+  const res = await sendBytes(payload, storeSettings, order.ticket_number || 'Kitchen ticket');
   return { ...res, where: 'counter' };
 }
 
@@ -830,5 +885,5 @@ export async function testPrint(storeSettings = {}) {
     BOLD_ON, DOUBLE_ON, row('TOTAL', 'UGX 42,500', Math.floor(cols / 2)), DOUBLE_OFF, BOLD_OFF,
     '\n\n\n', CUT,
   );
-  return sendBytes(payload);
+  return sendBytes(payload, storeSettings, 'Test receipt');
 }

@@ -9,13 +9,16 @@ kitchen or that till's running total (iter420).
 The pairing link is created by someone signed in to that store, can be
 revoked, and gives no access to anything else in the app.
 """
+import re
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
+from pymongo import ReturnDocument
 
 from deps import db, require_manager, require_staff
 from routers.kitchen import STAGES, STAGE_LABELS, _roll_up, _next_stage
@@ -23,7 +26,14 @@ from store_access import is_store_member
 
 router = APIRouter(prefix="/api", tags=["screens"])
 
-KINDS = {"kitchen": "Kitchen screen", "sales": "Customer display"}
+KINDS = {"kitchen": "Kitchen screen", "sales": "Customer display", "bridge": "Shop print helper"}
+
+# A queued receipt is worthless an hour later, and a helper that died mid-job
+# must not hold onto it forever (iter422).
+JOB_TTL_SECONDS = 600
+CLAIM_TIMEOUT_SECONDS = 120
+MAX_ATTEMPTS = 3
+HELPER_ALIVE_SECONDS = 120          # it polls every 2s, so this is generous
 
 
 def _now() -> str:
@@ -223,3 +233,262 @@ async def screen_sale(token: str):
     if not live:
         return {"state": "idle", "lines": [], "total": 0, "currency": "UGX"}
     return live
+
+
+# ===================== THE SHOP'S PRINT HELPER (iter422) =====================
+# A receipt printer with its own IP lives on the shop's network, which a server
+# in the cloud cannot see. So the till hands the receipt to the server, and a
+# small helper running on any computer or Pi at the shop collects it and walks
+# it over to the printer. The helper holds a bridge token, nothing else.
+
+class PrintJob(BaseModel):
+    location_id: str
+    host: str
+    port: int = 9100
+    data_b64: str
+    title: Optional[str] = "Receipt"
+    printer: Optional[str] = "receipt"       # receipt | kitchen
+
+
+@router.post("/print-jobs")
+async def queue_print_job(data: PrintJob, current_user: dict = Depends(require_staff)):
+    if not await is_store_member(current_user, data.location_id):
+        raise HTTPException(status_code=403, detail="You are not signed in to this store")
+    if not data.host:
+        raise HTTPException(status_code=400, detail="No printer address")
+    if len(data.data_b64) > 2_000_000:
+        raise HTTPException(status_code=413, detail="That print job is too big")
+    helper = await db.device_screens.find_one(
+        {"location_id": data.location_id, "kind": "bridge", "revoked": {"$ne": True}},
+        {"_id": 0, "last_seen_at": 1, "name": 1})
+    # Queue only for a helper that is actually alive. Handing a receipt to a
+    # helper that has gone home means it prints when the machine next boots —
+    # and the till has already printed it elsewhere in the meantime (iter422).
+    seen = (helper or {}).get("last_seen_at") or ""
+    alive = bool(seen) and seen > (datetime.now(timezone.utc) - timedelta(seconds=HELPER_ALIVE_SECONDS)).isoformat()
+    if not helper:
+        raise HTTPException(status_code=409, detail="No print helper is set up at this shop")
+    if not alive:
+        raise HTTPException(status_code=409, detail=f"{helper.get('name') or 'The print helper'} is not running at the shop right now")
+    job = {
+        "id": f"job_{uuid.uuid4().hex[:12]}",
+        "location_id": data.location_id,
+        "host": data.host, "port": int(data.port or 9100),
+        "data_b64": data.data_b64,
+        "title": (data.title or "Receipt")[:80],
+        "printer": data.printer or "receipt",
+        "status": "queued",
+        "attempts": 0,
+        "error": "",
+        "created_at": _now(),
+        "queued_by": current_user.get("name", ""),
+    }
+    await db.print_jobs.insert_one(dict(job))
+    return {"queued": True, "job_id": job["id"], "helper_paired": bool(helper),
+            "helper_last_seen": (helper or {}).get("last_seen_at")}
+
+
+@router.get("/print-jobs/{job_id}")
+async def print_job_status(job_id: str, current_user: dict = Depends(require_staff)):
+    """Did it actually print? The till waits a few seconds on this before
+    falling back to its own print window."""
+    job = await db.print_jobs.find_one({"id": job_id}, {"_id": 0, "data_b64": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="That print job is gone")
+    if not await is_store_member(current_user, job.get("location_id") or ""):
+        raise HTTPException(status_code=403, detail="That print job belongs to another store")
+    return job
+
+
+@router.get("/screens/{token}/print-jobs")
+async def claim_print_jobs(token: str, limit: int = 5):
+    """The helper asks what needs printing. Claiming is the credential check."""
+    row = await _screen(token)
+    if row["kind"] != "bridge":
+        raise HTTPException(status_code=400, detail="This link is not a print helper")
+    now = datetime.now(timezone.utc)
+    stale = (now - timedelta(seconds=CLAIM_TIMEOUT_SECONDS)).isoformat()
+    # A helper that was unplugged mid-job leaves claims behind; let them out
+    # again rather than losing the receipt.
+    await db.print_jobs.update_many(
+        {"location_id": row["location_id"], "status": "claimed", "claimed_at": {"$lt": stale},
+         "attempts": {"$lt": MAX_ATTEMPTS}},
+        {"$set": {"status": "queued"}})
+    await db.print_jobs.update_many(
+        {"location_id": row["location_id"], "status": {"$in": ["queued", "claimed"]},
+         "created_at": {"$lt": (now - timedelta(seconds=JOB_TTL_SECONDS)).isoformat()}},
+        {"$set": {"status": "expired", "error": "Nobody collected it in time"}})
+
+    out = []
+    for _ in range(max(1, min(int(limit or 5), 20))):
+        job = await db.print_jobs.find_one_and_update(
+            {"location_id": row["location_id"], "status": "queued"},
+            {"$set": {"status": "claimed", "claimed_at": _now()}, "$inc": {"attempts": 1}},
+            projection={"_id": 0}, sort=[("created_at", 1)],
+            return_document=ReturnDocument.AFTER)
+        if not job:
+            break
+        out.append(job)
+    return out
+
+
+@router.post("/screens/{token}/print-jobs/{job_id}")
+async def finish_print_job(token: str, job_id: str, data: dict = None):
+    """The helper says whether the paper actually moved."""
+    row = await _screen(token)
+    if row["kind"] != "bridge":
+        raise HTTPException(status_code=400, detail="This link is not a print helper")
+    job = await db.print_jobs.find_one({"id": job_id, "location_id": row["location_id"]}, {"_id": 0, "data_b64": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="That print job is not yours")
+    ok = bool((data or {}).get("ok"))
+    error = str((data or {}).get("error") or "")[:300]
+    if ok:
+        fields = {"status": "printed", "printed_at": _now(), "error": ""}
+    elif job.get("attempts", 0) >= MAX_ATTEMPTS:
+        fields = {"status": "failed", "error": error or "The printer did not answer"}
+    else:
+        # Worth another go: the printer may have been mid-cut or out of paper.
+        fields = {"status": "queued", "error": error}
+    await db.print_jobs.update_one({"id": job_id}, {"$set": fields})
+    return {"message": "Thank you", "status": fields["status"]}
+
+
+@router.get("/screens/{token}/helper")
+async def bridge_script(token: str, format: str = "ps1", base: str = "", request: Request = None):
+    """The helper itself, with this shop's address and token already in it.
+
+    `base` is the address the shop's browser is actually using. Behind an
+    ingress the server only sees its own internal name, which the helper could
+    never reach — so the page that offers the download tells us (iter422).
+    """
+    row = await _screen(token)
+    if row["kind"] != "bridge":
+        raise HTTPException(status_code=400, detail="This link is not a print helper")
+    origin = ""
+    candidate = (base or "").strip().rstrip("/")
+    if re.fullmatch(r"https?://[A-Za-z0-9.\-]+(:\d+)?", candidate):
+        origin = candidate
+    if not origin:
+        origin = str(request.base_url).rstrip("/") if request else ""
+    api = f"{origin}/api"
+    if format == "py":
+        return PlainTextResponse(_PY_HELPER.replace("__API__", api).replace("__TOKEN__", token),
+                                 headers={"Content-Disposition": 'attachment; filename="print-helper.py"'})
+    return PlainTextResponse(_PS1_HELPER.replace("__API__", api).replace("__TOKEN__", token),
+                             headers={"Content-Disposition": 'attachment; filename="print-helper.ps1"'})
+
+
+_PS1_HELPER = r"""# 58:12 shop print helper
+# Collects receipts from 58:12 and sends them to the printer on this network.
+# Leave this window open on any computer at the shop that can reach the printer.
+#
+#   Right-click this file and choose "Run with PowerShell".
+#   If Windows refuses, open PowerShell and run:
+#     powershell -ExecutionPolicy Bypass -File .\print-helper.ps1
+
+$Api   = '__API__'
+$Token = '__TOKEN__'
+
+Write-Host "58:12 print helper running. Leave this window open." -ForegroundColor Green
+Write-Host "Talking to $Api" -ForegroundColor DarkGray
+
+while ($true) {
+  try {
+    $jobs = Invoke-RestMethod -Uri "$Api/screens/$Token/print-jobs" -Method Get -TimeoutSec 30 `
+      -Headers @{ 'User-Agent' = '58-12-print-helper/1.0' }
+    foreach ($job in @($jobs)) {
+      $ok = $false
+      $err = ''
+      try {
+        $bytes = [Convert]::FromBase64String($job.data_b64)
+        $client = New-Object System.Net.Sockets.TcpClient
+        $connect = $client.BeginConnect($job.host, [int]$job.port, $null, $null)
+        if (-not $connect.AsyncWaitHandle.WaitOne(5000)) { throw "no answer from $($job.host):$($job.port)" }
+        $client.EndConnect($connect)
+        $stream = $client.GetStream()
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+        Start-Sleep -Milliseconds 400
+        $stream.Close(); $client.Close()
+        $ok = $true
+        Write-Host ("Printed {0} on {1}" -f $job.title, $job.host) -ForegroundColor Green
+      } catch {
+        $err = $_.Exception.Message
+        Write-Host ("Could not print {0}: {1}" -f $job.title, $err) -ForegroundColor Red
+      }
+      $body = @{ ok = $ok; error = $err } | ConvertTo-Json
+      try {
+        Invoke-RestMethod -Uri "$Api/screens/$Token/print-jobs/$($job.id)" -Method Post `
+          -Body $body -ContentType 'application/json' -TimeoutSec 30 `
+          -Headers @{ 'User-Agent' = '58-12-print-helper/1.0' } | Out-Null
+      } catch { Write-Host "Could not report back to 58:12" -ForegroundColor DarkYellow }
+    }
+  } catch {
+    Write-Host "Waiting for 58:12..." -ForegroundColor DarkGray
+    Start-Sleep -Seconds 5
+  }
+  Start-Sleep -Seconds 2
+}
+"""
+
+_PY_HELPER = r'''#!/usr/bin/env python3
+"""58:12 shop print helper.
+
+Collects receipts from 58:12 and sends them to the printer on this network.
+Leave it running on any computer or Raspberry Pi at the shop:
+
+    python3 print-helper.py
+
+Nothing to install — it only uses what Python ships with.
+"""
+import base64
+import json
+import socket
+import time
+import urllib.error
+import urllib.request
+
+API = "__API__"
+TOKEN = "__TOKEN__"
+
+
+def call(path, payload=None):
+    url = f"{API}/screens/{TOKEN}{path}"
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(url, data=data, method="POST" if data else "GET",
+                                headers={"Content-Type": "application/json",
+                                         # Python's own user agent gets turned away by the
+                                         # firewall in front of 58:12.
+                                         "User-Agent": "58-12-print-helper/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as res:
+        return json.loads(res.read() or "null")
+
+
+def send(job):
+    with socket.create_connection((job["host"], int(job.get("port") or 9100)), timeout=5) as sock:
+        sock.sendall(base64.b64decode(job["data_b64"]))
+        time.sleep(0.4)
+
+
+print("58:12 print helper running. Leave this window open.")
+print(f"Talking to {API}")
+while True:
+    try:
+        for job in call("/print-jobs") or []:
+            ok, err = True, ""
+            try:
+                send(job)
+                print(f"Printed {job.get('title')} on {job.get('host')}")
+            except Exception as exc:                       # noqa: BLE001 - report anything
+                ok, err = False, str(exc)
+                print(f"Could not print {job.get('title')}: {err}")
+            try:
+                call(f"/print-jobs/{job['id']}", {"ok": ok, "error": err})
+            except urllib.error.URLError:
+                print("Could not report back to 58:12")
+    except urllib.error.URLError:
+        print("Waiting for 58:12...")
+        time.sleep(5)
+    time.sleep(2)
+'''

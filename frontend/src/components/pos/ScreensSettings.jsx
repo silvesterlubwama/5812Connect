@@ -11,6 +11,8 @@ import { screensApi } from '../../services/api';
  * once; the link it gets back is what the kitchen or the customer display
  * opens — nobody signs in on that screen ever again (iter420).
  */
+const KIND_LABELS = { kitchen: 'kitchen board', sales: 'customer display', bridge: 'print helper' };
+
 export const ScreensSettings = ({ locationId, canManage = true }) => {
   const [screens, setScreens] = useState([]);
   const [kind, setKind] = useState('kitchen');
@@ -92,7 +94,7 @@ export const ScreensSettings = ({ locationId, canManage = true }) => {
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-medium truncate">
                   {s.name} <span className="text-muted-foreground font-normal">
-                    · {s.kind === 'kitchen' ? 'kitchen board' : 'customer display'}</span>
+                    · {KIND_LABELS[s.kind] || s.kind}</span>
                 </p>
                 <p className="text-[10px] text-muted-foreground truncate">{linkFor(s)}</p>
               </div>
