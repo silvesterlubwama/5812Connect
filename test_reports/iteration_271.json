@@ -1,0 +1,35 @@
+{
+  "summary": "iter421 receipt/till printer changes (frontend only: Receipt.jsx, TillPrinterDialog.jsx, tillPrinter.js, printHtml.js, ProductsPage.jsx). I tested them in the UI as admin@5812uganda.org on /5812global/sales at 1920px and 390px, and captured what the print iframe produced by hooking contentWindow.print. Almost everything works. On a 58mm or 80mm roll the receipt puts the item name on one line and 'qty x unit' with the total on the next, with no table. On A4 it keeps the 4-column table. The print iframe now sits off-screen (left:-10000px, 120mm wide), not visibility:hidden, and its print() is called. The @page margin is 0 with the right roll size (58mm, 80mm or 210mm), and body scrollWidth equals clientWidth, so nothing overflows. The Till printer dialog works: all 4 connection cards, the baud Speed select (5 rates, saved to localStorage as baudRate), the network warning, the silent-print help with --kiosk-printing, the 'Follow the shop's setting' paper option with its resolved text, and the test button. The test button is now enabled for 'This computer's printer': it opens the browser print with a 48-column (80mm) or 32-column (58mm) test slip and shows the toast. As expected, the network test to 192.168.1.250 fails: a 504 after about 5.4s, shown in the till-test-reason box and a toast. A second press of the test button retries for real (about 5.4s again), so the cooldown is cleared. On a sale reprint the first failed network print falls back to the browser after 5.6s. The second goes straight to the fallback in 0.5s with the 'Still cannot reach…' toast, so the cooldown works. The Store settings paper-size warning shows for A4 and A5 and hides for 58mm. One real problem: the admin's shop (Zimba Farm, loc_419f5d5e, and the 'all' row) is saved as receipt_paper_size=A4. In that case the Till printer dialog says 'This shop is set to 80mm.', and the browser receipt still prints as a full A4 sheet. That full-sheet print is very likely what squashes the user's receipt on a roll printer installed in Windows.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TillPrinterDialog paper 'auto'", "issue": "paperFor() turns any non-roll store setting (A4/A5) into '80mm', so the dialog shows 'This shop is set to 80mm.' while the shop is actually A4. Seen live for Zimba Farm (loc_419f5d5e). The ESC/POS slips use 48 columns, but the browser receipt (the 'This computer's printer' path, Receipt.jsx) prints a 210mm A4 sheet. The same till gives two different layouts, and the dialog hides the cause.", "selector": "[data-testid='till-paper-resolved']", "priority": "HIGH"},
+      {"component": "TillPrinterDialog mobile (390px)", "issue": "In the network and kitchen printer grids, the Address input shrinks to about 70px (shows '192.16'). The 'Printer address' label wraps onto 2 lines, and the Port input takes most of the width. The grid-cols-3 / col-span-2 tracks do not hold on a phone.", "selector": "[data-testid='till-network-host'], [data-testid='till-kitchen-host']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Browser test slip (testPrintViaBrowser)", "issues": ["On 58mm (32 columns) the fixed help lines 'runs off the edge, receipts will print' (38 chars) and 'If the columns line up and nothing' (34) are longer than 32 characters. They wrap on the very slip that is meant to prove nothing runs off the edge.", "The store name is not centred, while the TEST RECEIPT title is."]},
+      {"screen": "Receipt roll layout", "issues": ["The leading spaces in the `  ${qty} × ${unit}` line collapse in HTML, so the qty line is not indented under the item name. Use padding-left instead."]}
+    ]
+  },
+  "test_report_links": ["/app/tests/iter421_till_printer_ui.py"],
+  "action_items": [
+    "When the store is A4/A5, the Till printer dialog should say so and link to the A4 warning (e.g. 'This shop is set to A4 — thermal slips will use 80mm, browser receipts print a full sheet'). Do not claim 80mm.",
+    "Consider using the roll layout for the browser receipt when the till's own paper is set to 58mm/80mm, even if the store says A4. Or tell the user to change Zimba Farm's receipt_paper_size, which is currently A4 on both loc_419f5d5e and 'all' and is the likely cause of the user's squashed receipts. Do not change it without the user's OK.",
+    "Fix the address and port grid in the Till printer dialog at 390px.",
+    "Shorten the 58mm browser test slip's help lines to 32 characters or fewer, or wrap them with the column width."
+  ],
+  "critical_code_review_comments": [
+    "tillPrinter.js sendNetworkTo: the comment says the cooldown starts 'once it has failed twice', but the code starts it after the FIRST failure (netCooldown.set on any non-400/413). One network blip sends every receipt to the browser print for 2 minutes. Align the code or the comment.",
+    "The netCooldown is per tab and in memory only, so a page reload clears it. That is fine, but document it.",
+    "Receipt.jsx: the font-size ternary `${isRoll ? '12px' : '12px'}` returns the same value on both sides (dead code). The roll and sheet item renderers repeat the packaging/discount lines (DRY).",
+    "Receipt.jsx: printViaBrowser focuses the iframe's contentWindow, so pressing Escape afterwards does not close the Receipt dialog (focus is inside the off-screen iframe). Minor UX.",
+    "The ProductsPage.jsx slip fallbacks call paperFor(getTillConfig(), settings) twice each. Compute it once."
+  ],
+  "updated_files": ["/app/tests/iter421_till_printer_ui.py"],
+  "success_rate": {"backend": "N/A (no backend changes)", "frontend": "92% (24/26 checks; the A4 'auto' resolution message and the mobile address grid failed)"},
+  "seed_data_creation": "None. Nothing was saved to the DB. Store-settings paper changes were local select changes only, never saved. The till config is browser localStorage in the test browser only.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "There is no real printer in the preview, so a network print to 192.168.1.250 always returns 504 after about 5.4s; that is expected. The till config lives in localStorage key '5812:till-printer'. To capture browser prints, hook a MutationObserver on body for an added IFRAME, override contentWindow.print, and read contentDocument. The admin POS store Zimba Farm (loc_419f5d5e) has receipt_paper_size=A4, loc_4bf833e0 has 58mm and loc_59a87857 has 80mm. Store settings load about 2-3s after the dialog opens. receipt-print-dialog-btn only renders when a till printer is ready (not for connection 'none')."
+}

@@ -2572,3 +2572,64 @@ Tests: `tests/test_iter420_screens_servers_compare.py` (27) and
 - P2: Ubuntu iCal subscription still wants confirming against the live
   deployment and a real calendar client.
 - P2: kitchen and receipt printers want configuring per store on real hardware.
+
+### 2026-11-16 (iter421) — The receipt itself, and why nothing came out
+Reported: "quantity, unit and total is squeezed together too much on receipt and
+doesn't show well when printed, also usb printing and network auto printing
+isn't working well". Asked what was connected and what happened: USB cable AND a
+printer with its own IP, "nothing comes out at all", both roll widths in use,
+and print silently from the till as well as keep the server→IP route.
+
+**Layout.** On a 58/80mm roll the four columns (Item | Qty | Unit | Total) are
+gone: each item is the name on its own line, then `2 × 15,000` against the line
+total, numbers never breaking (`nowrap`, tabular figures) and long names
+wrapping. A4/A5 keeps a proper table. Verified at a true 302px (80mm) and 219px
+(58mm): `scrollWidth === clientWidth`, nothing off the edge.
+
+**The clipped right edge.** `@page { margin: 4mm }` on top of `body { width:
+80mm; padding: 2mm }` made the content wider than the paper, so the Total column
+fell off the right. Margin now lives on the body and nothing is given a fixed
+width — same fix in `printSlipFallback`.
+
+**"Nothing comes out" — browser path.** `printHtml.js` printed from an iframe
+styled `width:0;height:0;visibility:hidden`; Chrome skips a hidden frame's
+layout and prints a blank page. It is now parked off-screen at a real size
+(`left:-10000px`, 120mm) and proven to carry the receipt. Focus is handed back
+to the page afterwards so Escape still closes the dialog.
+
+**"Nothing comes out" — USB.** Three defects, all consistent with a printer that
+reports success and prints nothing:
+- the writer lock was released the instant `write()` resolved, i.e. before the
+  bytes drained — now awaits `writer.ready`;
+- the serial speed was hard-coded to 9600 — now a per-till **Speed** setting
+  (9600–115200), which the test slip prints and the dialog explains;
+- WebUSB claimed `interfaces[0]`, which on a composite device is not the printer
+  — now picks the interface with an OUT endpoint, preferring printer class 7,
+  selects its alternate setting and sends in 4KB slices. A driver holding the
+  device is reported in words.
+
+**Network / auto printing.** Kept, with the truth attached: the bytes go from
+the app server, so a cloud server cannot see a printer on the shop's own LAN.
+The dialog says so and points at "This computer's printer", which prints
+silently once Chrome is started with `--kiosk-printing` (steps are in the
+dialog). Two failed attempts in a row put that address on a two-minute cooldown
+so the till stops waiting 5s per sale; a hand-pressed test always really tries.
+
+**Both roll widths.** Till paper defaults to "Follow the shop's setting", and a
+till explicitly set to 58/80mm now wins over a shop saved as A4 — the paper in
+the printer is a fact, the setting is a guess. Store settings warns when a shop
+is on A4/A5, and the printer dialog says plainly when the shop is on a full
+sheet. NOTE: Zimba Farm (loc_419f5d5e) IS saved as A4 — left as found, flagged
+to the user, likely the cause of their squashed print.
+
+Files: `frontend/src/components/Receipt.jsx`, `utils/{tillPrinter,printHtml}.js`,
+`components/pos/TillPrinterDialog.jsx`, `pages/ProductsPage.jsx`.
+No backend change. Verified in-browser (layout at both widths, print iframe
+contents, dialog at 1920/390px); test agent iteration_271 then its follow-ups.
+NOT verifiable here: real paper out of a real printer — no hardware in preview.
+
+#### Still open / next
+- P0 (user): confirm a real receipt prints on the shop's own printer; if USB
+  still prints nothing, work down the Speed list.
+- P1: remember the working speed per paired printer automatically.
+- P1: a shop-side print bridge would make server→LAN printing genuinely work.

@@ -3,7 +3,7 @@ import { QRCode as QRCodeLogo } from 'react-qrcode-logo';
 import { toast } from 'sonner';
 import { escapeHtml as e } from '../utils/htmlEscape';
 import { printHtmlDocument } from '../utils/printHtml';
-import { printSaleReceipt, isReady as isTillReady } from '../utils/tillPrinter';
+import { printSaleReceipt, isReady as isTillReady, getTillConfig } from '../utils/tillPrinter';
 
 const LOGO_URL = 'https://i0.wp.com/5812-global.org/wp-content/uploads/2021/12/rgb_global_h.png?w=400&ssl=1';
 
@@ -53,7 +53,12 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
     }
   }, [storeSettings.receipt_paper_size, autoPaperSize]);
 
-  const paperSize = storeSettings.receipt_paper_size || autoPaperSize || '80mm';
+  // A till told it has a 58 or 80mm roll wins over the shop's saved size: the
+  // paper in that printer is a fact, the setting is a guess (iter421).
+  const tillPaper = getTillConfig().paper;
+  const paperSize = (tillPaper === '58mm' || tillPaper === '80mm')
+    ? tillPaper
+    : (storeSettings.receipt_paper_size || autoPaperSize || '80mm');
   const paperWidth = PAPER_WIDTHS[paperSize] || '80mm';
   const isRoll = paperSize === '58mm' || paperSize === '80mm';
   const showLogo = storeSettings.receipt_show_logo !== false;
@@ -106,7 +111,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
                and nothing is given a fixed width. */
             @page { size: ${paperWidth} auto; margin: 0; }
             html, body { margin: 0; padding: 0; }
-            body { padding: ${isRoll ? '2mm 3mm' : '8mm'}; font-family: ${isRoll ? "'Courier New', Courier, monospace" : 'Arial, Helvetica, sans-serif'}; font-size: ${isRoll ? '12px' : '12px'}; line-height: 1.35; box-sizing: border-box; color: #000; background: #fff; }
+            body { padding: ${isRoll ? '2mm 3mm' : '8mm'}; font-family: ${isRoll ? "'Courier New', Courier, monospace" : 'Arial, Helvetica, sans-serif'}; font-size: 12px; line-height: 1.35; box-sizing: border-box; color: #000; background: #fff; }
             * { box-sizing: border-box; }
             .center { text-align: center; }
             .bold { font-weight: 700; }
@@ -117,6 +122,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
             .item { margin-bottom: 3px; page-break-inside: avoid; }
             .item-name { word-break: break-word; }
             .item-sum { display: flex; justify-content: space-between; gap: 8px; }
+            .qty { padding-left: 10px; }
             .logo { max-width: 55%; height: auto; margin: 0 auto 4px; display: block; }
             .qr-print { margin: 6px auto; text-align: center; }
             .total-row { font-size: 15px; font-weight: 700; }
@@ -145,6 +151,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
         console.warn('[receipt] print failed', err);
         toast.error('Could not open the print dialog — check your browser settings');
       }
+      setTimeout(() => { try { window.focus(); } catch { /* ignore */ } }, 0);
     };
     setTimeout(tryPrint, 150);
   };
@@ -189,8 +196,8 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
                     {item.variant_name && <span style={{ color: '#555' }}> · {item.variant_name}</span>}
                   </div>
                   <div className="item-sum" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11 }}>
-                    <span className="qty" style={{ whiteSpace: 'nowrap', color: '#333' }}>
-                      {`  ${item.qty} × ${(item.unit_price || 0).toLocaleString()}`}
+                    <span className="qty" style={{ whiteSpace: 'nowrap', color: '#333', paddingLeft: 10 }}>
+                      {`${item.qty} × ${(item.unit_price || 0).toLocaleString()}`}
                     </span>
                     <span className="amt" style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
                       {lineSubtotal.toLocaleString()}

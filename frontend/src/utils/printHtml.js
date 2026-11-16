@@ -21,6 +21,9 @@ export function printHtmlDocument(html, { autoPrint = true } = {}) {
     } catch (e) {
       console.warn('[printHtml] print failed', e);
     }
+    // Give the keyboard back to the page, or Escape no longer closes the
+    // dialog the receipt was printed from (iter421).
+    setTimeout(() => { try { window.focus(); } catch { /* ignore */ } }, 0);
     setTimeout(() => frame.remove(), 60000);
   };
   frame.onload = () => { if (autoPrint) fire(); };

@@ -159,12 +159,19 @@ export const columnsFor = (paper) => (paper === '58mm' ? 32 : 48);
  * Which roll this till is actually printing on. One chain runs both widths, so
  * "auto" follows whatever that shop set in Store settings rather than making
  * every till be configured by hand (iter421).
+ *
+ * Thermal slips can only be 58 or 80mm, so a shop set to a full sheet is read
+ * as 80mm here — `storePaper()` tells the truth about what was actually saved,
+ * which is what the setup screen shows.
  */
 export function paperFor(cfg = getTillConfig(), storeSettings = {}) {
   if (cfg.paper && cfg.paper !== 'auto') return cfg.paper;
   const fromStore = storeSettings.receipt_paper_size;
   return (fromStore === '58mm' || fromStore === '80mm') ? fromStore : '80mm';
 }
+
+/** What the shop actually has saved — 'A4' and 'A5' included. */
+export const storePaper = (storeSettings = {}) => storeSettings.receipt_paper_size || '';
 
 /** What this particular browser can actually do. */
 export function capabilities() {
@@ -321,16 +328,15 @@ async function sendNetwork(payload) {
 }
 
 /** Raw bytes to a named printer on the shop network (counter or kitchen). */
-const netCooldown = new Map();          // host:port → epoch ms until we try again
+const netCooldown = new Map();          // host:port → { strikes, until } — per tab, cleared by a reload
 
 async function sendNetworkTo(host, port, payload) {
   if (!host) return { printed: false, transport: 'network', reason: 'No printer address set' };
   const network = { host, port };
   const where = `${network.host}:${Number(network.port) || 9100}`;
-  // A printer the server cannot see takes five seconds to time out. Once it has
-  // failed twice, stop holding the till up at every sale and go straight to the
-  // fallback for a couple of minutes (iter421).
-  const until = netCooldown.get(where) || 0;
+  // Two strikes, not one: a single network blip should not send every receipt
+  // to the browser for the next two minutes (iter421).
+  const until = netCooldown.get(where)?.until || 0;
   if (Date.now() < until) {
     return { printed: false, transport: 'network', reason: `Still cannot reach the printer at ${where} — printing here instead` };
   }
@@ -354,7 +360,12 @@ async function sendNetworkTo(host, port, payload) {
     if ((status === 400 || status === 413) && typeof detail === 'string') reason = detail;
     else if (status === 504) reason = `The printer at ${where} did not answer — if it is on the shop's own network, the app server cannot see it; set this till to "This computer's printer" instead`;
     else reason = `Could not reach the printer at ${where}`;
-    if (status !== 400 && status !== 413) netCooldown.set(where, Date.now() + 120000);
+    if (status !== 400 && status !== 413) {
+      // Each five-second timeout holds the till up, so after the second one in
+      // a row stop trying for a couple of minutes and print here instead.
+      const strikes = (netCooldown.get(where)?.strikes || 0) + 1;
+      netCooldown.set(where, { strikes, until: strikes >= 2 ? Date.now() + 120000 : 0 });
+    }
     return { printed: false, transport: 'network', reason };
   }
 }
@@ -764,9 +775,22 @@ function _decode(payload) {
 export function testPrintViaBrowser(storeSettings = {}) {
   const paper = paperFor(getTillConfig(), storeSettings);
   const cols = columnsFor(paper);
+  const centre = (s) => String(s).padStart(Math.floor((cols + String(s).length) / 2));
+  // Wrapped to the roll, because a slip that proves nothing runs off the edge
+  // must not run off the edge itself (iter421).
+  const wrap = (text) => {
+    const out = [];
+    let line = '';
+    text.split(' ').forEach(word => {
+      if ((line + ' ' + word).trim().length > cols) { out.push(line.trim()); line = word; }
+      else line = `${line} ${word}`.trim();
+    });
+    if (line) out.push(line.trim());
+    return out;
+  };
   const lines = [
-    'TEST RECEIPT'.padStart(Math.floor((cols + 12) / 2)),
-    (storeSettings.store_name || '58:12 Global Connect'),
+    centre('TEST RECEIPT'),
+    centre((storeSettings.store_name || '58:12 Global Connect').slice(0, cols)),
     '-'.repeat(cols),
     row('Paper', `${paper} (${cols} chars)`, cols).trimEnd(),
     row('Printed', new Date().toLocaleString(), cols).trimEnd(),
@@ -778,9 +802,7 @@ export function testPrintViaBrowser(storeSettings = {}) {
     '-'.repeat(cols),
     row('TOTAL', 'UGX 42,500', cols).trimEnd(),
     '',
-    'If the columns line up and nothing',
-    'runs off the edge, receipts will print',
-    'correctly on this roll.',
+    ...wrap('If the columns line up and nothing runs off the edge, receipts will print correctly on this roll.'),
   ];
   printSlipFallback('Test receipt', lines, paper);
   return { printed: true, transport: 'browser' };

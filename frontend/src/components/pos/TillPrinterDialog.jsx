@@ -10,7 +10,7 @@ import { Switch } from '../ui/switch';
 import { toast } from 'sonner';
 import {
   capabilities, connectBluetooth, connectUsb, getTillConfig, isReady,
-  openDrawer, paperFor, saveTillConfig, testPrint, testPrintViaBrowser,
+  openDrawer, paperFor, saveTillConfig, storePaper, testPrint, testPrintViaBrowser,
 } from '../../utils/tillPrinter';
 import { unpairRole } from '../../utils/deviceRoles';
 
@@ -84,6 +84,8 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
   const unsupported = (cfg.connection === 'usb' && !caps.usbSerial && !caps.usbRaw)
     || (cfg.connection === 'bluetooth' && !caps.bluetooth);
   const resolvedPaper = paperFor(cfg, storeSettings);
+  const saved = storePaper(storeSettings);
+  const sheetShop = saved === 'A4' || saved === 'A5';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -144,8 +146,8 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
           )}
 
           {cfg.connection === 'network' && (
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-2 space-y-1">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="sm:col-span-2 space-y-1">
                 <Label className="text-xs">Printer address</Label>
                 <Input
                   value={cfg.network?.host || ''}
@@ -162,7 +164,7 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
                   data-testid="till-network-port"
                 />
               </div>
-              <p className="col-span-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2" data-testid="till-network-warning">
+              <p className="sm:col-span-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2" data-testid="till-network-warning">
                 The receipt is sent by the app server, so the server has to be able to see that
                 address. If 58:12 runs in the cloud and the printer sits on the shop's own
                 network, it never can — use <strong>This computer's printer</strong> instead and
@@ -199,9 +201,9 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
 
           {/* A kitchen printer is almost always a network box of its own. Leave
               it blank and tickets come off the counter roll instead (iter418). */}
-          <div className="grid grid-cols-3 gap-2 rounded-lg border border-amber-200 dark:border-amber-900/40 p-2.5">
-            <p className="col-span-3 text-xs font-semibold">Kitchen printer (optional)</p>
-            <div className="col-span-2 space-y-1">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 rounded-lg border border-amber-200 dark:border-amber-900/40 p-2.5">
+            <p className="sm:col-span-3 text-xs font-semibold">Kitchen printer (optional)</p>
+            <div className="sm:col-span-2 space-y-1">
               <Label className="text-xs">Address</Label>
               <Input
                 value={cfg.kitchenNetwork?.host || ''}
@@ -218,7 +220,7 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
                 data-testid="till-kitchen-port"
               />
             </div>
-            <p className="col-span-3 text-[11px] text-muted-foreground">
+            <p className="sm:col-span-3 text-[11px] text-muted-foreground">
               Kitchen tickets go here, sent by the server like any network printer. Leave it
               empty — or if this printer is off — and they come off the counter roll instead, so
               no order is ever lost.
@@ -244,9 +246,18 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
                 </SelectContent>
               </Select>
               {(cfg.paper || 'auto') === 'auto' && (
-                <p className="text-[11px] text-muted-foreground" data-testid="till-paper-resolved">
-                  This shop is set to {resolvedPaper}.
-                </p>
+                sheetShop ? (
+                  <p className="text-[11px] text-amber-700" data-testid="till-paper-resolved">
+                    This shop is saved as {saved}, a full sheet. Slips sent straight to the printer
+                    use {resolvedPaper} columns, but a receipt printed through Windows comes out as a
+                    whole page — which is what squashes it on a roll. Set the shop to 80mm or 58mm in
+                    Store settings, or pick the width here for this till only.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground" data-testid="till-paper-resolved">
+                    This shop is set to {resolvedPaper}.
+                  </p>
+                )
               )}
             </div>
             <div className="space-y-1">
