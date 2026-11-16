@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bluetooth, Loader2, Network, Printer, Usb, Wifi, X } from 'lucide-react';
+import { Bluetooth, Loader2, Network, Printer, Usb, Wifi, X, Info } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
@@ -10,24 +10,28 @@ import { Switch } from '../ui/switch';
 import { toast } from 'sonner';
 import {
   capabilities, connectBluetooth, connectUsb, getTillConfig, isReady,
-  openDrawer, saveTillConfig, testPrint,
+  openDrawer, paperFor, saveTillConfig, testPrint, testPrintViaBrowser,
 } from '../../utils/tillPrinter';
 import { unpairRole } from '../../utils/deviceRoles';
 
 const CONNECTIONS = [
   { id: 'usb', label: 'USB cable', icon: Usb, blurb: 'Plugged into this computer' },
   { id: 'bluetooth', label: 'Bluetooth', icon: Bluetooth, blurb: 'Portable printer paired over Bluetooth' },
-  { id: 'network', label: 'Network / Wi-Fi', icon: Network, blurb: 'Printer has its own address on your network' },
-  { id: 'none', label: 'Browser print dialog', icon: Printer, blurb: 'The usual Print window — works everywhere' },
+  { id: 'network', label: 'Network / Wi-Fi', icon: Network, blurb: "Printer's own address, reached by the server" },
+  { id: 'none', label: "This computer's printer", icon: Printer, blurb: 'Whatever is installed in Windows — can print silently' },
 ];
 
-export default function TillPrinterDialog({ open, onOpenChange }) {
+const BAUD_RATES = [9600, 19200, 38400, 57600, 115200];
+
+export default function TillPrinterDialog({ open, onOpenChange, storeSettings = {} }) {
   const [cfg, setCfg] = useState(getTillConfig);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState('');
+  const [lastFail, setLastFail] = useState('');
+  const [showSilentHelp, setShowSilentHelp] = useState(false);
   const caps = capabilities();
 
-  useEffect(() => { if (open) { setCfg(getTillConfig()); isReady().then(setReady); } }, [open]);
+  useEffect(() => { if (open) { setCfg(getTillConfig()); isReady().then(setReady); setLastFail(''); } }, [open]);
 
   const update = (patch) => { setCfg(saveTillConfig(patch)); isReady().then(setReady); };
 
@@ -41,10 +45,26 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
 
   const handleTest = async () => {
     setBusy('test');
-    const r = await testPrint();
+    setLastFail('');
+    if (cfg.connection === 'none') {
+      testPrintViaBrowser(storeSettings);
+      setBusy('');
+      toast.success('Test receipt sent to the print window');
+      return;
+    }
+    const r = await testPrint(storeSettings);
     setBusy('');
-    if (r.printed) toast.success('Test receipt sent — check the printer');
-    else toast.error(r.reason || 'The printer did not take the job');
+    if (r.printed) {
+      toast.success(`Test receipt sent over ${r.transport} — check the printer`);
+      // "Sent" only means the printer took the bytes. Nothing coming out after
+      // that is almost always the wrong speed on a serial printer (iter421).
+      if (cfg.connection === 'usb') {
+        setLastFail('If nothing came out, the printer is listening at another speed — try the next one down the Speed list.');
+      }
+    } else {
+      toast.error(r.reason || 'The printer did not take the job');
+      setLastFail(r.reason || '');
+    }
   };
 
   const handleDrawer = async () => {
@@ -63,6 +83,7 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
   const needsPairing = cfg.connection === 'usb' || cfg.connection === 'bluetooth';
   const unsupported = (cfg.connection === 'usb' && !caps.usbSerial && !caps.usbRaw)
     || (cfg.connection === 'bluetooth' && !caps.bluetooth);
+  const resolvedPaper = paperFor(cfg, storeSettings);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -87,7 +108,7 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
                   <button
                     key={c.id}
                     type="button"
-                    onClick={() => update({ connection: c.id })}
+                    onClick={() => { update({ connection: c.id }); setLastFail(''); }}
                     data-testid={`till-conn-${c.id}`}
                     className={`text-left p-3 rounded-lg border transition-colors ${active ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent/40'}`}
                   >
@@ -104,6 +125,22 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
               This device can't talk to that kind of printer — iPhones and iPads never can.
               Receipts will keep using the browser's Print window instead.
             </p>
+          )}
+
+          {cfg.connection === 'usb' && !unsupported && (
+            <div className="space-y-1">
+              <Label className="text-xs">Speed</Label>
+              <Select value={String(cfg.baudRate || 9600)} onValueChange={v => update({ baudRate: Number(v) })}>
+                <SelectTrigger data-testid="till-baud-select"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {BAUD_RATES.map(b => <SelectItem key={b} value={String(b)}>{b} baud{b === 9600 ? ' (most common)' : ''}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">
+                Only matters for printers on a serial/COM cable. If the test says it sent but no
+                paper moves, this is nearly always why — work down the list.
+              </p>
+            </div>
           )}
 
           {cfg.connection === 'network' && (
@@ -125,9 +162,38 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
                   data-testid="till-network-port"
                 />
               </div>
-              <p className="col-span-3 text-[11px] text-muted-foreground">
-                Printed from the server, so the printer must be on the same network as it.
+              <p className="col-span-3 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2" data-testid="till-network-warning">
+                The receipt is sent by the app server, so the server has to be able to see that
+                address. If 58:12 runs in the cloud and the printer sits on the shop's own
+                network, it never can — use <strong>This computer's printer</strong> instead and
+                install the printer on the till in Windows.
               </p>
+            </div>
+          )}
+
+          {cfg.connection === 'none' && (
+            <div className="rounded-lg border border-border p-2.5 space-y-1.5" data-testid="till-silent-help">
+              <p className="text-[11px] text-muted-foreground">
+                Receipts go to whichever printer this computer prints to — including a Wi-Fi
+                printer installed in Windows. Chrome shows its Print window each time unless
+                it is started in silent mode.
+              </p>
+              <button type="button" onClick={() => setShowSilentHelp(v => !v)}
+                className="text-[11px] text-primary hover:underline flex items-center gap-1"
+                data-testid="till-silent-help-toggle">
+                <Info size={11} /> {showSilentHelp ? 'Hide' : 'How do I stop the Print window appearing?'}
+              </button>
+              {showSilentHelp && (
+                <ol className="text-[11px] text-muted-foreground list-decimal pl-4 space-y-1">
+                  <li>Set the receipt printer as the <strong>default printer</strong> in Windows, with the right roll width in its own settings.</li>
+                  <li>Right-click the Chrome shortcut on the till → <strong>Properties</strong>.</li>
+                  <li>At the end of <strong>Target</strong>, after a space, add:
+                    <code className="block bg-muted rounded px-1.5 py-0.5 mt-0.5 select-all">--kiosk-printing</code>
+                  </li>
+                  <li>Open 58:12 from that shortcut. Receipts then print straight away, no window.</li>
+                  <li>Turn on <strong>Print each sale automatically</strong> in Store settings.</li>
+                </ol>
+              )}
             </div>
           )}
 
@@ -153,12 +219,14 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
               />
             </div>
             <p className="col-span-3 text-[11px] text-muted-foreground">
-              Kitchen tickets go here. Leave it empty — or if this printer is off — and they
-              come off the counter roll instead, so no order is ever lost.
+              Kitchen tickets go here, sent by the server like any network printer. Leave it
+              empty — or if this printer is off — and they come off the counter roll instead, so
+              no order is ever lost.
             </p>
           </div>
 
-          {needsPairing && !unsupported && (            <Button onClick={handleConnect} disabled={busy === 'connect'} className="w-full gap-2" data-testid="till-connect-btn">
+          {needsPairing && !unsupported && (
+            <Button onClick={handleConnect} disabled={busy === 'connect'} className="w-full gap-2" data-testid="till-connect-btn">
               {busy === 'connect' ? <Loader2 size={14} className="animate-spin" /> : <Wifi size={14} />}
               {cfg.bluetoothName && cfg.connection === 'bluetooth' ? `Reconnect ${cfg.bluetoothName}` : 'Choose the printer'}
             </Button>
@@ -167,13 +235,19 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Paper width</Label>
-              <Select value={cfg.paper} onValueChange={v => update({ paper: v })}>
+              <Select value={cfg.paper || 'auto'} onValueChange={v => update({ paper: v })}>
                 <SelectTrigger data-testid="till-paper-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="auto">Follow the shop's setting</SelectItem>
                   <SelectItem value="80mm">80mm (48 characters)</SelectItem>
                   <SelectItem value="58mm">58mm (32 characters)</SelectItem>
                 </SelectContent>
               </Select>
+              {(cfg.paper || 'auto') === 'auto' && (
+                <p className="text-[11px] text-muted-foreground" data-testid="till-paper-resolved">
+                  This shop is set to {resolvedPaper}.
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Cash drawer</Label>
@@ -188,8 +262,14 @@ export default function TillPrinterDialog({ open, onOpenChange }) {
             </div>
           </div>
 
+          {lastFail && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2" data-testid="till-test-reason">
+              {lastFail}
+            </p>
+          )}
+
           <div className="flex flex-wrap gap-2 pt-1">
-            <Button variant="outline" size="sm" onClick={handleTest} disabled={busy === 'test' || cfg.connection === 'none'} className="gap-2" data-testid="till-test-btn">
+            <Button variant="outline" size="sm" onClick={handleTest} disabled={busy === 'test'} className="gap-2" data-testid="till-test-btn">
               {busy === 'test' ? <Loader2 size={13} className="animate-spin" /> : <Printer size={13} />} Print test receipt
             </Button>
             <Button variant="outline" size="sm" onClick={handleDrawer} disabled={busy === 'drawer' || cfg.connection === 'none'} className="gap-2" data-testid="till-open-drawer-btn">

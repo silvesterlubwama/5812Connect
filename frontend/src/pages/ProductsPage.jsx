@@ -48,7 +48,7 @@ import { ServerSignInDialog } from '../components/pos/ServerSignInDialog';
 import { ServersReportDialog } from '../components/pos/ServersReportDialog';
 import { ScreensSettings } from '../components/pos/ScreensSettings';
 import { screensApi } from '../services/api';
-import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText, printQuoteSlip, quoteSlipText, printLossSlip, lossSlipText, printKitchenTicket, kitchenTicketText } from '../utils/tillPrinter';
+import { getTillConfig, isReady as isTillReady, openDrawer as openTillDrawer, printRefundSlip, printZReport, printSlipFallback, refundSlipText, zReportText, printQuoteSlip, quoteSlipText, printLossSlip, lossSlipText, printKitchenTicket, kitchenTicketText, paperFor, columnsFor } from '../utils/tillPrinter';
 import { queueOfflineSale, syncOfflineSales, offlineQueueCount, onConnectivityChange } from '../utils/offlinePos';
 
 const fmt = (n, currency = 'UGX') => `${currency} ${(n || 0).toLocaleString()}`;
@@ -540,8 +540,8 @@ export default function ProductsPage() {
     printSlipFallback(`Refund ${sale.receipt_number || ''}`, refundSlipText(sale, {
       storeName: settings.store_name || '58:12 Global Connect',
       currency: settings.currency || 'UGX',
-      columns: 48, ...extra,
-    }));
+      columns: columnsFor(paperFor(getTillConfig(), settings)), ...extra,
+    }), paperFor(getTillConfig(), settings));
   };
 
   // Part refund: just the lines coming back, with their own slip.
@@ -562,8 +562,8 @@ export default function ProductsPage() {
       printSlipFallback(`Refund ${slip.receipt_number}`, refundSlipText(slip, {
         storeName: settings.store_name || '58:12 Global Connect',
         currency: settings.currency || 'UGX',
-        columns: 48, ...extra,
-      }));
+        columns: columnsFor(paperFor(getTillConfig(), settings)), ...extra,
+      }), paperFor(getTillConfig(), settings));
     }
   };
 
@@ -603,8 +603,8 @@ export default function ProductsPage() {
     printSlipFallback(quote.quote_number, quoteSlipText(quote, {
       storeName: settings.store_name || '58:12 Global Connect',
       currency: settings.currency || activeCurrency || 'UGX',
-      columns: 48, ...extra,
-    }));
+      columns: columnsFor(paperFor(getTillConfig(), settings)), ...extra,
+    }), paperFor(getTillConfig(), settings));
   };
 
   // What keeps coming back — by product and by reason.
@@ -644,8 +644,8 @@ export default function ProductsPage() {
     printSlipFallback(loss.slip_number || 'Stock loss', lossSlipText(loss, {
       storeName: settings.store_name || '58:12 Global Connect',
       currency: settings.currency || activeCurrency || 'UGX',
-      columns: 48, storeLabel,
-    }));
+      columns: columnsFor(paperFor(getTillConfig(), settings)), storeLabel,
+    }), paperFor(getTillConfig(), settings));
   };
   const openReturnsReport = async (range = returnsRange) => {
     setReturnsLoading(true);
@@ -733,7 +733,8 @@ export default function ProductsPage() {
     });
     if (res.printed) return res;
     printSlipFallback(order.ticket_number || 'Kitchen ticket',
-      kitchenTicketText(order, { columns: 48, storeLabel: settings.store_name || '', ...extra }));
+      kitchenTicketText(order, { columns: columnsFor(paperFor(getTillConfig(), settings)), storeLabel: settings.store_name || '', ...extra }),
+      paperFor(getTillConfig(), settings));
     return res;
   };
 
@@ -820,8 +821,8 @@ export default function ProductsPage() {
     printSlipFallback(`Z-Report ${zReport.date}`, zReportText(zReport, {
       storeName: settings.store_name || '58:12 Global Connect',
       currency: settings.currency || 'UGX',
-      columns: 48,
-    }));
+      columns: columnsFor(paperFor(getTillConfig(), settings)),
+    }), paperFor(getTillConfig(), settings));
   };
   // Cash drop dialog
   const [cashDropOpen, setCashDropOpen] = useState(false);
@@ -2202,7 +2203,7 @@ export default function ProductsPage() {
         onOpenChange={(v) => { if (!v) setTransferProduct(null); }}
         onDone={() => fetchAll()}
       />
-      <TillPrinterDialog open={showTillPrinter} onOpenChange={(v) => { setShowTillPrinter(v); if (!v) isTillReady().then(setTillPrinterReady); }} />
+      <TillPrinterDialog open={showTillPrinter} storeSettings={storeSettings || {}} onOpenChange={(v) => { setShowTillPrinter(v); if (!v) isTillReady().then(setTillPrinterReady); }} />
       <Dialog open={showReceipt} onOpenChange={setShowReceipt}>
         <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="flex items-center gap-2"><Receipt size={16} /> Receipt {lastReceipt?.receipt_number || ''}</DialogTitle></DialogHeader>
@@ -2353,7 +2354,15 @@ export default function ProductsPage() {
                     <SelectItem value="A4">A4 (Full page)</SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-[10px] text-muted-foreground">Auto-detected printer size override</p>
+                <p className="text-[10px] text-muted-foreground">
+                  The width of the roll or sheet receipts are laid out for.
+                </p>
+                {['A4', 'A5'].includes(storeSettings.receipt_paper_size) && (
+                  <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-1.5" data-testid="paper-size-warning">
+                    This shop is set to a full sheet. On a till roll that prints tiny and squashed —
+                    pick 80mm or 58mm to match the paper actually in the printer.
+                  </p>
+                )}
               </div>
               <div className="space-y-2 pt-1">
                 <label className="flex items-center gap-2 text-xs cursor-pointer">

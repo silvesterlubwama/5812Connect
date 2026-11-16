@@ -130,7 +130,8 @@ export function buildReceiptBytes(sale, opts = {}) {
 // ---------------------------------------------------------------- config
 const DEFAULTS = {
   connection: 'none',          // none | usb | bluetooth | network
-  paper: '80mm',               // 80mm → 48 cols, 58mm → 32 cols
+  paper: 'auto',               // auto → follow the shop's own setting; 80mm → 48 cols, 58mm → 32
+  baudRate: 9600,              // serial printers vary; the wrong speed prints nothing (iter421)
   openDrawerOnCash: true,
   network: { host: '', port: 9100 },
   // A restaurant's kitchen printer, if it has its own. Empty means the kitchen
@@ -153,6 +154,17 @@ export function saveTillConfig(patch) {
 }
 
 export const columnsFor = (paper) => (paper === '58mm' ? 32 : 48);
+
+/**
+ * Which roll this till is actually printing on. One chain runs both widths, so
+ * "auto" follows whatever that shop set in Store settings rather than making
+ * every till be configured by hand (iter421).
+ */
+export function paperFor(cfg = getTillConfig(), storeSettings = {}) {
+  if (cfg.paper && cfg.paper !== 'auto') return cfg.paper;
+  const fromStore = storeSettings.receipt_paper_size;
+  return (fromStore === '58mm' || fromStore === '80mm') ? fromStore : '80mm';
+}
 
 /** What this particular browser can actually do. */
 export function capabilities() {
@@ -179,35 +191,66 @@ export async function isReady() {
 async function sendUsb(payload) {
   const device = await getDeviceForRole('receipt_printer');
   if (!device) return { printed: false, transport: 'usb', reason: 'No printer paired on this computer' };
+  const { baudRate = 9600 } = getTillConfig();
 
   if (device.writable !== undefined || 'getInfo' in device) {
     // Web Serial port
     try {
       try {
-        await device.open({ baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none' });
+        await device.open({ baudRate: Number(baudRate) || 9600, dataBits: 8, stopBits: 1, parity: 'none', flowControl: 'none' });
       } catch (e) {
         if (!/already open/i.test(String(e?.message || e))) throw e;
       }
       const writer = device.writable.getWriter();
-      try { await writer.write(payload); } finally { writer.releaseLock(); }
-      return { printed: true, transport: 'usb-serial' };
+      try {
+        await writer.write(payload);
+        // write() resolves once the stream ACCEPTS the bytes, not once they
+        // have gone down the wire. Releasing the lock here used to cut the
+        // receipt off — often before a single character printed (iter421).
+        await writer.ready;
+      } finally {
+        writer.releaseLock();
+      }
+      return { printed: true, transport: `usb-serial @ ${Number(baudRate) || 9600}` };
     } catch (e) {
       return { printed: false, transport: 'usb-serial', reason: e?.message || String(e) };
     }
   }
 
   // WebUSB printer (Android Chrome and desktop alike)
+  let claimed = null;
   try {
     await device.open();
     if (device.configuration === null) await device.selectConfiguration(1);
-    const iface = device.configuration.interfaces[0];
-    await device.claimInterface(iface.interfaceNumber);
-    const out = iface.alternate.endpoints.find(e => e.direction === 'out');
-    await device.transferOut(out.endpointNumber, payload);
-    try { await device.releaseInterface(iface.interfaceNumber); } catch { /* ignore */ }
+    // Interface 0 is not always the printer: composite devices put a vendor or
+    // HID interface first, and claiming it silently swallows the job (iter421).
+    const ifaces = device.configuration.interfaces || [];
+    const withOut = ifaces
+      .map(i => ({ iface: i, out: (i.alternate?.endpoints || []).find(e => e.direction === 'out') }))
+      .filter(x => !!x.out);
+    const pick = withOut.find(x => x.iface.alternate.interfaceClass === 7) || withOut[0];
+    if (!pick) return { printed: false, transport: 'usb', reason: 'This USB device has no printer channel — is it the right device?' };
+    await device.claimInterface(pick.iface.interfaceNumber);
+    claimed = pick.iface.interfaceNumber;
+    if (pick.iface.alternate.alternateSetting) {
+      try { await device.selectAlternateInterface(claimed, pick.iface.alternate.alternateSetting); } catch { /* most printers have one */ }
+    }
+    // Cheap printers stall on one big transfer; feed it the roll in slices.
+    for (let at = 0; at < payload.length; at += 4096) {
+      await device.transferOut(pick.out.endpointNumber, payload.slice(at, at + 4096));
+    }
     return { printed: true, transport: 'usb' };
   } catch (e) {
-    return { printed: false, transport: 'usb', reason: e?.message || String(e) };
+    const msg = String(e?.message || e);
+    return {
+      printed: false,
+      transport: 'usb',
+      reason: /access denied|claim/i.test(msg)
+        ? 'Windows or the printer driver is holding this printer — close any printer software, or choose "This computer\'s printer" instead'
+        : msg,
+    };
+  } finally {
+    if (claimed !== null) { try { await device.releaseInterface(claimed); } catch { /* ignore */ } }
   }
 }
 
@@ -278,9 +321,19 @@ async function sendNetwork(payload) {
 }
 
 /** Raw bytes to a named printer on the shop network (counter or kitchen). */
+const netCooldown = new Map();          // host:port → epoch ms until we try again
+
 async function sendNetworkTo(host, port, payload) {
   if (!host) return { printed: false, transport: 'network', reason: 'No printer address set' };
   const network = { host, port };
+  const where = `${network.host}:${Number(network.port) || 9100}`;
+  // A printer the server cannot see takes five seconds to time out. Once it has
+  // failed twice, stop holding the till up at every sale and go straight to the
+  // fallback for a couple of minutes (iter421).
+  const until = netCooldown.get(where) || 0;
+  if (Date.now() < until) {
+    return { printed: false, transport: 'network', reason: `Still cannot reach the printer at ${where} — printing here instead` };
+  }
   let binary = '';
   payload.forEach(b => { binary += String.fromCharCode(b); });
   try {
@@ -289,6 +342,7 @@ async function sendNetworkTo(host, port, payload) {
       port: Number(network.port) || 9100,
       data_b64: btoa(binary),
     });
+    netCooldown.delete(where);
     return { printed: !!r.data?.sent, transport: 'network', reason: r.data?.sent ? undefined : 'Printer did not accept the job' };
   } catch (e) {
     // Only trust the server's wording for a rejected job (400/413). A 502/504
@@ -296,14 +350,17 @@ async function sendNetworkTo(host, port, payload) {
     // itself ("the origin web server did not respond"), not about the printer.
     const status = e.response?.status;
     const detail = e.response?.data?.detail;
-    const where = `${network.host}:${Number(network.port) || 9100}`;
     let reason;
     if ((status === 400 || status === 413) && typeof detail === 'string') reason = detail;
-    else if (status === 504) reason = `The printer at ${where} did not answer — check it is switched on and on the same network as the server`;
+    else if (status === 504) reason = `The printer at ${where} did not answer — if it is on the shop's own network, the app server cannot see it; set this till to "This computer's printer" instead`;
     else reason = `Could not reach the printer at ${where}`;
+    if (status !== 400 && status !== 413) netCooldown.set(where, Date.now() + 120000);
     return { printed: false, transport: 'network', reason };
   }
 }
+
+/** A hand-pressed test must always really try, cooldown or not. */
+export function clearPrinterCooldown() { netCooldown.clear(); }
 
 /** Route raw bytes to whichever printer this till is set up with. */
 export async function sendBytes(payload) {
@@ -338,7 +395,7 @@ export async function printSaleReceipt(sale, storeSettings = {}, extra = {}) {
   const payload = buildReceiptBytes(sale, {
     storeName: storeSettings.store_name || extra.storeName || '58:12 Global Connect',
     currency: storeSettings.currency || 'UGX',
-    columns: columnsFor(cfg.paper),
+    columns: columnsFor(paperFor(cfg, storeSettings)),
     footer: storeSettings.receipt_footer || 'Thank you for your purchase!',
     showQr: storeSettings.receipt_show_qr !== false,
     trackingUrl: extra.trackingUrl || (sale.receipt_number ? `${window.location.origin}/receipt/${sale.receipt_number}` : ''),
@@ -500,7 +557,7 @@ export async function printQuoteSlip(quote, storeSettings = {}, extra = {}) {
   return sendBytes(buildQuoteBytes(quote, {
     storeName: storeSettings.store_name || '58:12 Global Connect',
     currency: storeSettings.currency || 'UGX',
-    columns: columnsFor(cfg.paper),
+    columns: columnsFor(paperFor(cfg, storeSettings)),
     preparedBy: extra.preparedBy || '',
     validDays: extra.validDays || 7,
     note: extra.note || '',
@@ -513,7 +570,7 @@ export async function printRefundSlip(sale, storeSettings = {}, extra = {}) {
   return sendBytes(buildRefundBytes(sale, {
     storeName: storeSettings.store_name || '58:12 Global Connect',
     currency: storeSettings.currency || 'UGX',
-    columns: columnsFor(cfg.paper),
+    columns: columnsFor(paperFor(cfg, storeSettings)),
     showQr: storeSettings.receipt_show_qr !== false,
     trackingUrl: extra.trackingUrl || (sale.receipt_number ? `${window.location.origin}/receipt/${sale.receipt_number}` : ''),
     voidedBy: extra.voidedBy || '',
@@ -528,7 +585,7 @@ export async function printZReport(report, storeSettings = {}) {
   return sendBytes(buildZReportBytes(report, {
     storeName: storeSettings.store_name || '58:12 Global Connect',
     currency: storeSettings.currency || 'UGX',
-    columns: columnsFor(cfg.paper),
+    columns: columnsFor(paperFor(cfg, storeSettings)),
   }));
 }
 
@@ -536,13 +593,16 @@ export async function printZReport(report, storeSettings = {}) {
  * No thermal printer on this device (or it refused): put the same slip through
  * the browser's print dialog so the customer still gets paper.
  */
-export function printSlipFallback(title, textLines) {
+export function printSlipFallback(title, textLines, paper = '80mm') {
   const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  // Margin on the body, not the page: a @page margin on top of a fixed body
+  // width pushed the right-hand column off the roll (iter421).
   printHtmlDocument(`<!doctype html><html><head><meta charset="utf-8"/><title>${esc(title)}</title>
     <style>
-      @page { size: 80mm auto; margin: 4mm; }
-      body { font-family: monospace, 'Courier New', Courier; font-size: 11px; width: 80mm; margin: 0; padding: 2mm; color: #000; }
-      pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
+      @page { size: ${paper === '58mm' ? '58mm' : '80mm'} auto; margin: 0; }
+      html, body { margin: 0; padding: 0; }
+      body { font-family: 'Courier New', Courier, monospace; font-size: 12px; line-height: 1.35; padding: 2mm 3mm; color: #000; }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
     </style></head>
     <body><pre>${esc(textLines.join('\n'))}</pre></body></html>`);
 }
@@ -609,7 +669,7 @@ export async function printLossSlip(loss, storeSettings = {}, extra = {}) {
   return sendBytes(buildLossSlipBytes(loss, {
     storeName: storeSettings.store_name || '58:12 Global Connect',
     currency: storeSettings.currency || 'UGX',
-    columns: columnsFor(cfg.paper),
+    columns: columnsFor(paperFor(cfg, storeSettings)),
     storeLabel: extra.storeLabel || '',
   }));
 }
@@ -658,7 +718,7 @@ export function buildKitchenTicketBytes(order, opts = {}) {
 export async function printKitchenTicket(order, storeSettings = {}, extra = {}) {
   const cfg = getTillConfig();
   const payload = buildKitchenTicketBytes(order, {
-    columns: columnsFor(cfg.kitchenNetwork?.host ? (cfg.kitchenPaper || cfg.paper) : cfg.paper),
+    columns: columnsFor(cfg.kitchenNetwork?.host ? (cfg.kitchenPaper || paperFor(cfg, storeSettings)) : paperFor(cfg, storeSettings)),
     storeLabel: extra.storeLabel || storeSettings.store_name || '',
     reprint: !!extra.reprint,
     onlyItems: extra.onlyItems || null,
@@ -696,15 +756,56 @@ function _decode(payload) {
   /* eslint-enable no-control-regex */
 }
 
-export async function testPrint() {
+/**
+ * A test slip through the browser's print window, for tills whose printer is
+ * installed in Windows rather than spoken to directly (iter421). Same column
+ * layout as the real receipt, so what you see here is what a sale will do.
+ */
+export function testPrintViaBrowser(storeSettings = {}) {
+  const paper = paperFor(getTillConfig(), storeSettings);
+  const cols = columnsFor(paper);
+  const lines = [
+    'TEST RECEIPT'.padStart(Math.floor((cols + 12) / 2)),
+    (storeSettings.store_name || '58:12 Global Connect'),
+    '-'.repeat(cols),
+    row('Paper', `${paper} (${cols} chars)`, cols).trimEnd(),
+    row('Printed', new Date().toLocaleString(), cols).trimEnd(),
+    '-'.repeat(cols),
+    'Sample item name',
+    row('  2 x 15,000', '30,000', cols).trimEnd(),
+    'Another, with a long name here',
+    row('  10 x 1,250', '12,500', cols).trimEnd(),
+    '-'.repeat(cols),
+    row('TOTAL', 'UGX 42,500', cols).trimEnd(),
+    '',
+    'If the columns line up and nothing',
+    'runs off the edge, receipts will print',
+    'correctly on this roll.',
+  ];
+  printSlipFallback('Test receipt', lines, paper);
+  return { printed: true, transport: 'browser' };
+}
+
+export async function testPrint(storeSettings = {}) {
   const cfg = getTillConfig();
-  const cols = columnsFor(cfg.paper);
+  clearPrinterCooldown();
+  const paper = paperFor(cfg, storeSettings);
+  const cols = columnsFor(paper);
   const payload = bytes(
     INIT, ALIGN_CENTER, BOLD_ON, DOUBLE_ON, 'TEST RECEIPT\n', DOUBLE_OFF, BOLD_OFF,
     '58:12 Global Connect\n', ALIGN_LEFT, '-'.repeat(cols) + '\n',
-    row('Paper', cfg.paper, cols), row('Connection', cfg.connection, cols),
+    row('Paper', `${paper} (${cols} chars)`, cols), row('Connection', cfg.connection, cols),
+    ...(cfg.connection === 'usb' ? [row('Speed', `${cfg.baudRate || 9600} baud`, cols)] : []),
+    ...(cfg.connection === 'network' ? [row('Address', `${cfg.network?.host || '—'}:${cfg.network?.port || 9100}`, cols)] : []),
     row('Printed', new Date().toLocaleString(), cols),
     '-'.repeat(cols) + '\n', ALIGN_CENTER, 'If you can read this,\nthe till printer works.\n',
+    '\n', ALIGN_LEFT,
+    // Proves the columns line up at this width — the thing a squashed receipt
+    // gets wrong (iter421).
+    'Sample item name\n', row('  2 x 15,000', '30,000', cols),
+    'Another, with a long name here\n', row('  10 x 1,250', '12,500', cols),
+    '-'.repeat(cols) + '\n',
+    BOLD_ON, DOUBLE_ON, row('TOTAL', 'UGX 42,500', Math.floor(cols / 2)), DOUBLE_OFF, BOLD_OFF,
     '\n\n\n', CUT,
   );
   return sendBytes(payload);

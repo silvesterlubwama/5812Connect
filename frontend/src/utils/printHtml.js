@@ -6,7 +6,10 @@
 export function printHtmlDocument(html, { autoPrint = true } = {}) {
   const frame = document.createElement('iframe');
   frame.setAttribute('aria-hidden', 'true');
-  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+  // Off-screen, NOT visibility:hidden. A hidden iframe is skipped by Chrome's
+  // layout for printing and comes out as a blank page — "nothing printed"
+  // (iter421). Parked off to the left it still lays out properly.
+  frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:120mm;height:200mm;border:0;';
   document.body.appendChild(frame);
   let printed = false;
   const fire = () => {

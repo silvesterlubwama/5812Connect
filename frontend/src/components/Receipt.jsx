@@ -55,6 +55,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
 
   const paperSize = storeSettings.receipt_paper_size || autoPaperSize || '80mm';
   const paperWidth = PAPER_WIDTHS[paperSize] || '80mm';
+  const isRoll = paperSize === '58mm' || paperSize === '80mm';
   const showLogo = storeSettings.receipt_show_logo !== false;
   const showQR = storeSettings.receipt_show_qr !== false;
 
@@ -99,16 +100,26 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           <meta charset="utf-8" />
           <title>Receipt ${e(receiptNumber)}</title>
           <style>
-            @page { size: ${paperWidth} auto; margin: 4mm; }
-            body { margin: 0; padding: 2mm; font-family: monospace, 'Courier New', Courier; font-size: 11px; width: ${paperWidth}; box-sizing: border-box; color: #000; background: #fff; }
+            /* The roll IS the page: a @page margin on top of the body width
+               pushed the right-hand column off the paper, which is why the
+               totals printed clipped (iter421). Margin lives on the body now,
+               and nothing is given a fixed width. */
+            @page { size: ${paperWidth} auto; margin: 0; }
+            html, body { margin: 0; padding: 0; }
+            body { padding: ${isRoll ? '2mm 3mm' : '8mm'}; font-family: ${isRoll ? "'Courier New', Courier, monospace" : 'Arial, Helvetica, sans-serif'}; font-size: ${isRoll ? '12px' : '12px'}; line-height: 1.35; box-sizing: border-box; color: #000; background: #fff; }
+            * { box-sizing: border-box; }
             .center { text-align: center; }
             .bold { font-weight: 700; }
-            hr { border: none; border-top: 1px dashed #888; margin: 4px 0; }
+            hr { border: none; border-top: 1px dashed #888; margin: 5px 0; }
             table { width: 100%; border-collapse: collapse; }
-            td { padding: 2px 0; font-size: 10px; }
-            .logo { max-width: 60%; height: auto; margin: 0 auto 4px; display: block; }
+            td { padding: 3px 0; font-size: 11px; }
+            .num, .amt, .qty { white-space: nowrap; font-variant-numeric: tabular-nums; }
+            .item { margin-bottom: 3px; page-break-inside: avoid; }
+            .item-name { word-break: break-word; }
+            .item-sum { display: flex; justify-content: space-between; gap: 8px; }
+            .logo { max-width: 55%; height: auto; margin: 0 auto 4px; display: block; }
             .qr-print { margin: 6px auto; text-align: center; }
-            .total-row { font-size: 13px; font-weight: 700; }
+            .total-row { font-size: 15px; font-weight: 700; }
           </style>
         </head>
         <body>
@@ -152,7 +163,7 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           {storeSettings.store_phone && <div style={{ fontSize: 9 }}>{storeSettings.store_phone}</div>}
         </div>
         <hr />
-        <div style={{ fontSize: 10 }}>
+        <div style={{ fontSize: 11 }}>
           <div><strong>Receipt:</strong> {receiptNumber}</div>
           <div><strong>Date:</strong> {saleTime}</div>
           <div><strong>Cashier:</strong> {sale.cashier || 'Unknown'}</div>
@@ -160,79 +171,121 @@ export default function Receipt({ sale, storeSettings = {}, storeName = '58:12 G
           {sale.customer_phone && <div><strong>Phone:</strong> {sale.customer_phone}</div>}
         </div>
         <hr />
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ fontSize: 9, borderBottom: '1px solid #000' }}>
-              <td style={{ textAlign: 'left', padding: '2px 0' }}>Item</td>
-              <td style={{ textAlign: 'right', padding: '2px 0' }}>Qty</td>
-              <td style={{ textAlign: 'right', padding: '2px 0' }}>Unit</td>
-              <td style={{ textAlign: 'right', padding: '2px 0' }}>Total</td>
-            </tr>
-          </thead>
-          <tbody>
+        {/* On a 58/80mm roll there is no room for four columns: the name eats
+            the width and Qty/Unit/Total wrap into each other or fall off the
+            right edge. Each item takes two lines instead — the name on its own,
+            then "2 × 15,000" against the line total (iter421). Sheet paper has
+            the width for a proper table, so it keeps one. */}
+        {isRoll ? (
+          <div className="items">
             {(sale.items || []).map((item, i) => {
               const lineSubtotal = (item.unit_price || 0) * (item.qty || 0);
               const lineDiscount = item.discount_amount || 0;
               const linePackaging = item.packaging_applied || 0;
-              const lineTotal = item.line_total != null ? item.line_total : lineSubtotal;
               return (
-                <React.Fragment key={i}>
-                  <tr style={{ fontSize: 10 }}>
-                    <td style={{ padding: '2px 0' }}>
-                      {item.name}
-                      {item.variant_name && <div style={{ fontSize: 8, color: '#555' }}>{item.variant_name}</div>}
-                    </td>
-                    <td style={{ textAlign: 'right', padding: '2px 0' }}>{item.qty}</td>
-                    <td style={{ textAlign: 'right', padding: '2px 0' }}>{(item.unit_price || 0).toLocaleString()}</td>
-                    <td style={{ textAlign: 'right', padding: '2px 0' }}>{lineSubtotal.toLocaleString()}</td>
-                  </tr>
+                <div key={i} className="item" style={{ marginBottom: 3 }}>
+                  <div className="item-name" style={{ fontSize: 11, lineHeight: 1.25, wordBreak: 'break-word' }}>
+                    {item.name}
+                    {item.variant_name && <span style={{ color: '#555' }}> · {item.variant_name}</span>}
+                  </div>
+                  <div className="item-sum" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11 }}>
+                    <span className="qty" style={{ whiteSpace: 'nowrap', color: '#333' }}>
+                      {`  ${item.qty} × ${(item.unit_price || 0).toLocaleString()}`}
+                    </span>
+                    <span className="amt" style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                      {lineSubtotal.toLocaleString()}
+                    </span>
+                  </div>
                   {linePackaging > 0 && (
-                    <tr style={{ fontSize: 9, color: '#555' }}>
-                      <td colSpan={3} style={{ paddingLeft: 8 }}>+ {item.packaging_label || 'Packaging'}</td>
-                      <td style={{ textAlign: 'right' }}>+{linePackaging.toLocaleString()}</td>
-                    </tr>
+                    <div className="item-sum" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: '#555' }}>
+                      <span style={{ paddingLeft: 10 }}>+ {item.packaging_label || 'Packaging'}</span>
+                      <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>+{linePackaging.toLocaleString()}</span>
+                    </div>
                   )}
                   {lineDiscount > 0 && (
-                    <tr style={{ fontSize: 9, color: '#047857' }}>
-                      <td colSpan={3} style={{ paddingLeft: 8 }}>− {item.discount_pct}% bulk discount</td>
-                      <td style={{ textAlign: 'right' }}>−{lineDiscount.toLocaleString()}</td>
-                    </tr>
+                    <div className="item-sum" style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10, color: '#047857' }}>
+                      <span style={{ paddingLeft: 10 }}>− {item.discount_pct}% bulk discount</span>
+                      <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>−{lineDiscount.toLocaleString()}</span>
+                    </div>
                   )}
-                </React.Fragment>
+                </div>
               );
             })}
-          </tbody>
-        </table>
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ fontSize: 10, borderBottom: '1px solid #000' }}>
+                <td style={{ textAlign: 'left', padding: '3px 0' }}>Item</td>
+                <td className="num" style={{ textAlign: 'right', padding: '3px 6px', whiteSpace: 'nowrap' }}>Qty</td>
+                <td className="num" style={{ textAlign: 'right', padding: '3px 6px', whiteSpace: 'nowrap' }}>Unit</td>
+                <td className="num" style={{ textAlign: 'right', padding: '3px 0', whiteSpace: 'nowrap' }}>Total</td>
+              </tr>
+            </thead>
+            <tbody>
+              {(sale.items || []).map((item, i) => {
+                const lineSubtotal = (item.unit_price || 0) * (item.qty || 0);
+                const lineDiscount = item.discount_amount || 0;
+                const linePackaging = item.packaging_applied || 0;
+                return (
+                  <React.Fragment key={i}>
+                    <tr style={{ fontSize: 11 }}>
+                      <td style={{ padding: '3px 0' }}>
+                        {item.name}
+                        {item.variant_name && <div style={{ fontSize: 9, color: '#555' }}>{item.variant_name}</div>}
+                      </td>
+                      <td className="num" style={{ textAlign: 'right', padding: '3px 6px', whiteSpace: 'nowrap' }}>{item.qty}</td>
+                      <td className="num" style={{ textAlign: 'right', padding: '3px 6px', whiteSpace: 'nowrap' }}>{(item.unit_price || 0).toLocaleString()}</td>
+                      <td className="num" style={{ textAlign: 'right', padding: '3px 0', whiteSpace: 'nowrap' }}>{lineSubtotal.toLocaleString()}</td>
+                    </tr>
+                    {linePackaging > 0 && (
+                      <tr style={{ fontSize: 10, color: '#555' }}>
+                        <td colSpan={3} style={{ paddingLeft: 8 }}>+ {item.packaging_label || 'Packaging'}</td>
+                        <td className="num" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>+{linePackaging.toLocaleString()}</td>
+                      </tr>
+                    )}
+                    {lineDiscount > 0 && (
+                      <tr style={{ fontSize: 10, color: '#047857' }}>
+                        <td colSpan={3} style={{ paddingLeft: 8 }}>− {item.discount_pct}% bulk discount</td>
+                        <td className="num" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>−{lineDiscount.toLocaleString()}</td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
         <hr />
         {sale.subtotal != null && sale.subtotal !== sale.total && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
             <span>Subtotal</span>
             <span>{fmt(sale.subtotal, currency)}</span>
           </div>
         )}
         {sale.packaging_total > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
             <span>Packaging</span>
             <span>+{fmt(sale.packaging_total, currency)}</span>
           </div>
         )}
         {sale.tax_amount > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
             <span>Tax</span>
             <span>{fmt(sale.tax_amount, currency)}</span>
           </div>
         )}
         {sale.discount > 0 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#047857' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#047857' }}>
             <span>Discount</span>
             <span>-{fmt(sale.discount, currency)}</span>
           </div>
         )}
-        <div className="total-row" style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, borderTop: '1px dashed #000', paddingTop: 4 }}>
+        <div className="total-row" style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700, borderTop: '1px dashed #000', paddingTop: 4 }}>
           <span>TOTAL</span>
           <span>{fmt(sale.total, currency)}</span>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, marginTop: 4 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginTop: 4 }}>
           <span>Paid:</span>
           <span style={{ textTransform: 'capitalize' }}>
             {sale.payment_method || 'cash'}
