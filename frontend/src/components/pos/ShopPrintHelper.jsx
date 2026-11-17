@@ -84,9 +84,9 @@ export const ShopPrintHelper = ({ locationId }) => {
       {!helper ? (
         <>
           <p className="text-[11px] text-muted-foreground">
-            A small program you leave running on any computer or Raspberry Pi at the shop. It
-            collects receipts from 58:12 and sends them to the printer on the shop's own network —
-            the till computer can be off, or be a phone.
+            A small program that runs on any computer or Raspberry Pi at the shop. It collects
+            receipts from 58:12 and sends them to the printer on the shop's own network — the till
+            computer can be off, or be a phone. Set up once, it starts itself after every reboot.
           </p>
           <Button size="sm" className="h-8 text-xs" onClick={pair} disabled={busy} data-testid="pair-helper-btn">
             {busy ? 'Setting up…' : 'Set up the print helper'}
@@ -104,12 +104,19 @@ export const ShopPrintHelper = ({ locationId }) => {
                 Mac, Linux or Pi
               </a>
             </li>
-            <li>Right-click it → <strong>Run with PowerShell</strong>, and leave the window open.</li>
-            <li>That's it — the badge above turns green within a few seconds.</li>
+            <li>Right-click it → <strong>Run with PowerShell</strong>.</li>
+            <li>That's it. The badge above turns green within a few seconds.</li>
           </ol>
+          <p className="text-[11px] text-muted-foreground" data-testid="helper-autostart-note">
+            <strong>You only do that once.</strong> It sets itself to start again every time that
+            computer is switched on, and checks itself every few minutes in case it was closed — so
+            nobody has to remember after a power cut. It already knows this shop's address, so
+            there is nothing to type in.
+          </p>
           <p className="text-[11px] text-muted-foreground">
-            It already knows this shop's address, so there is nothing to type in. Anyone with the
-            file can print to this shop's printers, so keep it on the shop's own machine.
+            Anyone with the file can print to this shop's printers, so keep it on the shop's own
+            machine. To stop it for good, press <strong>Stop it</strong> below and then run the
+            file once more with <code className="bg-muted rounded px-1">-Uninstall</code>.
           </p>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1" asChild data-testid="helper-download-btn">

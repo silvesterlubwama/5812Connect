@@ -13,6 +13,7 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -372,123 +373,18 @@ async def bridge_script(token: str, format: str = "ps1", base: str = "", request
     if not origin:
         origin = str(request.base_url).rstrip("/") if request else ""
     api = f"{origin}/api"
-    if format == "py":
-        return PlainTextResponse(_PY_HELPER.replace("__API__", api).replace("__TOKEN__", token),
-                                 headers={"Content-Disposition": 'attachment; filename="print-helper.py"'})
-    return PlainTextResponse(_PS1_HELPER.replace("__API__", api).replace("__TOKEN__", token),
-                             headers={"Content-Disposition": 'attachment; filename="print-helper.ps1"'})
+    name = "print-helper.py" if format == "py" else "print-helper.ps1"
+    body = _helper_template(name).replace("__API__", api).replace("__TOKEN__", token)
+    return PlainTextResponse(body, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
-_PS1_HELPER = r"""# 58:12 shop print helper
-# Collects receipts from 58:12 and sends them to the printer on this network.
-# Leave this window open on any computer at the shop that can reach the printer.
-#
-#   Right-click this file and choose "Run with PowerShell".
-#   If Windows refuses, open PowerShell and run:
-#     powershell -ExecutionPolicy Bypass -File .\print-helper.ps1
-
-$Api   = '__API__'
-$Token = '__TOKEN__'
-
-Write-Host "58:12 print helper running. Leave this window open." -ForegroundColor Green
-Write-Host "Talking to $Api" -ForegroundColor DarkGray
-
-while ($true) {
-  try {
-    $jobs = Invoke-RestMethod -Uri "$Api/screens/$Token/print-jobs" -Method Get -TimeoutSec 30 `
-      -Headers @{ 'User-Agent' = '58-12-print-helper/1.0' }
-    foreach ($job in @($jobs)) {
-      $ok = $false
-      $err = ''
-      try {
-        $bytes = [Convert]::FromBase64String($job.data_b64)
-        $client = New-Object System.Net.Sockets.TcpClient
-        $connect = $client.BeginConnect($job.host, [int]$job.port, $null, $null)
-        if (-not $connect.AsyncWaitHandle.WaitOne(5000)) { throw "no answer from $($job.host):$($job.port)" }
-        $client.EndConnect($connect)
-        $stream = $client.GetStream()
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Flush()
-        Start-Sleep -Milliseconds 400
-        $stream.Close(); $client.Close()
-        $ok = $true
-        Write-Host ("Printed {0} on {1}" -f $job.title, $job.host) -ForegroundColor Green
-      } catch {
-        $err = $_.Exception.Message
-        Write-Host ("Could not print {0}: {1}" -f $job.title, $err) -ForegroundColor Red
-      }
-      $body = @{ ok = $ok; error = $err } | ConvertTo-Json
-      try {
-        Invoke-RestMethod -Uri "$Api/screens/$Token/print-jobs/$($job.id)" -Method Post `
-          -Body $body -ContentType 'application/json' -TimeoutSec 30 `
-          -Headers @{ 'User-Agent' = '58-12-print-helper/1.0' } | Out-Null
-      } catch { Write-Host "Could not report back to 58:12" -ForegroundColor DarkYellow }
-    }
-  } catch {
-    Write-Host "Waiting for 58:12..." -ForegroundColor DarkGray
-    Start-Sleep -Seconds 5
-  }
-  Start-Sleep -Seconds 2
-}
-"""
-
-_PY_HELPER = r'''#!/usr/bin/env python3
-"""58:12 shop print helper.
-
-Collects receipts from 58:12 and sends them to the printer on this network.
-Leave it running on any computer or Raspberry Pi at the shop:
-
-    python3 print-helper.py
-
-Nothing to install — it only uses what Python ships with.
-"""
-import base64
-import json
-import socket
-import time
-import urllib.error
-import urllib.request
-
-API = "__API__"
-TOKEN = "__TOKEN__"
+TEMPLATES = Path(__file__).resolve().parent.parent / "helper_templates"
 
 
-def call(path, payload=None):
-    url = f"{API}/screens/{TOKEN}{path}"
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method="POST" if data else "GET",
-                                headers={"Content-Type": "application/json",
-                                         # Python's own user agent gets turned away by the
-                                         # firewall in front of 58:12.
-                                         "User-Agent": "58-12-print-helper/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as res:
-        return json.loads(res.read() or "null")
-
-
-def send(job):
-    with socket.create_connection((job["host"], int(job.get("port") or 9100)), timeout=5) as sock:
-        sock.sendall(base64.b64decode(job["data_b64"]))
-        time.sleep(0.4)
-
-
-print("58:12 print helper running. Leave this window open.")
-print(f"Talking to {API}")
-while True:
-    try:
-        for job in call("/print-jobs") or []:
-            ok, err = True, ""
-            try:
-                send(job)
-                print(f"Printed {job.get('title')} on {job.get('host')}")
-            except Exception as exc:                       # noqa: BLE001 - report anything
-                ok, err = False, str(exc)
-                print(f"Could not print {job.get('title')}: {err}")
-            try:
-                call(f"/print-jobs/{job['id']}", {"ok": ok, "error": err})
-            except urllib.error.URLError:
-                print("Could not report back to 58:12")
-    except urllib.error.URLError:
-        print("Waiting for 58:12...")
-        time.sleep(5)
-    time.sleep(2)
-'''
+def _helper_template(name: str) -> str:
+    """The helper's source, as shipped. Read per request so a fix to the
+    script reaches the shops without a restart (iter423)."""
+    path = TEMPLATES / name
+    if not path.exists():
+        raise HTTPException(status_code=500, detail="The print helper is missing from this install")
+    return path.read_text()

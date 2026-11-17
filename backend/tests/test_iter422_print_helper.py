@@ -244,3 +244,62 @@ def test_an_oversized_job_is_refused_rather_than_stored(shop):
             scr.PrintJob(location_id=SHOP, host="192.168.1.50", data_b64="A" * 2_000_001),
             _user(role="Staff")))
     assert "too big" in str(err.value)
+
+
+# ------------------------- iter423: it starts itself after a reboot ----------
+def _script(fmt="ps1"):
+    from types import SimpleNamespace
+    helper = _pair()
+    req = SimpleNamespace(base_url="https://shop.example.com/")
+    return _run(scr.bridge_script(helper["token"], fmt, "", req)).body.decode()
+
+
+def test_the_windows_helper_sets_itself_to_start_after_a_reboot(shop):
+    ps1 = _script("ps1")
+    assert "schtasks /create" in ps1
+    assert "/sc onlogon" in ps1                 # every restart of the till
+    assert "/sc minute /mo 5" in ps1            # and if it was ever closed
+    assert "Mutex" in ps1                       # so the repeat cannot double-print
+    assert "LOCALAPPDATA" in ps1                # installed copy, not the download
+    assert "-Uninstall" in ps1
+
+
+def test_the_pi_helper_sets_itself_to_start_after_a_reboot(shop):
+    py = _script("py")
+    assert "systemd" in py and "Restart=always" in py
+    assert "LaunchAgents" in py                 # a Mac at the counter
+    assert "@reboot" in py                      # and when neither is available
+    assert "--uninstall" in py
+    assert "bind((\"127.0.0.1\", LOCK_PORT))" in py
+
+
+def test_the_helper_can_be_asked_to_stand_down(shop):
+    ps1 = _script("ps1")
+    # Hunting processes by command line does not work on older Windows
+    # PowerShell, so the running copy watches for a flag instead.
+    assert "$StopFlag" in ps1
+    assert "Asked to stop" in ps1
+
+
+def test_the_helper_survives_a_machine_with_no_app_data_folder(shop):
+    ps1 = _script("ps1")
+    assert "if (-not $Base) { $Base = $env:APPDATA }" in ps1
+    assert "if (-not $Base) { $Base = $HOME }" in ps1
+
+
+def test_a_failed_autostart_still_prints(shop):
+    """Registering the task can fail on a locked-down machine; the receipt
+    still has to come out for as long as the window is open."""
+    ps1 = _script("ps1")
+    assert "Could not set it to start on its own" in ps1
+    assert "It will still print for as long as this window stays open." in ps1
+    py = _script("py")
+    assert "Could not set it to start on its own" in py
+
+
+def test_the_helper_is_served_from_the_shipped_file(shop):
+    """The script lives on disk so a fix reaches the shops without a release
+    rewriting it inside the router."""
+    assert (scr.TEMPLATES / "print-helper.ps1").exists()
+    assert (scr.TEMPLATES / "print-helper.py").exists()
+    assert "__TOKEN__" in (scr.TEMPLATES / "print-helper.py").read_text()

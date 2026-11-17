@@ -2680,3 +2680,39 @@ Files: `backend/routers/screens.py` (queue + helper scripts),
 - P2: let one helper serve several shops on the same LAN (one token per shop
   today).
 - P2: queue depth / last-printed shown on the POS header, not only in the dialog.
+
+### 2026-11-17 (iter423) — The print helper starts itself
+The helper was a console window somebody had to re-run after every power cut.
+Now it is run once and looks after itself.
+
+- **Windows**: on first run it copies itself to `%LOCALAPPDATA%\5812-print-helper`
+  and registers two scheduled tasks — `/sc onlogon` (covers every restart of a
+  till that is signed in all day) and `/sc minute /mo 5` (covers being closed or
+  crashing). Hidden window, no admin rights needed.
+- **Mac / Linux / Pi**: a user-level launchd plist (`KeepAlive`) or systemd unit
+  (`Restart=always`, plus `loginctl enable-linger`), falling back to `@reboot`
+  plus a five-minute crontab line when neither is available.
+- **Only one at a time**: a global mutex on Windows, a bound local port
+  (127.0.0.1:54812) elsewhere. The keep-alive copy exits immediately, so nothing
+  is ever printed twice.
+- **Standing it down**: `-Uninstall` / `--uninstall` removes the tasks, unit,
+  plist and cron lines. Windows uses a stop flag in its own folder rather than
+  hunting processes by command line, which Windows PowerShell 5.1 cannot do.
+- **Fails safe**: a locked-down machine that refuses the task registration says
+  so in plain words and keeps printing for as long as the window is open; a
+  missing `%LOCALAPPDATA%` falls back to `%APPDATA%` then `$HOME` instead of
+  dying on line one.
+- The two scripts moved out of the router into
+  `backend/helper_templates/print-helper.{ps1,py}`, read per request, so a fix
+  reaches the shops without rewriting Python strings.
+
+Verified in this pod with real PowerShell 7.4 (downloaded for arm64) and real
+Python: both scripts parse, install their autostart, print a queued receipt to a
+socket, refuse to run twice, stand down on request, and clean up after
+themselves. Autostart here lands on the cron fallback because the container has
+no systemd — the intended graceful path. Tests: 21 in
+`tests/test_iter422_print_helper.py`; 150 green across iter371, 411, 415-423.
+
+#### Still open / next
+- P2: a tray icon so a cashier can see "helper running" without opening 58:12.
+- P2: let one helper serve several shops on the same LAN.
