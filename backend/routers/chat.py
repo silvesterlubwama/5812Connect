@@ -224,14 +224,31 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
                                                "text": reply, "type": "ai", "created_at": now,
                                                "attachments": attachments or []})
 
-        # 1. Money / people questions — gated before anything is fetched.
+        # 1. A manager just telling the assistant to fix or remember something.
+        noted = await kb.try_knowledge_note(current_user, message)
+        if noted:
+            atts = [kb.attachment_of({**noted["document"], "file_url": noted["document"].get("file_url", "")})] if noted.get("document") else []
+            await _save(message, noted["answer"], atts)
+            return {"response": noted["answer"], "session_id": session_id, "attachments": atts, "access_denied": False}
+        edited = await kb.try_document_edit(current_user, message)
+        if edited:
+            atts = [kb.attachment_of(edited["document"])] if edited.get("document") else []
+            await _save(message, edited["answer"], atts)
+            return {"response": edited["answer"], "session_id": session_id, "attachments": atts, "access_denied": False}
+
+        # 2. Money / people questions — gated before anything is fetched.
         gated = await kb.answer_data_question(current_user, message)
         if gated and gated.get("denied"):
             await _save(message, gated["answer"])
             return {"response": gated["answer"], "session_id": session_id, "attachments": [], "access_denied": True}
 
-        # 2. The organisation's paperwork this person may read.
+        # 3. The organisation's paperwork, plus files already on people's profiles.
+        expiry = await kb.expiry_rundown(current_user, message)
         docs = await kb.search_documents(current_user, message)
+        docs += await kb.search_person_files(current_user, message)
+        if expiry and expiry.get("docs"):
+            seen = {d["id"] for d in docs}
+            docs += [d for d in expiry["docs"] if d["id"] not in seen]
         attachments = [kb.attachment_of(d) for d in docs]
         files = kb.readable_files(docs)
 
@@ -240,6 +257,7 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
         is_manager = is_admin or role in {"manager", "coordinator", "hr"}
         ctx = await _build_app_context(current_user, is_admin, is_manager, current_user.get("location_id"))
 
+        heads = await kb.heads_up(current_user)
         doc_block = "\n".join(
             f"- [{d['doc_type']}] {d['title']}"
             + (f" — issued by {d['issuer']}" if d.get("issuer") else "")
@@ -260,6 +278,8 @@ ORGANISATION DOCUMENTS THIS PERSON MAY SEE:
 {('ATTACHED FOR READING: ' + ', '.join(p for p, _ in files)) if files else ''}
 
 {('VERIFIED FIGURES (already permission-checked, quote these and no others):' + chr(10) + gated['facts']) if gated and gated.get('facts') else ''}
+{(chr(10) + 'EXPIRY LIST (read straight from the records — use these dates exactly):' + chr(10) + expiry['facts']) if expiry and expiry.get('facts') else ''}
+{heads}
 {gated.get('preamble', '') if gated else ''}
 
 RULES:
@@ -271,6 +291,9 @@ RULES:
 - Do not invent an expiry date, permit number or amount. If the document doesn't say, say so.
 - Be concise: 2-5 sentences unless a report was asked for. Use bullets for lists.
 - Point to where in the app something is done ("Finance → Chart of Accounts") when it needs an action.
+- You cannot browse the internet. Everything you know comes from this organisation's own records.
+- A manager can simply tell you to rename a document, change its expiry or change who may see it,
+  and you can remember a note or a link they hand you — mention that only if it helps.
 """
 
         chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_msg).with_model("gemini", "gemini-2.5-flash")

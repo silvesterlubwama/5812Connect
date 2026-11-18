@@ -377,3 +377,89 @@ async def warn_about_expiring_documents(days: int = 30) -> dict:
         }})
         sent += 1
     return {"warned": sent}
+
+
+def _strip_html(html: str) -> str:
+    """Readable text out of a page, without pulling in a parser."""
+    import re as _re
+    html = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=_re.S | _re.I)
+    html = _re.sub(r"<[^>]+>", " ", html)
+    html = (html.replace("&nbsp;", " ").replace("&amp;", "&")
+                .replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&quot;", '"'))
+    return _re.sub(r"\s+", " ", html).strip()
+
+
+async def store_note(current_user: dict, body: str, url: Optional[str] = None,
+                     title: Optional[str] = None, min_level: int = 5) -> dict:
+    """Keep a typed note, or the text of a page someone handed over.
+
+    The link is fetched once, here, because a person explicitly gave it — the
+    assistant itself never browses.
+    """
+    text = body
+    fetched_title = ""
+    if url:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+                r = await client.get(url, headers={"User-Agent": "5812-Connect/1.0"})
+                r.raise_for_status()
+                page = r.text[:400000]
+            import re as _re
+            m = _re.search(r"<title[^>]*>(.*?)</title>", page, _re.S | _re.I)
+            fetched_title = _strip_html(m.group(1))[:160] if m else ""
+            text = f"{body}\n\nFrom {url}:\n{_strip_html(page)[:18000]}"
+        except Exception as e:
+            logger.warning(f"Could not read {url}: {e}")
+            text = f"{body}\n\n(The page at {url} could not be read when it was filed.)"
+    doc_id = f"odoc_{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc).isoformat()
+    import re as _re2
+    first = _re2.split(r"(?<=[.!?])\s", body.strip())[0] if body.strip() else ""
+    auto = (first if len(first) <= 70 else first[:67].rsplit(" ", 1)[0] + "…") or "Note"
+    doc = {
+        "id": doc_id,
+        "title": (title or fetched_title or auto[:1].upper() + auto[1:])[:200],
+        "doc_type": "note",
+        "issuer": url or "",
+        "reference": "",
+        "issued_on": now[:10],
+        "expires_on": "",
+        "summary": body[:600],
+        "tags": [],
+        "notes": "",
+        "text": text[:20000],
+        "min_level": int(min_level),
+        "file_url": "",
+        "filename": "",
+        "mime": "text/plain",
+        "size": len(text),
+        "source": "note" if not url else "link",
+        "source_url": url or "",
+        "location_id": current_user.get("location_id"),
+        "uploaded_by": current_user["id"],
+        "uploaded_by_name": current_user.get("name", ""),
+        "created_at": now,
+    }
+    await db.org_documents.insert_one(dict(doc))
+    doc.pop("_id", None)
+    doc.pop("text", None)
+    await _audit(current_user["id"], "create", "org_document", doc_id, {"kind": doc["source"], "title": doc["title"]})
+    return doc
+
+
+@router.post("/notes")
+async def add_note(data: dict, current_user: dict = Depends(require_manager)):
+    """Feed the assistant something that isn't a file: a note or a link.
+
+    Body: { text, url?, title?, min_level? }
+    """
+    body = (data.get("text") or "").strip()
+    url = (data.get("url") or "").strip() or None
+    if not body and not url:
+        raise HTTPException(status_code=400, detail="Give me a note or a link to remember")
+    level = int(data.get("min_level") or 5)
+    if level not in VISIBILITY_LEVELS:
+        raise HTTPException(status_code=400, detail="Pick who may see this note")
+    return await store_note(current_user, body or f"Saved link: {url}", url=url,
+                            title=data.get("title"), min_level=level)

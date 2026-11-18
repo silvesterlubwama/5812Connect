@@ -2728,3 +2728,10 @@ agreements into the chat, the assistant answers from them with the document
 attached, and every answer — paperwork or money — is filtered to the asker's
 role first. Plus undo-payout and the staff "my accounts" view. Detail in
 CHANGELOG.md (iter426).
+
+### 2026-11-18 (iter427)
+Managers now instruct the assistant in plain words (rename/re-date/restrict a
+document, "remember this" notes and links), it lists expiring paperwork from the
+records, and it searches files already attached to people's profiles. Also
+closed a real leak: personal documents were readable by any logged-in account.
+Detail in CHANGELOG.md (iter427).

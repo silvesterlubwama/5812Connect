@@ -167,6 +167,24 @@ async def upload_member_document(
     return doc
 
 
+STAFF_ROLES = {"admin", "system_admin", "executive director", "director", "manager", "coordinator", "staff", "hr"}
+
+
+async def _may_read_person_files(current_user: dict, member_id: str, resolved_id: str = "") -> bool:
+    """Staff read people's files; anyone else reads only their own.
+
+    Without this a logged-in portal member could pull any other member's
+    national ID straight off the API by guessing an id.
+    """
+    if (current_user.get("role") or "").lower() in STAFF_ROLES:
+        return True
+    own = await find_linked_member(current_user.get("id"), current_user.get("email"), {"_id": 0, "id": 1})
+    mine = {current_user.get("id")}
+    if own:
+        mine.add(own.get("id"))
+    return bool(mine & {member_id, resolved_id})
+
+
 @router.get("/members/{member_id}/documents")
 async def list_member_documents(member_id: str, current_user: dict = Depends(get_current_user)):
     # Also check if member_id is actually a user_id and resolve the real member_id
@@ -178,6 +196,8 @@ async def list_member_documents(member_id: str, current_user: dict = Depends(get
             linked = await find_linked_member(member_id, user.get("email"), {"_id": 0, "id": 1})
             if linked:
                 resolved_id = linked["id"]
+    if not await _may_read_person_files(current_user, member_id, resolved_id):
+        raise HTTPException(status_code=403, detail="You can only see your own documents")
     docs = await db.files.find({"member_id": {"$in": [member_id, resolved_id]}, "is_deleted": False}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return docs
 
@@ -188,6 +208,8 @@ async def list_document_versions(doc_id: str, current_user: dict = Depends(get_c
     doc = await db.files.find_one({"id": doc_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Not found")
+    if not await _may_read_person_files(current_user, doc.get("member_id") or ""):
+        raise HTTPException(status_code=403, detail="That document isn't yours to open")
     chain_id = doc.get("version_chain_id") or doc["id"]
     versions = await db.files.find(
         {"$or": [{"id": chain_id}, {"version_chain_id": chain_id}]},
@@ -202,6 +224,8 @@ async def serve_document_file(doc_id: str, current_user: dict = Depends(get_curr
     record = await db.files.find_one({"id": doc_id, "is_deleted": False}, {"_id": 0})
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
+    if not await _may_read_person_files(current_user, record.get("member_id") or ""):
+        raise HTTPException(status_code=403, detail="That document isn't yours to open")
     file_path = Path("/app/backend") / record["local_path"]
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")

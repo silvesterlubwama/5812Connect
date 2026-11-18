@@ -8,13 +8,14 @@ Two jobs:
 Permission is decided here in Python, never by the model. The model only ever
 receives documents and figures this person is already entitled to.
 """
+import os
 import re
 from datetime import date, timedelta
 from typing import Optional
 
-from deps import db, get_role_level, has_module_access, is_system_admin, logger
+from deps import db, get_role_level, has_module_access, is_system_admin, logger, find_linked_member
 
-from routers.org_documents import visible_filter, _local_path
+from routers.org_documents import visible_filter, _local_path, DOC_TYPES
 
 STOP_WORDS = {
     "the", "our", "does", "do", "when", "what", "how", "much", "many", "is", "are", "a", "an", "of", "for",
@@ -84,14 +85,74 @@ async def search_documents(current_user: dict, text: str, limit: int = 4) -> lis
     return rows[:limit]
 
 
+PERSON_FILE_WORDS = re.compile(
+    r"\b(id|identity|passport|birth\s+certificate|contract|cv|letter|photo|report\s+card|lc1|"
+    r"medical|document|documents|file|files|paperwork)\b", re.I)
+
+
+async def _may_read_person_files(current_user: dict) -> bool:
+    """Staff read people's files; a portal member only ever sees their own."""
+    return (get_role_level(current_user.get("role")) >= 5
+            or is_system_admin(current_user)
+            or has_module_access(current_user, "hr")
+            or has_module_access(current_user, "social_work"))
+
+
+async def search_person_files(current_user: dict, text: str, limit: int = 3) -> list:
+    """Documents already attached to people's profiles — IDs, contracts, letters.
+
+    They are not re-filed anywhere; we search them where they already live and
+    present them in the same shape as organisation paperwork.
+    """
+    words = _keywords(text)
+    if not words or not PERSON_FILE_WORDS.search(text):
+        return []
+    query = {"is_deleted": False}
+    if not await _may_read_person_files(current_user):
+        own = await find_linked_member(current_user.get("id"), current_user.get("email"), {"_id": 0, "id": 1})
+        ids = [current_user.get("id")] + ([own["id"]] if own else [])
+        query["member_id"] = {"$in": ids}
+    ors = []
+    for w in words:
+        rx = {"$regex": re.escape(w), "$options": "i"}
+        ors += [{"label": rx}, {"doc_type": rx}, {"member_name": rx}, {"original_filename": rx}]
+    query["$or"] = ors
+    rows = await db.files.find(query, {"_id": 0}).sort("created_at", -1).to_list(20)
+
+    def score(f):
+        hay = " ".join([f.get("label", ""), f.get("doc_type", ""), f.get("member_name", ""),
+                        f.get("original_filename", "")]).lower()
+        return -sum(2 if w in (f.get("member_name", "") or "").lower() else 1 if w in hay else 0 for w in words)
+
+    rows.sort(key=score)
+    out = []
+    for f in rows[:limit]:
+        out.append({
+            "id": f["id"],
+            "title": f"{f.get('member_name') or 'Person'} — {f.get('label') or f.get('doc_type') or 'document'}",
+            "doc_type": f.get("doc_type") or "id",
+            "mime": f.get("content_type") or "application/octet-stream",
+            "issuer": f.get("member_name") or "",
+            "summary": f"On {f.get('member_name') or 'the person'}'s profile, uploaded {str(f.get('created_at') or '')[:10]}.",
+            "expires_on": "",
+            "file_url": f"/api/documents/{f['id']}/file",
+            "_disk_path": os.path.join("/app/backend", f.get("local_path") or ""),
+            "source": "person_file",
+        })
+    return out
+
+
 def attachment_of(doc: dict) -> dict:
     """What the chat needs to render and offer a download."""
+    person = doc.get("source") == "person_file"
     return {
         "document_id": doc["id"],
         "title": doc.get("title"),
         "doc_type": doc.get("doc_type"),
         "mime": doc.get("mime"),
-        "url": f"/api/org-documents/{doc['id']}/file",
+        "url": doc["file_url"] if person else f"/api/org-documents/{doc['id']}/file",
+        "has_file": bool(doc.get("file_url")),
+        "from_profile": person,
         "expires_on": doc.get("expires_on") or "",
         "issuer": doc.get("issuer") or "",
     }
@@ -101,7 +162,9 @@ def readable_files(docs: list, limit: int = 2) -> list:
     """Local paths Gemini can actually open, newest/best first."""
     out = []
     for d in docs:
-        p = _local_path(d.get("file_url"))
+        p = d.get("_disk_path") if d.get("source") == "person_file" else _local_path(d.get("file_url"))
+        if p and not os.path.exists(p):
+            p = None
         if p and d.get("mime") in ("application/pdf", "image/jpeg", "image/png", "image/webp", "text/plain", "text/csv"):
             out.append((p, d["mime"]))
         if len(out) >= limit:
@@ -226,3 +289,164 @@ def access_summary(current_user: dict) -> str:
             if has_module_access(current_user, m)]
     return (f"role {current_user.get('role') or 'Staff'} (level {get_role_level(current_user.get('role'))}), "
             f"modules: {', '.join(mods) if mods else 'none beyond general staff access'}")
+
+
+# --------------------------------------------------------------- expiring paperwork
+EXPIRY_LIST_WORDS = re.compile(
+    r"\b(which|what|any|list|all)\b.{0,40}\b(expir\w*|renew\w*|laps\w*|run(?:ning)?\s+out|due)\b", re.I)
+
+
+async def expiry_rundown(current_user: dict, text: str = "", days: int = 92) -> Optional[dict]:
+    """A real list of what runs out, straight from the records.
+
+    The model is given the list rather than asked to recall dates — it can
+    summarise, but it cannot invent an expiry.
+    """
+    if text and not EXPIRY_LIST_WORDS.search(text):
+        return None
+    if re.search(r"\b(month|30\s*days)\b", text or "", re.I):
+        days = 31
+    elif re.search(r"\b(year|12\s*months)\b", text or "", re.I):
+        days = 366
+    today = date.today()
+    horizon = (today + timedelta(days=days)).isoformat()
+    rows = await db.org_documents.find(
+        {**visible_filter(current_user), "expires_on": {"$gt": "", "$lte": horizon}},
+        {"_id": 0},
+    ).sort("expires_on", 1).to_list(40)
+    if not rows:
+        return {"facts": f"Nothing on file expires in the next {days} days (of the documents this person may see).",
+                "docs": []}
+    lines = []
+    for r in rows:
+        try:
+            left = (date.fromisoformat(r["expires_on"]) - today).days
+        except Exception:
+            left = None
+        when = "already expired" if left is not None and left < 0 else f"{left} days left" if left is not None else ""
+        lines.append(f"- {r['title']} ({DOC_TYPES.get(r.get('doc_type'), 'document')}): {r['expires_on']} — {when}"
+                     + (f", issued by {r['issuer']}" if r.get("issuer") else ""))
+    return {"facts": "Paperwork expiring, soonest first:\n" + "\n".join(lines), "docs": rows[:3]}
+
+
+async def heads_up(current_user: dict) -> str:
+    """One line for a director or admin: what is about to lapse, unprompted."""
+    if get_role_level(current_user.get("role")) < 8 and not is_system_admin(current_user):
+        return ""
+    today = date.today()
+    soon = (today + timedelta(days=45)).isoformat()
+    rows = await db.org_documents.find(
+        {**visible_filter(current_user), "expires_on": {"$gt": "", "$lte": soon}},
+        {"_id": 0, "title": 1, "expires_on": 1},
+    ).sort("expires_on", 1).to_list(5)
+    if not rows:
+        return ""
+    return ("EXPIRING SOON (mention this once, briefly, even if not asked): "
+            + "; ".join(f"{r['title']} on {r['expires_on']}" for r in rows))
+
+
+# --------------------------------------------------------------- managers fix things by saying so
+EDIT_WORDS = re.compile(
+    r"(\b(rename|retitle|change|correct|fix|update|set|make)\b.{0,60}"
+    r"\b(title|name|expir\w*|renewal|date|visib\w*|who\s+(can|may)\s+see|access|level|confidential)\b)"
+    r"|(\b(only|restrict\w*|limit|hide|confidential|private)\b.{0,60}\b(see|view|read|access|open)\b)", re.I)
+NOTE_WORDS = re.compile(r"^\s*(remember(\s+this)?|note(\s+this)?|file this note|add to (the )?knowledge)\b[:,\-]?\s*", re.I)
+URL_RX = re.compile(r"https?://[^\s<>\"')]+")
+
+
+async def try_document_edit(current_user: dict, text: str) -> Optional[dict]:
+    """"Change the NGO permit's expiry to 2028-03-31" — done, and confirmed.
+
+    Only managers and above get here, and only documents they can already see
+    can be touched. The model turns the sentence into fields; the write itself
+    is ordinary validated code.
+    """
+    if get_role_level(current_user.get("role")) < 7 and not is_system_admin(current_user):
+        return None
+    if not EDIT_WORDS.search(text):
+        return None
+    docs = await search_documents(current_user, text, limit=3)
+    if not docs:
+        return {"answer": "I couldn't tell which document you mean — say its title and I'll change it."}
+
+    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    fields = {}
+    if api_key:
+        try:
+            import json as _json
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            chat = LlmChat(
+                api_key=api_key, session_id=f"docedit_{current_user['id']}",
+                system_message=(
+                    "Turn the instruction into ONE JSON object and nothing else: "
+                    '{"document_title": which of the listed documents it refers to, '
+                    '"title": new title or "", "expires_on": "YYYY-MM-DD" or "", '
+                    '"min_level": 5 (all staff) | 6 (coordinators+) | 7 (managers+) | 8 (directors+) | 10 (admins) or 0, '
+                    '"doc_type": one of ' + str(sorted(DOC_TYPES)) + ' or ""}. '
+                    "Use \"\" or 0 for anything the instruction does not change."
+                ),
+            ).with_model("gemini", "gemini-2.5-flash")
+            listing = "; ".join(d["title"] for d in docs)
+            raw = await chat.send_message(UserMessage(text=f"Documents on file: {listing}\n\nInstruction: {text}"))
+            m = re.search(r"\{.*\}", raw or "", re.S)
+            fields = _json.loads(m.group(0)) if m else {}
+        except Exception as e:
+            logger.warning(f"Could not read the edit instruction: {e}")
+
+    target = next((d for d in docs if fields.get("document_title")
+                   and fields["document_title"].lower() in d["title"].lower()), docs[0])
+    if target.get("source") == "person_file":
+        return {"answer": f"'{target['title']}' sits on someone's profile — change it on their profile page, not here."}
+
+    update = {}
+    if fields.get("title"):
+        update["title"] = str(fields["title"])[:200]
+    if fields.get("expires_on"):
+        update["expires_on"] = str(fields["expires_on"])[:10]
+    if fields.get("doc_type") in DOC_TYPES:
+        update["doc_type"] = fields["doc_type"]
+    if int(fields.get("min_level") or 0):
+        update["min_level"] = int(fields["min_level"])
+    if not update:
+        return {"answer": f"I found '{target['title']}' but couldn't tell what to change — try "
+                          "\"change its expiry to 2028-03-31\" or \"only directors may see it\"."}
+
+    from routers.org_documents import update_document, VISIBILITY_LEVELS
+    try:
+        saved = await update_document(target["id"], update, current_user)
+    except Exception as e:
+        detail = getattr(e, "detail", None) or str(e)
+        return {"answer": f"I couldn't change '{target['title']}': {detail}"}
+    said = []
+    if "title" in update:
+        said.append(f"renamed it to \"{saved['title']}\"")
+    if "expires_on" in update:
+        said.append(f"set its expiry to {saved['expires_on'] or 'none'}")
+    if "doc_type" in update:
+        said.append(f"filed it as a {DOC_TYPES.get(saved['doc_type'], saved['doc_type']).lower()}")
+    if "min_level" in update:
+        said.append(f"limited it to {VISIBILITY_LEVELS[saved['min_level']].lower()}")
+    return {"answer": f"Done — {', and '.join(said)}.", "document": saved, "edited": True}
+
+
+async def try_knowledge_note(current_user: dict, text: str) -> Optional[dict]:
+    """"Remember this: the bureau moved to Plot 12" — kept, and searchable.
+
+    A link is fetched once and stored as text, because the person explicitly
+    handed it over; the assistant never goes looking on the internet itself.
+    """
+    if get_role_level(current_user.get("role")) < 7 and not is_system_admin(current_user):
+        return None
+    if not NOTE_WORDS.search(text):
+        return None
+    body = NOTE_WORDS.sub("", text).strip()
+    if not body:
+        return {"answer": "Tell me what to remember — a note, or a link to a page."}
+    from routers.org_documents import store_note
+    found = URL_RX.search(body)
+    url = found.group(0) if found else None
+    doc = await store_note(current_user, body, url=url)
+    where = f" from {url}" if url else ""
+    return {"answer": f"Noted{where} as \"{doc['title']}\" — "
+                      f"{'anyone on staff' if doc['min_level'] <= 5 else 'people at the level you set'} can ask me about it now.",
+            "document": doc, "noted": True}

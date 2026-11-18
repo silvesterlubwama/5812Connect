@@ -13,7 +13,7 @@ import { toast } from 'sonner';
 
 const TYPE_LABEL = {
   permit: 'Permit', certificate: 'Certificate', agreement: 'Agreement', contract: 'Contract',
-  receipt: 'Receipt', policy: 'Policy', id: 'ID document', report: 'Report', other: 'Document',
+  receipt: 'Receipt', policy: 'Policy', id: 'ID document', report: 'Report', note: 'Note', other: 'Document',
 };
 
 /** The model writes **bold** and bullet lists; show them as such, not as asterisks. */
@@ -41,9 +41,13 @@ export const AiAttachment = ({ att }) => {
   const [preview, setPreview] = useState(null);
   const [busy, setBusy] = useState(false);
   const isImage = (att.mime || '').startsWith('image/');
+  const hasFile = att.has_file !== false;
 
   const fetchBlob = async () => {
-    const r = await api.get(`/org-documents/${att.document_id}/file`, { responseType: 'blob' });
+    // `url` already carries the right route — organisation paperwork and files
+    // sitting on someone's profile are served by different endpoints.
+    const path = (att.url || `/api/org-documents/${att.document_id}/file`).replace(/^\/api/, '');
+    const r = await api.get(path, { responseType: 'blob' });
     return URL.createObjectURL(r.data);
   };
 
@@ -81,18 +85,20 @@ export const AiAttachment = ({ att }) => {
             {TYPE_LABEL[att.doc_type] || 'Document'}
             {att.issuer ? ` · ${att.issuer}` : ''}
             {att.expires_on ? <span className="inline-flex items-center gap-0.5 ml-1"><CalendarClock size={9} /> expires {att.expires_on}</span> : ''}
+            {att.from_profile ? ' · from a profile' : ''}
+            {!hasFile ? ' · note' : ''}
           </p>
         </div>
       </div>
       {preview && <img src={preview} alt={att.title} className="mt-2 rounded-lg max-h-64 w-auto" data-testid={`ai-attachment-preview-${att.document_id}`} />}
-      <div className="flex gap-1.5 mt-2">
+      {hasFile && <div className="flex gap-1.5 mt-2">
         <Button size="sm" variant="outline" className="h-7 text-[11px] gap-1" onClick={open} disabled={busy} data-testid={`ai-attachment-open-${att.document_id}`}>
           <Eye size={11} /> {isImage ? 'Show it' : 'Open'}
         </Button>
         <Button size="sm" variant="ghost" className="h-7 text-[11px] gap-1" onClick={download} disabled={busy} data-testid={`ai-attachment-download-${att.document_id}`}>
           <Download size={11} /> Download
         </Button>
-      </div>
+      </div>}
     </div>
   );
 };

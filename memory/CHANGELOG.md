@@ -3432,3 +3432,40 @@ switched back off.
 - P2: index documents already uploaded elsewhere (member/child files) into the
   same search, respecting their own scoping.
 - P2: reverse the welfare/fund journal entries straight from the chat.
+
+### 2026-11-18 (iter427) — The assistant takes instructions
+- **Fix a document by saying so.** A manager types "change the NGO permit expiry
+  to 2028-03-31" or "only directors may see the head office lease" and it is
+  done, confirmed in words (`try_document_edit`, ai_knowledge.py). The model only
+  turns the sentence into fields; the write is ordinary validated code, and a
+  staff member attempting the same gets nothing changed.
+- **Feed it notes and links.** "Remember this: the NGO Bureau moved to Plot 12…"
+  is kept and searchable; a pasted link is fetched once, here, because a person
+  handed it over (`POST /api/org-documents/notes`, `store_note`). If the page
+  can't be read the note is still kept with the link. The assistant itself never
+  browses — the user chose own-documents-only.
+- **What's running out, from the records.** `expiry_rundown` builds the list of
+  expiring paperwork (quarter by default, month/year on request) and hands the
+  model the real dates, so it can summarise but never invent one. Directors and
+  admins also get an unprompted heads-up line about anything lapsing within 45
+  days. No dashboard card — the user asked for chat only.
+- **Files already on profiles are searchable too.** IDs, contracts and letters on
+  people's profiles now surface in the same answers (`search_person_files`), each
+  attachment carrying its own route so the chat can open either kind.
+- **Security fix found on the way:** `GET /api/documents/{id}/file`,
+  `/documents/{id}/versions` and `/members/{id}/documents` let *any* logged-in
+  account (including portal members) pull anyone's national ID by id. They now
+  require staff or the owner (`_may_read_person_files`, routers/documents.py).
+- Tests: `tests/test_iter427_ai_instructions_and_profile_files.py` (15);
+  150 green across iter411-427, and the old `test_iteration18_documents.py`
+  suite still passes (run it with `REACT_APP_BACKEND_URL` set).
+- Verified live: filed a permit, told the AI to change its expiry (stored value
+  changed), had a staff member refused the same edit, asked for the quarter's
+  expiries and got the real date, and saw a note taken and then answered from by
+  a different, lower-level user.
+
+#### Still open / next
+- P1: let the assistant *create* documents from app data (staff ID card,
+  contract from template) — derived-document plumbing is already in place.
+- P2: child/guardian files in `child_extras` are not yet in the AI search (only
+  the `files` collection is).
