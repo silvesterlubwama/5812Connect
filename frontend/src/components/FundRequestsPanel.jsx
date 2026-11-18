@@ -15,7 +15,7 @@ import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
-import { Plus, Receipt, Upload, RefreshCw, CheckCircle2, X, Banknote } from 'lucide-react';
+import { Plus, Receipt, Upload, RefreshCw, CheckCircle2, X, Banknote, Printer } from 'lucide-react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -45,6 +45,10 @@ export default function FundRequestsPanel() {
   const [markPaidFor, setMarkPaidFor] = useState(null); // holds the request
   const [markPaidNotes, setMarkPaidNotes] = useState('');
   const [markPaidBusy, setMarkPaidBusy] = useState(false);
+  // The approver says where the money comes from — no default is assumed.
+  const [accounts, setAccounts] = useState([]);
+  const [payFrom, setPayFrom] = useState('');
+  const [payExpense, setPayExpense] = useState('');
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -60,6 +64,22 @@ export default function FundRequestsPanel() {
   }, [hasFinance]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    if (!hasFinance) return;
+    // Balances stay off this list — a payout picker shouldn't broadcast what's in the bank.
+    api.get('/finance/account-access/mine?with_balances=false')
+      .then(r => setAccounts(r.data?.accounts || []))
+      .catch(() => setAccounts([]));
+  }, [hasFinance]);
+
+  const printVoucher = async (req) => {
+    try {
+      const { secureStorage } = await import('../services/secureStorage');
+      const { fetchAndPrint } = await import('../utils/printHtml');
+      await fetchAndPrint(`${process.env.REACT_APP_BACKEND_URL}/api/funds/requests/${req.id}/voucher`, secureStorage.getToken());
+    } catch (e) { toast.error('Could not open the voucher: ' + (e?.message || e)); }
+  };
 
   const submit = async () => {
     if (!form.amount || Number(form.amount) <= 0) { toast.error('Enter an amount'); return; }
@@ -97,16 +117,23 @@ export default function FundRequestsPanel() {
   const markPaid = (req) => {
     setMarkPaidFor(req);
     setMarkPaidNotes('');
+    setPayFrom('');
+    setPayExpense('');
   };
 
   const confirmMarkPaid = async () => {
     if (!markPaidFor) return;
+    if (!payFrom || !payExpense) { toast.error('Choose both accounts first'); return; }
     setMarkPaidBusy(true);
+    const paid = markPaidFor;
     try {
-      await api.post(`/funds/requests/${markPaidFor.id}/mark-paid`, { notes: markPaidNotes });
-      toast.success(`Paid → expense created (${markPaidFor.currency} ${markPaidFor.amount.toLocaleString()})`);
+      const r = await api.post(`/funds/requests/${paid.id}/mark-paid`, {
+        notes: markPaidNotes, paid_from_account_id: payFrom, expense_account_id: payExpense,
+      });
+      toast.success(`Paid from ${r.data?.paid_from_account_name || 'account'} — voucher ${r.data?.voucher_no || ''} printing`);
       setMarkPaidFor(null);
       setMarkPaidNotes('');
+      await printVoucher(paid);
       await refresh();
     } catch (e) { toast.error(e.response?.data?.detail || 'Mark-paid failed'); }
     finally { setMarkPaidBusy(false); }
@@ -142,6 +169,11 @@ export default function FundRequestsPanel() {
               {' · '}{(req.created_at || '').slice(0, 10)}
               {md.expense_id && <span className="ml-1 text-emerald-700">· paid (exp {md.expense_id.slice(0, 12)}…)</span>}
             </p>
+            {md.paid_from_account_name && (
+              <p className="text-[10px] text-muted-foreground mt-0.5" data-testid={`fund-paid-from-${req.id}`}>
+                Voucher <span className="font-mono">{md.voucher_no}</span> · paid from {md.paid_from_account_name} → {md.expense_account_name}
+              </p>
+            )}
             {md.receipt_url && (
               <a href={md.receipt_url} target="_blank" rel="noreferrer" className="text-[11px] text-primary inline-flex items-center gap-1 mt-1 hover:underline">
                 <Receipt size={10} /> View receipt
@@ -157,6 +189,11 @@ export default function FundRequestsPanel() {
             {!md.receipt_url && (req.submitted_by === user?.id || hasFinance) && (
               <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setReceiptUploadFor(req.id)} data-testid={`fund-receipt-btn-${req.id}`}>
                 <Upload size={11} className="mr-1" /> Upload receipt
+              </Button>
+            )}
+            {(req.status === 'approved' || md.expense_id) && (
+              <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => printVoucher(req)} data-testid={`fund-voucher-${req.id}`}>
+                <Printer size={11} className="mr-1" /> Print voucher
               </Button>
             )}
             {withActions && req.status === 'approved' && !md.expense_id && hasFinance && (
@@ -287,7 +324,7 @@ export default function FundRequestsPanel() {
           <DialogHeader>
             <DialogTitle>Mark as paid</DialogTitle>
             <DialogDescription className="text-xs">
-              This creates a matching <strong>expense entry</strong> in the books. The submitter will be notified.
+              Say which account the funds come out of. This posts the double entry and prints a voucher to be signed for.
             </DialogDescription>
           </DialogHeader>
           {markPaidFor && (
@@ -298,6 +335,28 @@ export default function FundRequestsPanel() {
                   <Banknote size={10} className="inline mr-1 mb-0.5" />
                   {markPaidFor.currency} {Number(markPaidFor.amount || 0).toLocaleString()} · {markPaidFor.metadata?.kind || 'reimbursement'}
                 </p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Funds come out of</Label>
+                <Select value={payFrom} onValueChange={setPayFrom}>
+                  <SelectTrigger data-testid="fund-pay-from"><SelectValue placeholder="Choose cash or bank account" /></SelectTrigger>
+                  <SelectContent>
+                    {accounts.filter(a => a.type === 'asset').map(a => (
+                      <SelectItem key={a.id} value={a.id}>{a.code} · {a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Post the spend to</Label>
+                <Select value={payExpense} onValueChange={setPayExpense}>
+                  <SelectTrigger data-testid="fund-pay-expense"><SelectValue placeholder="Choose expense account" /></SelectTrigger>
+                  <SelectContent>
+                    {accounts.filter(a => a.type === 'expense').map(a => (
+                      <SelectItem key={a.id} value={a.id}>{a.code} · {a.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs">Payment notes <span className="text-muted-foreground font-normal">(optional — e.g. transaction ID, payment method)</span></Label>
@@ -311,8 +370,8 @@ export default function FundRequestsPanel() {
               </div>
               <div className="flex gap-2 pt-1">
                 <Button variant="ghost" className="flex-1" onClick={() => { setMarkPaidFor(null); setMarkPaidNotes(''); }}>Cancel</Button>
-                <Button className="flex-1" onClick={confirmMarkPaid} disabled={markPaidBusy} data-testid="fund-mark-paid-confirm">
-                  {markPaidBusy ? 'Recording…' : 'Confirm & create expense'}
+                <Button className="flex-1" onClick={confirmMarkPaid} disabled={markPaidBusy || !payFrom || !payExpense} data-testid="fund-mark-paid-confirm">
+                  {markPaidBusy ? 'Recording…' : 'Pay & print voucher'}
                 </Button>
               </div>
             </div>

@@ -65,8 +65,13 @@ def farm():
 
 def _loss(qty, reason="negligence", **kw):
     set_current_org(GLOBAL_ORG)
-    body = life.LossCreate(product_id=kw.pop("product_id", CHICKS), qty=qty, reason=reason,
-                           location_id=SHOP,
+    pid = kw.pop("product_id", CHICKS)
+    # iter424 — the batch has to be named; these tests keep one open batch.
+    if "batch_id" not in kw:
+        open_batches = _run(life.open_batches_for(pid, SHOP, kw.get("variant_id")))
+        if open_batches:
+            kw["batch_id"] = open_batches[0]["id"]
+    body = life.LossCreate(product_id=pid, qty=qty, reason=reason, location_id=SHOP,
                            employee_id=STAFF if reason == "negligence" else None, **kw)
     return _run(life.record_stock_loss(body, _user()))
 

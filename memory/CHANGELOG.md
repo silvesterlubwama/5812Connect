@@ -3328,3 +3328,55 @@ that person's payslip preview exactly once across their two salary rows; the
 mortality chart read 6 of 100 (6%) in week 1; the room plan showed 2 of 7 tables
 busy at 1920px and tiled two-up at 390px. Seeded data removed and restaurant mode
 switched back off.
+
+### 2026-11-18 (iter424) — Receipts cut clear, produce grows through its variants
+- **Cutter**: every receipt, refund slip, Z-report and quote slip now feeds the
+  paper before the blade (`cutBytes()` in `frontend/src/utils/tillPrinter.js`)
+  instead of the bare `GS V 1` that cut through the last words.
+- **Losses name their batch and variant**: `POST /api/stock-losses` refuses a
+  write-off that doesn't say which variant and which batch it came off, checks
+  the quantity against that batch, and values it at the variant's own price. The
+  old FIFO "take it off general stock" path is gone. The stock is no longer
+  touched before those checks pass (a refused loss used to still deduct).
+- **Produce**: products carry `is_produce`; stages live as variants with
+  `grow_after_days`, and a batch carries `variant_id`, so day-old chicks mature
+  into 4-week broilers inside the same product. Legacy separate products are
+  untouched. New `BatchIntakeDialog` books produce in as a traceable batch.
+- **Variant prices/stock** are the source of truth in the POS card, the products
+  list (now shows the variant price range, not `UGX 0`) and the write-off dialog.
+- Tests: `tests/test_iter424_produce_stages_and_losses.py`; 161 green across
+  iter411-424. Verified in the browser: batch intake, the write-off dialog's
+  variant + batch pickers, and grow-on.
+
+### 2026-11-18 (iter425) — Welfare money lands where someone chose to put it
+- **Welfare payments** (`POST /api/social-work/cases/{id}/payments`) now require
+  `account_id` (income or expense) and `money_account_id` (cash/bank). The old
+  hardcoded 4000/4005/5300/1000 guesses are gone — 5300 was a "DNU" account, so
+  school fees were landing somewhere nobody should post to. The ledger post is
+  no longer best-effort: if the books can't take it, the payment isn't recorded.
+- **Child support from parents** is its own support type (`parent_support`,
+  money in, `payer_type: parent`) beside sponsor support, with a "money from"
+  picker on the form.
+- **Deleting a payment** posts the reversal automatically (open period: the
+  entry leaves the ledger and is kept in `finance_deleted_entries`).
+- **Per-person account access**: `routers/finance/account_access.py` —
+  `GET /api/finance/account-access/mine` (what I may use, with balances),
+  `/staff`, `PUT /{user_id}` (director). No grant = unrestricted, so it's opt-in.
+  Enforced on income, expense, welfare payments and fund payouts. Entry forms and
+  the Chart of Accounts tab show only the granted accounts; pickers hide balances.
+- **Fund requests**: `mark-paid` makes the approver choose the account the funds
+  leave and the expense account, posts a balanced journal entry, stamps a
+  `FV-YYYYMM-XXXXXX` voucher number, and prints a signable A5 voucher
+  (`GET /api/funds/requests/{id}/voucher`) with the amount in words, the approval
+  trail and prepared/approved/received signature lines.
+- Tests: `tests/test_iter425_welfare_accounts_and_vouchers.py` (15); 120 green
+  across iter411-425. Verified in the browser: paying a request out of
+  Bank — Operating printed voucher FV-202611-AEDACC, the welfare form blocks
+  until both accounts are chosen, and the access dialog lists 64 staff / 63
+  accounts.
+
+#### Still open / next
+- P1: show a restricted person's own balances on the Finance overview too (today
+  only the Chart of Accounts tab narrows).
+- P2: reverse the fund-request journal entry if a payment is undone.
+- P2: a monthly welfare statement per child, by account.

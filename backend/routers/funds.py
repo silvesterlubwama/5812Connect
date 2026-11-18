@@ -18,6 +18,7 @@ Two kinds:
                        approved → expense recorded + staff is paid back.
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from html import escape as _esc
 from deps import db, get_current_user, _audit, require_staff, logger, get_campus_filter, has_module_access, is_system_admin, default_creation_location
 from datetime import datetime, timezone
 from typing import Optional
@@ -29,6 +30,41 @@ router = APIRouter(prefix="/api/funds", tags=["funds"])
 UPLOADS_DIR = "/app/uploads/funds-receipts"  # mounted volume in compose
 
 DEFAULT_WORKFLOW_ID = "wf_fund_request_default"
+
+_ONES = ["", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+         "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+         "eighteen", "nineteen"]
+_TENS = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"]
+
+
+def h(value) -> str:
+    """HTML-escape anything that lands in the printed voucher."""
+    return _esc(str(value or ""))
+
+
+def _chunk_words(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return (_TENS[n // 10] + ("-" + _ONES[n % 10] if n % 10 else "")).strip()
+    return (_ONES[n // 100] + " hundred" + (" and " + _chunk_words(n % 100) if n % 100 else "")).strip()
+
+
+def _amount_in_words(amount: float, currency: str = "UGX") -> str:
+    """'Two hundred thousand shillings only' — what a signed voucher needs."""
+    whole = int(round(float(amount or 0)))
+    if whole == 0:
+        words = "zero"
+    else:
+        parts, scales = [], [(1_000_000_000, "billion"), (1_000_000, "million"), (1_000, "thousand"), (1, "")]
+        rest = whole
+        for size, label in scales:
+            if rest >= size:
+                count, rest = divmod(rest, size)
+                parts.append((_chunk_words(count) + " " + label).strip())
+        words = " ".join(parts)
+    tail = "shillings" if (currency or "").upper() in ("UGX", "KES", "TZS") else (currency or "").upper()
+    return f"{words.capitalize()} {tail} only"
 
 
 async def _ensure_default_workflow() -> dict:
@@ -213,14 +249,18 @@ async def upload_receipt(
 
 @router.post("/requests/{request_id}/mark-paid")
 async def mark_paid(request_id: str, data: dict = None, current_user: dict = Depends(get_current_user)):
-    """Finance closes the request by paying out — creates the matching expense row.
+    """Finance closes the request by paying out — posts the money properly.
 
-    Body (optional): {
-        match_expense_id?: str,   # link to an existing expense instead of creating
+    Body: {
+        paid_from_account_id: str,   # REQUIRED — the cash/bank account the money leaves
+        expense_account_id: str,     # REQUIRED — what the money was spent on
+        match_expense_id?: str,      # link to an existing expense instead of creating
         notes?: str,
     }
-    Auto-creates a db.financial row of type='expense' so the books match. Idempotent:
-    if the request is already marked paid, returns the existing expense_id.
+    The approver says which account the funds come out of — nothing is paid
+    from a guessed default. Creates the db.financial expense row AND a
+    balanced journal entry, then stamps a voucher number so the printed slip
+    can be signed for and filed. Idempotent: if already paid, returns as-is.
     """
     if not is_system_admin(current_user) and not has_module_access(current_user, "finance"):
         raise HTTPException(status_code=403, detail="Only finance staff can mark fund requests as paid")
@@ -232,7 +272,25 @@ async def mark_paid(request_id: str, data: dict = None, current_user: dict = Dep
         raise HTTPException(status_code=400, detail="Request must be approved before it can be paid")
     md = req.get("metadata") or {}
     if md.get("expense_id"):
-        return {"message": "Already paid", "expense_id": md["expense_id"]}
+        return {"message": "Already paid", "expense_id": md["expense_id"], "voucher_no": md.get("voucher_no")}
+
+    # Which accounts — asked, never assumed.
+    from routers.finance.account_access import assert_can_use_account
+    from routers.finance._common import post_journal_entry
+    paid_from_id = (data.get("paid_from_account_id") or "").strip()
+    expense_acct_id = (data.get("expense_account_id") or "").strip()
+    if not paid_from_id or not expense_acct_id:
+        raise HTTPException(status_code=400, detail="Choose which account the funds come out of and which expense account to post against")
+    paid_from = await db.finance_chart_of_accounts.find_one({"id": paid_from_id}, {"_id": 0})
+    expense_acct = await db.finance_chart_of_accounts.find_one({"id": expense_acct_id}, {"_id": 0})
+    if not paid_from or not expense_acct:
+        raise HTTPException(status_code=400, detail="That account no longer exists — pick another")
+    if paid_from.get("type") != "asset":
+        raise HTTPException(status_code=400, detail=f"'{paid_from['name']}' is not a cash or bank account")
+    if expense_acct.get("type") != "expense":
+        raise HTTPException(status_code=400, detail=f"'{expense_acct['name']}' is not an expense account")
+    await assert_can_use_account(current_user, paid_from)
+    await assert_can_use_account(current_user, expense_acct)
 
     match_id = (data.get("match_expense_id") or "").strip()
     if match_id:
@@ -265,24 +323,161 @@ async def mark_paid(request_id: str, data: dict = None, current_user: dict = Dep
             "entered_by_name": current_user.get("name", ""),
             "fund_request_id": request_id,
             "fund_request_kind": kind,
+            "account_id": expense_acct["id"],
+            "account_code": expense_acct["code"],
+            "paid_from_account_id": paid_from["id"],
             "receipt_url": md.get("receipt_url"),
             "notes": data.get("notes", "")[:500],
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.financial.insert_one(expense)
 
+    amount = float(req.get("amount") or 0)
+    voucher_no = md.get("voucher_no") or f"FV-{datetime.now(timezone.utc).strftime('%Y%m')}-{request_id[-6:].upper()}"
+    je = await post_journal_entry(
+        date=datetime.now(timezone.utc).date().isoformat(),
+        description=f"Fund request {voucher_no} — {req.get('summary') or req.get('title') or ''}"[:280],
+        lines=[
+            {"account_id": expense_acct["id"], "account_code": expense_acct["code"], "account_name": expense_acct["name"],
+             "debit": amount, "credit": 0, "memo": f"Paid to {req.get('submitted_by_name', '')}"},
+            {"account_id": paid_from["id"], "account_code": paid_from["code"], "account_name": paid_from["name"],
+             "debit": 0, "credit": amount, "memo": f"Paid from {paid_from['name']}"},
+        ],
+        source="fund_request",
+        reference=request_id,
+        location_id=req.get("location_id"),
+        created_by=current_user["id"],
+        created_by_name=current_user.get("name"),
+        idempotency_key=f"fund_request:{request_id}",
+    )
+
     await db.approval_requests.update_one(
         {"id": request_id},
         {"$set": {
             "metadata.expense_id": expense_id,
+            "metadata.voucher_no": voucher_no,
+            "metadata.journal_entry_id": je.get("id"),
+            "metadata.paid_from_account_id": paid_from["id"],
+            "metadata.paid_from_account_code": paid_from["code"],
+            "metadata.paid_from_account_name": paid_from["name"],
+            "metadata.expense_account_id": expense_acct["id"],
+            "metadata.expense_account_code": expense_acct["code"],
+            "metadata.expense_account_name": expense_acct["name"],
             "metadata.paid_at": datetime.now(timezone.utc).isoformat(),
             "metadata.paid_by": current_user["id"],
             "metadata.paid_by_name": current_user.get("name", ""),
             "metadata.payment_notes": data.get("notes", "")[:500],
         }},
     )
-    await _audit(current_user["id"], "update", "fund_request_paid", request_id, {"expense_id": expense_id})
-    return {"message": "Marked paid", "expense_id": expense_id}
+    await _audit(current_user["id"], "update", "fund_request_paid", request_id,
+                 {"expense_id": expense_id, "voucher_no": voucher_no, "paid_from": paid_from["code"], "je": je.get("id")})
+    return {"message": "Marked paid", "expense_id": expense_id, "voucher_no": voucher_no,
+            "journal_entry_id": je.get("id"), "paid_from_account_name": paid_from["name"]}
+
+
+@router.get("/requests/{request_id}/voucher")
+async def fund_voucher(request_id: str, current_user: dict = Depends(get_current_user)):
+    """The signable payment voucher — print, sign, file.
+
+    Returns a print-ready A5 HTML slip with the amount in words, the approval
+    trail, the account the money came from and ruled lines for the three
+    signatures an auditor looks for: prepared, approved, received.
+    """
+    req = await db.approval_requests.find_one({"id": request_id, "subject_kind": "fund_request"}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Fund request not found")
+    if (req.get("submitted_by") != current_user["id"]
+            and not is_system_admin(current_user)
+            and not has_module_access(current_user, "finance")):
+        raise HTTPException(status_code=403, detail="Only the submitter or finance can print this voucher")
+    md = req.get("metadata") or {}
+    amount = float(req.get("amount") or 0)
+    currency = req.get("currency", "UGX")
+    voucher_no = md.get("voucher_no") or f"FV-{datetime.now(timezone.utc).strftime('%Y%m')}-{request_id[-6:].upper()}"
+    loc_name = ""
+    if req.get("location_id"):
+        loc = await db.locations.find_one({"id": req["location_id"]}, {"_id": 0, "name": 1})
+        loc_name = (loc or {}).get("name", "")
+    approvals = []
+    for st in req.get("step_states") or []:
+        for a in st.get("approvals") or []:
+            approvals.append(a)
+    approved_rows = "".join(
+        f"<tr><td>{h(a.get('user_name') or '')}</td><td>{h(a.get('user_role') or '')}</td>"
+        f"<td>{h((a.get('at') or '')[:10])}</td><td>{h(a.get('outcome') or '')}</td></tr>"
+        for a in approvals
+    ) or "<tr><td colspan='4' style='color:#777'>Not yet approved</td></tr>"
+    paid_block = (
+        f"<div><span class='k'>Paid from</span> {h(md.get('paid_from_account_name') or '')} "
+        f"({h(md.get('paid_from_account_code') or '')})</div>"
+        f"<div><span class='k'>Posted to</span> {h(md.get('expense_account_name') or '')} "
+        f"({h(md.get('expense_account_code') or '')})</div>"
+        f"<div><span class='k'>Paid on</span> {h((md.get('paid_at') or '')[:10])} by {h(md.get('paid_by_name') or '')}</div>"
+        if md.get("paid_at") else
+        "<div style='color:#777'>Not yet paid out — finance completes the account details on payment.</div>"
+    )
+    html_doc = f"""<!doctype html>
+<html><head><meta charset='utf-8'><title>Payment Voucher {h(voucher_no)}</title>
+<style>
+  @page {{ size: A5 portrait; margin: 10mm; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color:#111; margin:0; font-size:12px; }}
+  h1 {{ font-size:16px; margin:0; letter-spacing:.04em; text-transform:uppercase; }}
+  .no {{ font-size:13px; font-weight:700; }}
+  .hdr {{ display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #111; padding-bottom:6px; }}
+  .k {{ display:inline-block; min-width:84px; color:#555; }}
+  .grid {{ margin:8px 0; line-height:1.55; }}
+  .amt {{ border:1px solid #111; padding:6px 8px; margin:8px 0; font-size:15px; font-weight:700; }}
+  .words {{ font-size:11px; font-weight:400; font-style:italic; color:#333; margin-top:2px; }}
+  table {{ width:100%; border-collapse:collapse; font-size:11px; margin-top:4px; }}
+  th, td {{ border:1px solid #666; padding:3px 5px; text-align:left; }}
+  th {{ background:#f2f2f2; }}
+  .sigs {{ display:flex; gap:10px; margin-top:18px; }}
+  .sig {{ flex:1; border-top:1px solid #111; padding-top:3px; font-size:10px; color:#444; }}
+  .sig small {{ display:block; color:#888; }}
+  .foot {{ margin-top:12px; font-size:9px; color:#666; }}
+  .print-btn {{ background:#111; color:#fff; padding:5px 10px; border:none; border-radius:4px; cursor:pointer; font-size:11px; }}
+  @media print {{ .print-btn {{ display:none; }} }}
+</style></head><body>
+<div class='hdr'>
+  <div>
+    <h1>Payment Voucher</h1>
+    <div style='font-size:11px;color:#555'>{h(loc_name or '58:12 Global')}</div>
+  </div>
+  <div style='text-align:right'>
+    <div class='no'>{h(voucher_no)}</div>
+    <div style='font-size:10px;color:#555'>{h((md.get('paid_at') or req.get('created_at') or '')[:10])}</div>
+    <button class='print-btn' onclick='window.print()'>Print</button>
+  </div>
+</div>
+
+<div class='grid'>
+  <div><span class='k'>Paid to</span> <strong>{h(req.get('submitted_by_name') or '')}</strong></div>
+  <div><span class='k'>Request</span> {h(req.get('title') or '')}</div>
+  <div><span class='k'>Purpose</span> {h(req.get('summary') or '')}</div>
+  <div><span class='k'>Type</span> {h((md.get('kind') or 'reimbursement').title())}{(' · ' + h(md.get('category'))) if md.get('category') else ''}</div>
+  <div><span class='k'>Status</span> {h((req.get('status') or '').replace('_', ' ').title())}</div>
+</div>
+
+<div class='amt'>{h(currency)} {amount:,.2f}
+  <div class='words'>{h(_amount_in_words(amount, currency))}</div>
+</div>
+
+{paid_block}
+
+<table>
+  <thead><tr><th>Approved by</th><th>Role</th><th>Date</th><th>Outcome</th></tr></thead>
+  <tbody>{approved_rows}</tbody>
+</table>
+
+<div class='sigs'>
+  <div class='sig'>Prepared by<small>name &amp; signature</small></div>
+  <div class='sig'>Approved by<small>name &amp; signature</small></div>
+  <div class='sig'>Received by<small>signature &amp; date</small></div>
+</div>
+<p class='foot'>Voucher {h(voucher_no)} · request {h(request_id)}{(' · journal ' + h(md.get('journal_entry_id'))) if md.get('journal_entry_id') else ''}. Keep the signed copy with the receipt for audit.</p>
+</body></html>"""
+    from fastapi.responses import Response
+    return Response(content=html_doc, media_type="text/html; charset=utf-8")
 
 
 @router.delete("/requests/{request_id}")

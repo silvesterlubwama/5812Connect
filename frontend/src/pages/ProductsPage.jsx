@@ -65,7 +65,7 @@ const stockLabel = (stock, reorder) => {
   return `${stock} in stock`;
 };
 
-const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false, images: [], is_universal: false, store_ids: [], store_stock: {}, store_prices: {}, grows_into_product_id: '', grow_after_days: '', is_kitchen_item: false, prep_station: '' };
+const emptyProduct = { name: '', price: '', currency: 'UGX', stock: '', category: '', sku: '', reorder_level: '5', location_id: '', is_exit_restricted: false, sell_online: false, images: [], is_universal: false, store_ids: [], store_stock: {}, store_prices: {}, grows_into_product_id: '', grow_after_days: '', is_kitchen_item: false, prep_station: '', is_produce: false };
 
 // A shared product is one catalogue entry several stores sell. Name, SKU and
 // the base price travel with it; stock is counted per store, and a store may
@@ -1003,7 +1003,7 @@ export default function ProductsPage() {
   const openAddProduct = () => { setEditingProduct(null); setProductForm({ ...emptyProduct, location_id: locationFilter !== 'all' ? locationFilter : '' }); setShowProductModal(true); };
   const openEditProduct = (p) => {
     setEditingProduct(p);
-    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online, images: p.images || [], is_universal: !!p.is_universal, store_ids: p.store_ids || [], store_stock: p.store_stock || {}, store_prices: p.store_prices || {}, grows_into_product_id: p.grows_into_product_id || '', grow_after_days: p.grow_after_days ? String(p.grow_after_days) : '', is_kitchen_item: !!p.is_kitchen_item, prep_station: p.prep_station || '' });
+    setProductForm({ name: p.name, price: String(p.price || 0), currency: p.currency || 'UGX', stock: String(p.stock || 0), category: p.category || '', sku: p.sku || '', reorder_level: String(p.reorder_level || 5), location_id: p.location_id || '', has_variants: p.has_variants || false, product_type: p.product_type || '', variants: p.variants || [], qty_discount_tiers: p.qty_discount_tiers || [], max_discount_pct: p.max_discount_pct ?? 20, is_exit_restricted: !!p.is_exit_restricted, sell_online: !!p.sell_online, images: p.images || [], is_universal: !!p.is_universal, store_ids: p.store_ids || [], store_stock: p.store_stock || {}, store_prices: p.store_prices || {}, grows_into_product_id: p.grows_into_product_id || '', grow_after_days: p.grow_after_days ? String(p.grow_after_days) : '', is_kitchen_item: !!p.is_kitchen_item, prep_station: p.prep_station || '', is_produce: !!p.is_produce });
     setShowProductModal(true);
   };
 
@@ -1011,7 +1011,8 @@ export default function ProductsPage() {
     e.preventDefault(); setSaving(true);
     try {
       const data = { ...productForm, price: parseFloat(productForm.price), stock: parseInt(productForm.stock), reorder_level: parseInt(productForm.reorder_level) || 5,
-        grows_into_product_id: productForm.grows_into_product_id || null,
+        is_produce: !!productForm.is_produce,
+        grows_into_product_id: productForm.is_produce ? null : (productForm.grows_into_product_id || null),
         grow_after_days: productForm.grow_after_days ? parseInt(productForm.grow_after_days) : null,
         is_kitchen_item: !!productForm.is_kitchen_item,
         prep_station: productForm.prep_station || null };
@@ -1580,6 +1581,7 @@ export default function ProductsPage() {
           <div className="mb-3">
             <GrowingBatchesPanel
               refreshKey={products.length ? `${products.length}:${dataVersion}` : dataVersion}
+              products={products}
               locationId={saleLocationId}
               currency={storeSettings?.currency || activeCurrency || 'UGX'}
               onChanged={fetchAll}
@@ -1624,7 +1626,14 @@ export default function ProductsPage() {
                     {isShared(p)
                       ? <p className="text-[10px] text-primary mb-1 flex items-center gap-1" data-testid={`product-shared-${p.id}`}><Store size={9} />{p.is_universal ? 'All stores' : `${(p.store_ids || []).length} stores`}</p>
                       : p.location_id && <p className="text-[10px] text-muted-foreground mb-1 flex items-center gap-1"><MapPin size={9} />{locName(p.location_id)}</p>}
-                    <p className="text-primary font-bold text-sm">{fmt(locationFilter !== 'all' ? storePrice(p, locationFilter) : p.price, p.currency || 'UGX')}</p>
+                    <p className="text-primary font-bold text-sm">{p.has_variants && (p.variants || []).length > 0
+                      ? (() => {
+                          const prices = (p.variants || []).map(v => Number(v.price) || 0).filter(n => n > 0);
+                          if (!prices.length) return fmt(0, p.currency || 'UGX');
+                          const low = Math.min(...prices), high = Math.max(...prices);
+                          return low === high ? fmt(low, p.currency || 'UGX') : `${fmt(low, p.currency || 'UGX')} – ${fmt(high, p.currency || 'UGX')}`;
+                        })()
+                      : fmt(locationFilter !== 'all' ? storePrice(p, locationFilter) : p.price, p.currency || 'UGX')}</p>
                     <div className="mt-2">
                       {(() => {
                         // With one store picked, show that store's own count;
@@ -1821,6 +1830,33 @@ export default function ProductsPage() {
             <div className="space-y-2"><Label>Product Name *</Label>
               <Input placeholder="Product name" value={productForm.name} onChange={e => setProductForm({...productForm, name: e.target.value})} required data-testid="product-name-input" />
             </div>
+            {/* An item kept as variants has no price or count of its own —
+                both come from the variants, and a second set of boxes here is
+                exactly where the confusion starts (iter424). */}
+            {productForm.has_variants ? (
+              <div className="grid grid-cols-2 gap-3" data-testid="variant-totals">
+                <div className="space-y-1">
+                  <Label className="text-xs">Price</Label>
+                  <p className="text-sm font-semibold" data-testid="variant-price-range">
+                    {(productForm.variants || []).length
+                      ? (() => {
+                        const prices = (productForm.variants || []).map(v => Number(v.price) || 0);
+                        const low = Math.min(...prices); const high = Math.max(...prices);
+                        return low === high ? fmt(low, productForm.currency) : `${fmt(low, productForm.currency)} – ${fmt(high, productForm.currency)}`;
+                      })()
+                      : 'Set per variant below'}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">Each variant carries its own price.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Stock</Label>
+                  <p className="text-sm font-semibold" data-testid="variant-stock-total">
+                    {(productForm.variants || []).reduce((t, v) => t + (Number(v.stock) || 0), 0)} in total
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">Added up from the variants below.</p>
+                </div>
+              </div>
+            ) : (
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Price *</Label>
                 <Input type="number" placeholder="0" value={productForm.price} onChange={e => setProductForm({...productForm, price: e.target.value})} required data-testid="product-price-input" />
@@ -1829,6 +1865,7 @@ export default function ProductsPage() {
                 <Input type="number" placeholder="0" value={productForm.stock} onChange={e => setProductForm({...productForm, stock: e.target.value})} data-testid="product-stock-input" />
               </div>
             </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Category</Label>
                 <Input placeholder="e.g. Farm, Merchandise" value={productForm.category} onChange={e => setProductForm({...productForm, category: e.target.value})} />
@@ -1879,9 +1916,25 @@ export default function ProductsPage() {
                 </div>
               )}
             </div>
-            {/* Livestock & produce: this becomes something else, at another price */}
-            <div className="rounded-lg border border-border p-3 space-y-2">
-              <Label className="text-xs uppercase text-muted-foreground">Grows into (livestock & produce)</Label>
+            {/* Livestock & produce: stages of one item, kept as variants (iter424) */}
+            <div className="rounded-lg border border-border p-3 space-y-2" data-testid="produce-block">
+              <label className="flex items-center gap-2 text-xs cursor-pointer font-medium">
+                <input type="checkbox" className="accent-primary" data-testid="is-produce-checkbox"
+                  checked={!!productForm.is_produce}
+                  onChange={e => setProductForm({ ...productForm, is_produce: e.target.checked,
+                    has_variants: e.target.checked ? true : productForm.has_variants })} />
+                This is produce or livestock that grows through stages
+              </label>
+              {productForm.is_produce ? (
+                <p className="text-[11px] text-muted-foreground" data-testid="produce-help">
+                  Add each stage as a variant below — Day-old chicks, 4 Week Broilers — in order, each
+                  with its own price and its own days. Stock comes in as dated batches against a stage,
+                  and when the days are up the batch moves to the next stage by itself, at that stage's
+                  price. One item, one history.
+                </p>
+              ) : (
+              <>
+              <Label className="text-xs uppercase text-muted-foreground">Grows into another item (older way)</Label>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label className="text-xs">Becomes</Label>
@@ -1905,8 +1958,11 @@ export default function ProductsPage() {
               </div>
               <p className="text-[11px] text-muted-foreground">
                 Each intake starts its own batch. When the days are up the count moves onto the grown
-                product by itself — brooder chicks become 4 week broilers, at the broiler price.
+                product by itself. Kept for items already set up this way — new produce should use
+                stages above.
               </p>
+              </>
+              )}
             </div>
             <SharedStoresEditor
               form={productForm}
@@ -1983,6 +2039,31 @@ export default function ProductsPage() {
                         <span className="font-mono text-[10px] truncate" title={v.barcode}>{v.barcode || 'Pending'}</span>
                       )}
                       <button type="button" className="text-destructive text-sm" onClick={() => setProductForm(prev => ({...prev, variants: (prev.variants || []).filter((_, j) => j !== i)}))}>×</button>
+                      {/* Produce stages: how long this stage runs, and what it
+                          becomes. Blank means it does not grow on (iter424). */}
+                      {productForm.is_produce && (
+                        <div className="col-span-5 grid grid-cols-2 gap-2 -mt-1">
+                          <div>
+                            <Label className="text-[10px]">Days at this stage</Label>
+                            <Input className="h-7 text-xs" type="number" min={0} placeholder="28"
+                              value={v.grow_after_days || ''}
+                              onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, grow_after_days: parseInt(e.target.value) || null } : x) }))}
+                              data-testid={`variant-grow-days-${i}`} />
+                          </div>
+                          <div>
+                            <Label className="text-[10px]">Then becomes</Label>
+                            <select className="h-7 w-full text-xs rounded border border-input bg-background px-2"
+                              value={v.grows_into_variant_id || ''}
+                              onChange={e => setProductForm(prev => ({ ...prev, variants: prev.variants.map((x, j) => j === i ? { ...x, grows_into_variant_id: e.target.value || null } : x) }))}
+                              data-testid={`variant-grows-into-${i}`}>
+                              <option value="">The next stage below</option>
+                              {(productForm.variants || []).filter(o => (o.id || '') !== (v.id || '')).map((o, k) => (
+                                <option key={o.id || k} value={o.id || ''}>{o.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
                       {/* Pack & packaging row — collapsed by default */}
                       <details className="col-span-5 -mt-1">
                         <summary className="text-[10px] text-muted-foreground cursor-pointer">Pack size & packaging cost</summary>

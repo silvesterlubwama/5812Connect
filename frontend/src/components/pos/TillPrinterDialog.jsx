@@ -238,6 +238,37 @@ export default function TillPrinterDialog({ open, onOpenChange, storeSettings = 
             </Button>
           )}
 
+          {cfg.connection !== 'none' && (
+            <div className="grid grid-cols-2 gap-3" data-testid="till-cut-settings">
+              <div className="space-y-1">
+                <Label className="text-xs">Cut the paper</Label>
+                <Select value={cfg.cutMode || 'partial'} onValueChange={v => update({ cutMode: v })}>
+                  <SelectTrigger data-testid="till-cut-mode"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="partial">Partial cut (leaves a tab)</SelectItem>
+                    <SelectItem value="full">Cut right through</SelectItem>
+                    <SelectItem value="none">Don't cut — staff tear it off</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Feed before cutting</Label>
+                <Select value={String(cfg.cutFeedLines ?? 4)} onValueChange={v => update({ cutFeedLines: Number(v) })}>
+                  <SelectTrigger data-testid="till-cut-feed"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[0, 2, 3, 4, 5, 6, 8].map(n => (
+                      <SelectItem key={n} value={String(n)}>{n} line{n === 1 ? '' : 's'}{n === 4 ? ' (usual)' : ''}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  The blade sits above the print head. Too few lines and the last words are left
+                  uncut on the next receipt; too many leaves a blank strip.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
               <Label className="text-xs">Paper width</Label>

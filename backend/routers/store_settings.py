@@ -26,6 +26,9 @@ DEFAULTS = {
     "receipt_paper_size": "80mm",
     "receipt_show_logo": True,
     "receipt_show_qr": True,
+    # iter424 — the cashier should not have to press Print: the receipt prints
+    # the moment the sale is taken, and is shown on screen as well.
+    "auto_print_receipt": True,
     "api_integrations": [],
     "currency": "UGX",
     "default_cash_account_id": "",

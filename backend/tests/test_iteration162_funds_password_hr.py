@@ -237,15 +237,23 @@ class TestFundRequestCRUD:
         if ad.status_code not in (200, 201):
             pytest.skip(f"approvals/act route returned {ad.status_code}: {ad.text[:200]} — skipping mark-paid full lifecycle")
 
-        # Now mark-paid should succeed
-        r1 = requests.post(f"{BASE}/api/funds/requests/{rid}/mark-paid", headers=admin_headers, json={"notes": "TEST_iter162"})
+        # Now mark-paid should succeed — the approver names the accounts.
+        coa = requests.get(f"{BASE}/api/finance/chart-of-accounts", headers=admin_headers)
+        accounts = coa.json() if coa.status_code == 200 else []
+        asset = next((a for a in accounts if a.get("type") == "asset"), None)
+        expense = next((a for a in accounts if a.get("type") == "expense"), None)
+        if not asset or not expense:
+            pytest.skip("no chart of accounts seeded — skipping mark-paid lifecycle")
+        pay_body = {"notes": "TEST_iter162", "paid_from_account_id": asset["id"], "expense_account_id": expense["id"]}
+        r1 = requests.post(f"{BASE}/api/funds/requests/{rid}/mark-paid", headers=admin_headers, json=pay_body)
         assert r1.status_code == 200, f"mark-paid failed: {r1.status_code} {r1.text}"
         body1 = r1.json()
         assert body1.get("expense_id"), "no expense_id returned"
+        assert body1.get("voucher_no"), "no voucher number stamped for signing"
         first_exp = body1["expense_id"]
 
         # Idempotent — second call must return same expense_id
-        r2 = requests.post(f"{BASE}/api/funds/requests/{rid}/mark-paid", headers=admin_headers, json={})
+        r2 = requests.post(f"{BASE}/api/funds/requests/{rid}/mark-paid", headers=admin_headers, json=pay_body)
         assert r2.status_code == 200
         assert r2.json().get("expense_id") == first_exp, "mark-paid not idempotent — different expense_id returned!"
 

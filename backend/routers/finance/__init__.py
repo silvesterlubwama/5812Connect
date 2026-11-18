@@ -26,6 +26,7 @@ from .reports_pdf import router as _reports_pdf_router
 from .admin import router as _admin_router
 from .setup import router as _setup_router
 from .assets import router as _assets_router
+from .account_access import router as _account_access_router
 
 router = APIRouter()
 router.include_router(_coa_router)
@@ -40,3 +41,4 @@ router.include_router(_fx_router)
 router.include_router(_reports_pdf_router)
 router.include_router(_admin_router)
 router.include_router(_setup_router)
+router.include_router(_account_access_router)

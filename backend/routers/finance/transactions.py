@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from deps import db, require_staff
 
 from ._common import post_journal_entry, get_account_by_code, _now
+from .account_access import assert_can_use_account
 
 router = APIRouter(prefix="/api/finance/transactions", tags=["finance"])
 
@@ -55,6 +56,8 @@ async def record_expense(data: dict, current_user: dict = Depends(require_staff)
     paid_from = await _resolve_account(data.get("paid_from_account_id"), data.get("paid_from_code") or "1000")
     if paid_from["type"] != "asset":
         raise HTTPException(status_code=400, detail=f"'{paid_from['name']}' is not an asset (cash/bank) account")
+    await assert_can_use_account(current_user, expense_acct)
+    await assert_can_use_account(current_user, paid_from)
 
     je = await post_journal_entry(
         date=data.get("date") or "",
@@ -147,6 +150,8 @@ async def record_income(data: dict, current_user: dict = Depends(require_staff))
     deposit_to = await _resolve_account(data.get("deposited_to_account_id"), data.get("deposited_to_code") or "1010")
     if deposit_to["type"] != "asset":
         raise HTTPException(status_code=400, detail=f"'{deposit_to['name']}' is not an asset (cash/bank) account")
+    await assert_can_use_account(current_user, revenue_acct)
+    await assert_can_use_account(current_user, deposit_to)
 
     je = await post_journal_entry(
         date=data.get("date") or "",

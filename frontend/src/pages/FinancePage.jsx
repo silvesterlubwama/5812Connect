@@ -13,7 +13,8 @@ import { SearchSelect, guardPickerEscape } from '../components/SearchSelect';
 import { VendorPicker } from '../components/VendorPicker';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { toast } from 'sonner';
-import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Upload, Search, X, Pencil, Trash2, Camera, Eye, User } from 'lucide-react';
+import { RefreshCw, Plus, TrendingUp, TrendingDown, DollarSign, Wallet, AlertTriangle, Download, Upload, Search, X, Pencil, Trash2, Camera, Eye, User, ShieldCheck } from 'lucide-react';
+import AccountAccessDialog from '../components/finance/AccountAccessDialog';
 import { useAuth } from '../context/AuthContext';
 import DepartmentPnlTab from '../components/DepartmentPnlTab';
 import { AccountLedgerDialog } from '../components/AccountLedgerDialog';
@@ -601,7 +602,7 @@ function TransferDialog({ open, onClose, onDone }) {
     if (!open) return;
     (async () => {
       const [r, lc] = await Promise.all([
-        api.get('/finance/chart-of-accounts'),
+        api.get('/finance/account-access/mine?with_balances=false').then(r => ({ data: r.data?.accounts || [] })),
         locationsApi.list().catch(() => ({ data: [] })),
       ]);
       setAccounts(r.data || []);
@@ -817,7 +818,7 @@ function QuickPostDialog({ mode, onClose, onDone }) {
     if (!mode) return;
     (async () => {
       const [ac, lc] = await Promise.all([
-        api.get('/finance/chart-of-accounts'),
+        api.get('/finance/account-access/mine?with_balances=false').then(r => ({ data: r.data?.accounts || [] })),
         locationsApi.list().catch(() => ({ data: [] })),
       ]);
       setAccounts(ac.data || []);
@@ -1634,9 +1635,20 @@ function CoaPanel() {
   const [editRow, setEditRow] = useState(null);
   const [obRow, setObRow] = useState(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
   const [obForm, setObForm] = useState({ amount: '', date: todayIso(), memo: '' });
   const [form, setForm] = useState({ code: '', name: '', type: 'expense', bank_subtype: '' });
+  const [restricted, setRestricted] = useState(false);
   const reload = async () => {
+    const mineR = await api.get('/finance/account-access/mine?with_balances=true').catch(() => ({ data: null }));
+    if (mineR.data?.restricted) {
+      // Pinned to specific accounts — show those and their balances, nothing else.
+      setRestricted(true);
+      setRows(mineR.data.accounts || []);
+      setBalances(Object.fromEntries((mineR.data.accounts || []).map(a => [a.id, a.balance || 0])));
+      return;
+    }
+    setRestricted(false);
     const [coaR, tbR] = await Promise.all([
       api.get('/finance/chart-of-accounts?active_only=false'),
       api.get('/finance/reports/trial-balance').catch(() => ({ data: { rows: [] } })),
@@ -1707,8 +1719,12 @@ function CoaPanel() {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">Chart of Accounts</CardTitle>
+        <CardTitle className="text-base">
+          Chart of Accounts
+          {restricted && <span className="ml-2 text-[11px] font-normal text-muted-foreground" data-testid="coa-restricted-note">· your accounts only</span>}
+        </CardTitle>
         <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setAccessOpen(true)} data-testid="coa-access-btn"><ShieldCheck size={14} className="mr-1" />Account access</Button>
           <Button size="sm" variant="outline" onClick={() => setImportOpen(true)} data-testid="coa-import-btn"><Upload size={14} className="mr-1" />Import CSV/XLSX</Button>
           <Button size="sm" onClick={() => setAddOpen(true)} data-testid="coa-add"><Plus size={14} className="mr-1" />Add account</Button>
         </div>
@@ -1839,6 +1855,7 @@ function CoaPanel() {
       </Dialog>
       {/* Bulk import (CSV / XLSX) */}
       <CoaImportDialog open={importOpen} onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); reload(); }} />
+      <AccountAccessDialog open={accessOpen} onOpenChange={setAccessOpen} accounts={rows} />
       {/* Per-account drill-down (iter345) */}
       <AccountLedgerDialog
         accountId={ledgerAcct?.id}

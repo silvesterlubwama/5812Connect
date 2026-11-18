@@ -2716,3 +2716,8 @@ no systemd — the intended graceful path. Tests: 21 in
 #### Still open / next
 - P2: a tray icon so a cashier can see "helper running" without opening 58:12.
 - P2: let one helper serve several shops on the same LAN.
+
+### 2026-11-18 (iter424-425)
+Receipt cutting, variant-aware produce/losses, and welfare + fund-request money
+wired to chosen accounts with per-person account access and signable payment
+vouchers. Full detail in CHANGELOG.md (iter424, iter425).

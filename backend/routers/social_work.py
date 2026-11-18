@@ -31,7 +31,9 @@ portal_router = APIRouter(prefix="/api/school-portal", tags=["school-portal"])
 CASE_CATEGORIES = {"sponsored", "restricted_location", "welfare_support", "multiple"}
 CASE_STATUSES = {"active", "on_hold", "discharged"}
 NOTE_KINDS = {"visit", "counseling", "safeguarding", "milestone", "school", "medical", "other"}
-PAYMENT_KINDS = {"tuition", "resource", "medical", "child_support"}
+PAYMENT_KINDS = {"tuition", "resource", "medical", "child_support", "parent_support"}
+# Money coming IN on a case (everything else is money going out on the child's behalf).
+INBOUND_KINDS = {"child_support", "parent_support"}
 RISK_LEVELS = {"low", "medium", "high", "critical"}
 
 # iter350 — a child usually needs (and receives) SEVERAL kinds of support at
@@ -1315,12 +1317,15 @@ async def revoke_school_portal_password(school_id: str, pw_id: str, current_user
 
 async def _case_payments_summary(case_id: str) -> dict:
     """Total payments per kind for a case."""
-    out = {"tuition": 0.0, "resource": 0.0, "medical": 0.0, "child_support_received": 0.0}
+    out = {"tuition": 0.0, "resource": 0.0, "medical": 0.0,
+           "child_support_received": 0.0, "parent_support_received": 0.0}
     async for p in db.social_child_payments.find({"case_id": case_id}, {"_id": 0}):
         amt = float(p.get("amount") or 0)
         kind = p.get("kind")
         if kind == "child_support":
             out["child_support_received"] += amt
+        elif kind == "parent_support":
+            out["parent_support_received"] += amt
         elif kind in out:
             out[kind] += amt
     # Round to 2dp
@@ -1333,28 +1338,52 @@ async def list_case_payments(case_id: str, current_user: dict = Depends(require_
     return await db.social_child_payments.find({"case_id": case_id}, {"_id": 0}).sort("date", -1).to_list(500)
 
 
+async def _resolve_posting_accounts(data: dict, direction: str, current_user: dict):
+    """The person recording the money says exactly where it lands. No guessing."""
+    from routers.finance.account_access import assert_can_use_account
+    acct_id = (data.get("account_id") or "").strip()
+    money_id = (data.get("money_account_id") or "").strip()
+    if not acct_id or not money_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Choose both accounts: the income or expense account this posts to, and the cash/bank account the money moves through",
+        )
+    acct = await db.finance_chart_of_accounts.find_one({"id": acct_id}, {"_id": 0})
+    money = await db.finance_chart_of_accounts.find_one({"id": money_id}, {"_id": 0})
+    if not acct or not money:
+        raise HTTPException(status_code=400, detail="That account no longer exists — pick another")
+    want = "revenue" if direction == "in" else "expense"
+    if acct.get("type") != want:
+        label = "an income" if want == "revenue" else "an expense"
+        raise HTTPException(status_code=400, detail=f"'{acct['name']}' is not {label} account")
+    if money.get("type") != "asset":
+        raise HTTPException(status_code=400, detail=f"'{money['name']}' is not a cash or bank account")
+    await assert_can_use_account(current_user, acct)
+    await assert_can_use_account(current_user, money)
+    return acct, money
+
+
 @router.post("/cases/{case_id}/payments")
 async def add_case_payment(case_id: str, data: dict, current_user: dict = Depends(require_staff)):
     """Record a payment FOR or FROM a child case.
-    Body: { kind ('tuition'|'resource'|'medical'|'child_support'), amount, currency?, date?,
-            paid_to (school/clinic/etc), notes?, source ('sponsor'|'parent'|'guardian'|'org_fund'|'partner'|'other') }
+    Body: { kind ('tuition'|'resource'|'medical'|'child_support'|'parent_support'), amount,
+            currency?, date?, paid_to (school/clinic/etc), notes?,
+            source ('sponsor'|'parent'|'guardian'|'org_fund'|'partner'|'other'),
+            account_id (income or expense account — REQUIRED),
+            money_account_id (cash/bank account — REQUIRED) }
 
-    iter-sponsor-vs-parent: `source` decides where the money is booked.
-    - `sponsor` (or a `child_support` kind) is an external, sponsor-tracked
-      gift. We still write the mirror row and the JE lands on the campus
-      sponsorship-income account (4000) — the child's campus GL.
-    - `parent` / `guardian` (with kind=child_support) is a family
-      contribution. It's booked to the *child's* campus/sublocation and
-      the JE credits a distinct "Parent Contribution" income account
-      (4005) so reports can separate the two revenue streams. If 4005
-      doesn't exist yet we fall back to 4000 but tag `payer_type` on the
-      JE so a re-classification report can find the row later.
+    The two account ids are compulsory: the books should never guess which
+    account welfare money came out of, and a wrong default is worse than a
+    question. `parent_support` is child support handed over by the family
+    itself; `child_support` is a sponsor's gift. Both come IN, but they are
+    separate support types so the two revenue streams never blur.
 
     Side effects:
-      • Mirror to financial.donations (child_support) or financial.expenses (tuition/resource/medical)
-      • Auto-post a balanced journal entry to accounting, tagged with
+      • Mirror to financial.donations (money in) or financial.expenses (money out)
+      • A balanced journal entry against the two chosen accounts, tagged with
         `payer_type` and the child's campus/sublocation so Dept P&L and
-        campus rollups pick it up automatically."""
+        campus rollups pick it up automatically.
+      • Deleting the payment posts a reversing entry (see delete endpoint)."""
     case = await _scoped_case_or_404(case_id, current_user)
     kind = (data.get("kind") or "").strip().lower()
     if kind not in PAYMENT_KINDS:
@@ -1367,21 +1396,23 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
         raise HTTPException(status_code=400, detail="amount must be positive")
     pay_id = f"scp_{uuid.uuid4().hex[:10]}"
     now_iso = datetime.now(timezone.utc).isoformat()
-    src = (data.get("source") or "org_fund").strip().lower()[:60]
+    src = (data.get("source") or ("parent" if kind == "parent_support" else "org_fund")).strip().lower()[:60]
     # Classify the payer for downstream reporting.
     payer_type = (
-        "parent" if src in ("parent", "guardian", "family") else
+        "parent" if (src in ("parent", "guardian", "family") or kind == "parent_support") else
         "sponsor" if src == "sponsor" else
         "org" if src in ("org_fund", "org", "internal") else
         "external"
     )
+    direction = "in" if kind in INBOUND_KINDS else "out"
+    acct, money_acct = await _resolve_posting_accounts(data, direction, current_user)
     payment = {
         "id": pay_id,
         "case_id": case_id,
         "subject_id": case.get("subject_id"),
         "subject_name": case.get("subject_name"),
         "kind": kind,
-        "direction": "in" if kind == "child_support" else "out",
+        "direction": direction,
         "amount": amount,
         "currency": (data.get("currency") or "UGX").upper()[:5],
         "date": (data.get("date") or now_iso)[:10],
@@ -1389,6 +1420,14 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
         "source": src,
         "payer_type": payer_type,
         "notes": (data.get("notes") or "")[:500],
+        # The accounts the person chose — shown back on the payment row so
+        # anyone reviewing the case can see where it hit the books.
+        "account_id": acct["id"],
+        "account_code": acct["code"],
+        "account_name": acct["name"],
+        "money_account_id": money_acct["id"],
+        "money_account_code": money_acct["code"],
+        "money_account_name": money_acct["name"],
         # Book against the child's campus AND sublocation so campus GL /
         # sublocation P&L both catch the entry.
         "location_id": case.get("location_id"),
@@ -1399,7 +1438,7 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
     }
     # Mirror into the existing financial collections so the Finance page shows it too.
     try:
-        if kind == "child_support":
+        if direction == "in":
             mirror = {
                 "id": f"don_{uuid.uuid4().hex[:8]}",
                 "donor_name": data.get("source_name") or (payer_type.title() + " contribution"),
@@ -1410,6 +1449,8 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
                 "notes": f"{payer_type.title()} contribution for {case.get('subject_name')} [{case_id}]: {payment.get('notes','')}".strip(),
                 "location_id": payment["location_id"],
                 "sublocation_id": payment.get("sublocation_id"),
+                "account_id": acct["id"],
+                "account_code": acct["code"],
                 "created_at": now_iso,
                 "created_by": current_user["id"],
                 "entered_by": current_user.get("name", ""),
@@ -1442,6 +1483,8 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
                 "notes": (payment.get("notes") or "") + f" [case: {case_id}]",
                 "location_id": payment["location_id"],
                 "sublocation_id": payment.get("sublocation_id"),
+                "account_id": acct["id"],
+                "account_code": acct["code"],
                 "status": "approved",
                 "approved_by": current_user["id"],
                 "approved_by_name": current_user.get("name", ""),
@@ -1457,53 +1500,46 @@ async def add_case_payment(case_id: str, data: dict, current_user: dict = Depend
             payment["mirror_collection"] = "expenses"
     except Exception as e:
         logger.error(f"Social-work payment mirror failed: {e}")
-    try:
-        from routers.finance._common import post_journal_entry, get_account_by_code
-        if kind == "child_support":
-            # Parent contributions ideally hit 4005 "Parent Contributions
-            # Income" — fall back to 4000 "Sponsorship Income" if the
-            # account hasn't been created yet.
-            if payer_type == "parent":
-                revenue = await get_account_by_code("4005") or await get_account_by_code("4000")
-            else:
-                revenue = await get_account_by_code("4000")
-            bank = await get_account_by_code("1010")
-            if revenue and bank:
-                await post_journal_entry(
-                    date=payment["date"],
-                    description=f"{payer_type.title()} contribution — {case.get('subject_name') or ''}"[:280],
-                    lines=[
-                        {"account_id": bank["id"], "account_code": bank["code"], "account_name": bank["name"], "debit": amount, "credit": 0, "memo": f"{payer_type} contribution"},
-                        {"account_id": revenue["id"], "account_code": revenue["code"], "account_name": revenue["name"], "debit": 0, "credit": amount, "memo": f"{payer_type} contribution"},
-                    ],
-                    source="social_donation" if payer_type == "sponsor" else "parent_contribution",
-                    reference=pay_id,
-                    location_id=case.get("location_id"),
-                    created_by=current_user["id"],
-                    created_by_name=current_user.get("name"),
-                    idempotency_key=f"social_payment:{pay_id}",
-                )
-        else:
-            expense_code = {"tuition": "5300", "medical": "5300", "resource": "5300"}.get(kind, "5900")
-            expense_acct = await get_account_by_code(expense_code)
-            cash = await get_account_by_code("1000")
-            if expense_acct and cash:
-                await post_journal_entry(
-                    date=payment["date"],
-                    description=f"{kind.title()} for {case.get('subject_name') or ''}"[:280],
-                    lines=[
-                        {"account_id": expense_acct["id"], "account_code": expense_acct["code"], "account_name": expense_acct["name"], "debit": amount, "credit": 0},
-                        {"account_id": cash["id"], "account_code": cash["code"], "account_name": cash["name"], "debit": 0, "credit": amount},
-                    ],
-                    source="social_expense",
-                    reference=pay_id,
-                    location_id=case.get("location_id"),
-                    created_by=current_user["id"],
-                    created_by_name=current_user.get("name"),
-                    idempotency_key=f"social_payment:{pay_id}",
-                )
-    except Exception as e:
-        logger.warning(f"Social-work payment new-ledger post skipped: {e}")
+    # The ledger post is NOT best-effort: if the books can't take it, the
+    # payment doesn't exist. Silent skips are how welfare money went missing.
+    from routers.finance._common import post_journal_entry
+    kind_label = kind.replace("_", " ").title()
+    if direction == "in":
+        je = await post_journal_entry(
+            date=payment["date"],
+            description=f"{kind_label} — {case.get('subject_name') or ''}"[:280],
+            lines=[
+                {"account_id": money_acct["id"], "account_code": money_acct["code"], "account_name": money_acct["name"],
+                 "debit": amount, "credit": 0, "memo": f"{payer_type} contribution received"},
+                {"account_id": acct["id"], "account_code": acct["code"], "account_name": acct["name"],
+                 "debit": 0, "credit": amount, "memo": f"{payer_type} contribution"},
+            ],
+            source="parent_contribution" if payer_type == "parent" else "social_donation",
+            reference=pay_id,
+            location_id=case.get("location_id"),
+            created_by=current_user["id"],
+            created_by_name=current_user.get("name"),
+            idempotency_key=f"social_payment:{pay_id}",
+        )
+    else:
+        je = await post_journal_entry(
+            date=payment["date"],
+            description=f"{kind_label} for {case.get('subject_name') or ''}"[:280],
+            lines=[
+                {"account_id": acct["id"], "account_code": acct["code"], "account_name": acct["name"],
+                 "debit": amount, "credit": 0, "memo": payment.get("paid_to") or kind_label},
+                {"account_id": money_acct["id"], "account_code": money_acct["code"], "account_name": money_acct["name"],
+                 "debit": 0, "credit": amount, "memo": f"Paid from {money_acct['name']}"},
+            ],
+            source="social_expense",
+            reference=pay_id,
+            location_id=case.get("location_id"),
+            created_by=current_user["id"],
+            created_by_name=current_user.get("name"),
+            idempotency_key=f"social_payment:{pay_id}",
+        )
+    payment["journal_entry_id"] = je.get("id")
+    payment["posted"] = True
     await db.social_child_payments.insert_one(payment)
     payment.pop("_id", None)
     await _audit(current_user["id"], "create", "social_payment", pay_id, {"case": case_id, "kind": kind, "amount": amount})
@@ -1535,11 +1571,25 @@ async def delete_case_payment(case_id: str, payment_id: str, current_user: dict 
         await db.donations.delete_one({"id": p["mirror_id"]})
     elif p.get("mirror_collection") == "expenses" and p.get("mirror_id"):
         await db.expenses.delete_one({"id": p["mirror_id"]})
-    # Note: we don't auto-reverse the journal entry — leave it for the books.
-    # A finance admin can post a reversal manually via /accounting/entries/{id}/reverse.
+    # The original entry stays for the audit trail; a matching reversal
+    # cancels it out so the books agree with the case file.
+    reversed_je = None
+    if p.get("journal_entry_id"):
+        try:
+            from routers.finance._common import reverse_journal_entry
+            rev = await reverse_journal_entry(
+                p["journal_entry_id"],
+                reason=f"Case payment deleted by {current_user.get('name') or current_user['id']}",
+                current_user=current_user,
+            )
+            reversed_je = (rev or {}).get("id") if isinstance(rev, dict) else None
+        except Exception as e:
+            logger.error(f"Reversal for social payment {payment_id} failed: {e}")
+            raise HTTPException(status_code=400, detail=f"Could not reverse the ledger entry — nothing deleted: {e}")
     await db.social_child_payments.delete_one({"id": payment_id})
-    await _audit(current_user["id"], "delete", "social_payment", payment_id, {"reason": "user-initiated"})
-    return {"deleted": True, "ledger_reversal_required": True}
+    await _audit(current_user["id"], "delete", "social_payment", payment_id, {"reason": "user-initiated", "reversal_je": reversed_je})
+    return {"deleted": True, "reversal_journal_entry_id": reversed_je,
+            "ledger_reversal_required": not bool(p.get("journal_entry_id"))}
 
 
 @router.get("/payments/summary")

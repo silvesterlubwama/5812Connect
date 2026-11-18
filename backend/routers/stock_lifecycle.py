@@ -51,6 +51,8 @@ class LossCreate(BaseModel):
 class BatchCreate(BaseModel):
     product_id: str
     qty: float
+    variant_id: Optional[str] = None   # which stage of a produce item came in
+    add_stock: bool = False            # produce intake books the stock in too
     location_id: Optional[str] = None
     received_at: Optional[str] = None
     note: Optional[str] = ""
@@ -61,7 +63,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _unit_value(product: dict, store_id: str) -> float:
+def _unit_value(product: dict, store_id: str, variant: dict = None) -> float:
+    """What one unit was worth. A variant's own price wins: a 4-week broiler and
+    a day-old chick are not the same loss (iter424)."""
+    if variant and variant.get("price") not in (None, ""):
+        try:
+            return float(variant["price"])
+        except (TypeError, ValueError):
+            pass
     prices = product.get("store_prices") or {}
     if store_id and prices.get(store_id) not in (None, ""):
         try:
@@ -80,28 +89,31 @@ async def _next_slip_number(prefix: str) -> str:
     return f"{prefix}-{stamp}-{seq + 1:04d}"
 
 
-async def _take_from_batches(product_id: str, store_id: str, qty: float, note: str) -> list:
-    """Oldest batch first, so a loss comes off the birds that have been here longest."""
-    taken, left = [], qty
-    cursor = db.stock_batches.find(
-        {"product_id": product_id, "status": "growing", "remaining": {"$gt": 0},
-         **({"location_id": store_id} if store_id else {})},
-        {"_id": 0},
-    ).sort("received_at", 1)
-    async for batch in cursor:
-        if left <= 0:
-            break
-        use = min(float(batch.get("remaining") or 0), left)
-        if use <= 0:
-            continue
-        left -= use
-        await db.stock_batches.update_one(
-            {"id": batch["id"]},
-            {"$inc": {"remaining": -use, "lost": use},
-             "$push": {"events": {"at": _now(), "qty": use, "what": note}}},
-        )
-        taken.append({"batch_id": batch["id"], "qty": use})
-    return taken
+async def _take_from_batch(batch_id: str, qty: float, note: str) -> list:
+    """Take the loss off the batch the user named. Guessing which batch lost a
+    bird is how a weak hatchery run ends up looking clean (iter424)."""
+    batch = await db.stock_batches.find_one({"id": batch_id}, {"_id": 0})
+    if not batch:
+        raise HTTPException(status_code=404, detail="That batch no longer exists")
+    if float(batch.get("remaining") or 0) < qty:
+        raise HTTPException(status_code=400,
+                            detail=f"That batch only has {float(batch.get('remaining') or 0):g} left")
+    await db.stock_batches.update_one(
+        {"id": batch_id},
+        {"$inc": {"remaining": -qty, "lost": qty},
+         "$push": {"events": {"at": _now(), "qty": qty, "what": note}}})
+    return [{"batch_id": batch_id, "qty": qty,
+             "received_at": batch.get("received_at"), "supplier": batch.get("supplier")}]
+
+
+async def open_batches_for(product_id: str, store_id: str, variant_id: str = None) -> list:
+    """Batches still carrying stock, for the shop to choose from."""
+    query: dict = {"product_id": product_id, "status": "growing", "remaining": {"$gt": 0}}
+    if store_id:
+        query["location_id"] = store_id
+    if variant_id:
+        query["variant_id"] = variant_id
+    return await db.stock_batches.find(query, {"_id": 0}).sort("received_at", 1).to_list(100)
 
 
 # ============================== LOSSES ==============================
@@ -140,15 +152,35 @@ async def record_stock_loss(data: LossCreate, current_user: dict = Depends(requi
     if is_shared(product) and not store_id:
         raise HTTPException(status_code=400, detail="Say which store the stock was lost at")
 
-    if data.variant_id:
-        variant = next((v for v in (product.get("variants") or []) if v.get("id") == data.variant_id), None)
+    # An item kept as variants has no single pile of stock to take from, so the
+    # shop has to say which one was lost (iter424).
+    variant = None
+    if product.get("variants"):
+        if not data.variant_id:
+            raise HTTPException(status_code=400,
+                                detail=f"Which {product.get('name')} was lost? Pick the variant")
+        variant = next((v for v in product["variants"] if v.get("id") == data.variant_id), None)
         if not variant:
             raise HTTPException(status_code=404, detail="Variant not found")
         before = float(variant.get("stock") or 0)
+    elif data.variant_id:
+        raise HTTPException(status_code=400, detail="This item is not kept as variants")
     else:
         before = float(stock_at(product, store_id))
     if before < qty:
-        raise HTTPException(status_code=400, detail=f"Only {before:g} of {product.get('name')} on hand here")
+        what = f"{product.get('name')} — {variant['name']}" if variant else product.get("name")
+        raise HTTPException(status_code=400, detail=f"Only {before:g} of {what} on hand here")
+
+    note = f"{LOSS_REASONS[data.reason]} ({qty:g})"
+    open_batches = await open_batches_for(product["id"], store_id, data.variant_id)
+    if open_batches and not data.batch_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Say which batch the loss came from — otherwise a weak run looks clean")
+    if data.batch_id:
+        batches = await _take_from_batch(data.batch_id, qty, note)
+    else:
+        batches = []
 
     if data.variant_id:
         await db.products.update_one({"id": product["id"], "variants.id": data.variant_id},
@@ -160,10 +192,7 @@ async def record_stock_loss(data: LossCreate, current_user: dict = Depends(requi
         await db.products.update_one({"id": product["id"]},
                                      {"$inc": {stock_field(product, store_id): -qty}})
 
-    batches = await _take_from_batches(product["id"], store_id, qty,
-                                       f"{LOSS_REASONS[data.reason]} ({qty:g})")
-
-    unit_value = _unit_value(product, store_id)
+    unit_value = _unit_value(product, store_id, variant)
     value = round(unit_value * qty, 2)
     donation = data.reason == "donated"
     slip = await _next_slip_number("DON" if donation else "LOSS")
@@ -425,6 +454,37 @@ async def loss_report(start: Optional[str] = None, end: Optional[str] = None,
 
 # ============================== BATCHES ==============================
 
+def _stage_rule(product: dict, variant_id: str) -> Optional[dict]:
+    """How a produce stage grows into the next one (iter424).
+
+    A produce item keeps its own life stages as variants — Day-old chicks,
+    4 Week Broilers — in order. A stage says how many days it runs for; what it
+    becomes is the next stage down the list unless it names one. Nothing moves
+    between products any more, so there is one item, one set of batches and one
+    place to look.
+    """
+    variants = product.get("variants") or []
+    current = next((v for v in variants if v.get("id") == variant_id), None)
+    if not current:
+        return None
+    try:
+        days = int(current.get("grow_after_days") or 0)
+    except (TypeError, ValueError):
+        return None
+    if days <= 0:
+        return None
+    nxt = None
+    if current.get("grows_into_variant_id"):
+        nxt = next((v for v in variants if v.get("id") == current["grows_into_variant_id"]), None)
+    if not nxt:
+        order = [v.get("id") for v in variants]
+        at = order.index(variant_id)
+        nxt = variants[at + 1] if at + 1 < len(variants) else None
+    if not nxt:
+        return None
+    return {"to_variant": nxt["id"], "to_variant_name": nxt.get("name"), "days": days}
+
+
 def _grow_rule(product: dict) -> Optional[dict]:
     target = product.get("grows_into_product_id")
     days = product.get("grow_after_days")
@@ -478,12 +538,27 @@ async def create_batch(data: BatchCreate, current_user: dict = Depends(require_s
     product = await db.products.find_one({"id": data.product_id}, {"_id": 0})
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
-    rule = _grow_rule(product)
-    if not rule:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{product.get('name')} has no growing-on rule — set what it becomes, and after how long, on the product first",
-        )
+    variant = None
+    stage = None
+    if product.get("is_produce"):
+        if not data.variant_id:
+            raise HTTPException(status_code=400, detail="Which stage came in? Pick the variant")
+        variant = next((v for v in (product.get("variants") or []) if v.get("id") == data.variant_id), None)
+        if not variant:
+            raise HTTPException(status_code=404, detail="That stage is not on this item")
+        stage = _stage_rule(product, data.variant_id)
+        if not stage:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{variant.get('name')} has no stage to grow into — set its days and the stage after it")
+        rule = {"to": product["id"], "days": stage["days"]}
+    else:
+        rule = _grow_rule(product)
+        if not rule:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{product.get('name')} has no growing-on rule — set what it becomes, and after how long, on the product first",
+            )
     store_id = (data.location_id or current_user.get("active_campus_id")
                 or current_user.get("location_id") or product.get("location_id") or "")
     received = (data.received_at or _now())[:19]
@@ -508,6 +583,12 @@ async def create_batch(data: BatchCreate, current_user: dict = Depends(require_s
         "matures_at": (received_dt + timedelta(days=rule["days"])).isoformat(),
         "becomes_product_id": rule["to"],
         "becomes_product_name": (target or {}).get("name"),
+        # Produce grows through its own stages, so the batch carries the stage
+        # it is at and the one it becomes (iter424).
+        "variant_id": data.variant_id or None,
+        "variant_name": (variant or {}).get("name"),
+        "becomes_variant_id": (stage or {}).get("to_variant"),
+        "becomes_variant_name": (stage or {}).get("to_variant_name"),
         "grow_after_days": rule["days"],
         "note": (data.note or "").strip()[:300],
         "supplier": (data.supplier or "").strip()[:120] or None,
@@ -517,8 +598,25 @@ async def create_batch(data: BatchCreate, current_user: dict = Depends(require_s
         "created_by_name": current_user.get("name", ""),
     }
     await db.stock_batches.insert_one(dict(batch))
-    return {"message": f"{qty:g} {product.get('name')} will become {batch['becomes_product_name']} "
-                       f"on {batch['matures_at'][:10]}",
+    # Booking a produce intake IS the stock entry: the shop should not have to
+    # add stock and then start a batch over it (iter424).
+    if data.add_stock and data.variant_id:
+        await db.products.update_one({"id": product["id"], "variants.id": data.variant_id},
+                                     {"$inc": {"variants.$.stock": qty}})
+        fresh = await db.products.find_one({"id": product["id"]}, {"_id": 0, "variants": 1})
+        await db.products.update_one({"id": product["id"]}, {"$set": {
+            "stock": sum(float(v.get("stock") or 0) for v in (fresh.get("variants") or []))}})
+        await db.stock_movements.insert_one({
+            "id": f"mov_{uuid.uuid4().hex[:10]}", "product_id": product["id"],
+            "product_name": product.get("name"), "variant_id": data.variant_id,
+            "delta": qty, "reason": "purchase", "location_id": store_id,
+            "notes": f"Batch intake — {(variant or {}).get('name')}",
+            "supplier": batch["supplier"], "reference": batch["id"],
+            "created_at": _now(), "created_by": current_user["id"],
+            "created_by_name": current_user.get("name", "")})
+    becomes = batch.get("becomes_variant_name") or batch["becomes_product_name"]
+    return {"message": f"{qty:g} {(variant or {}).get('name') or product.get('name')} "
+                       f"will become {becomes} on {batch['matures_at'][:10]}",
             "batch": batch}
 
 
@@ -527,6 +625,8 @@ async def mature_batch(batch: dict, actor: Optional[dict] = None, qty_override: 
     changes. Anything that died on the way is recorded against the batch, never
     silently dropped."""
     qty = float(qty_override if qty_override is not None else (batch.get("remaining") or 0))
+    if batch.get("variant_id"):
+        return await _mature_stage(batch, qty, actor)
     source = await db.products.find_one({"id": batch["product_id"]}, {"_id": 0})
     target = await db.products.find_one({"id": batch.get("becomes_product_id")}, {"_id": 0})
     if not source or not target:
@@ -599,6 +699,91 @@ async def mature_batch(batch: dict, actor: Optional[dict] = None, qty_override: 
     return {"ok": True, "qty": moved, "batch_id": batch["id"], "transformation": record["id"]}
 
 
+async def _mature_stage(batch: dict, qty: float, actor: Optional[dict] = None) -> dict:
+    """A produce batch grows through its OWN stages: the same item, the next
+    variant, so a batch of chicks simply becomes a batch of broilers and keeps
+    its history, its supplier and its losses (iter424)."""
+    product = await db.products.find_one({"id": batch["product_id"]}, {"_id": 0})
+    if not product:
+        await db.stock_batches.update_one({"id": batch["id"]}, {"$set": {
+            "status": "blocked", "blocked_reason": "That produce item no longer exists"}})
+        return {"ok": False, "reason": "missing_product", "batch_id": batch["id"]}
+    variants = product.get("variants") or []
+    at = next((v for v in variants if v.get("id") == batch["variant_id"]), None)
+    to = next((v for v in variants if v.get("id") == batch.get("becomes_variant_id")), None)
+    if not at or not to:
+        await db.stock_batches.update_one({"id": batch["id"]}, {"$set": {
+            "status": "blocked", "blocked_reason": "The stage it should become is no longer on this item"}})
+        return {"ok": False, "reason": "missing_stage", "batch_id": batch["id"]}
+    if qty <= 0:
+        await db.stock_batches.update_one({"id": batch["id"]}, {"$set": {
+            "status": "matured", "matured_at": _now()}})
+        return {"ok": True, "qty": 0, "batch_id": batch["id"]}
+
+    store_id = batch.get("location_id") or ""
+    moved = min(qty, float(at.get("stock") or 0))
+    if moved <= 0:
+        await db.stock_batches.update_one({"id": batch["id"]}, {"$set": {
+            "status": "blocked", "blocked_reason": f"No {at.get('name')} left to grow on"}})
+        return {"ok": False, "reason": "no_stock", "batch_id": batch["id"]}
+
+    await db.products.update_one({"id": product["id"], "variants.id": at["id"]},
+                                 {"$inc": {"variants.$.stock": -moved}})
+    await db.products.update_one({"id": product["id"], "variants.id": to["id"]},
+                                 {"$inc": {"variants.$.stock": moved}})
+
+    now = _now()
+    record = {
+        "id": f"grow_{uuid.uuid4().hex[:10]}",
+        "batch_id": batch["id"],
+        "from_product_id": product["id"], "from_product_name": f"{product.get('name')} — {at.get('name')}",
+        "to_product_id": product["id"], "to_product_name": f"{product.get('name')} — {to.get('name')}",
+        "from_variant_id": at["id"], "to_variant_id": to["id"],
+        "qty": moved,
+        "location_id": store_id,
+        "from_value": round(_unit_value(product, store_id, at) * moved, 2),
+        "to_value": round(_unit_value(product, store_id, to) * moved, 2),
+        "lost_on_the_way": float(batch.get("lost") or 0),
+        "needs_loss_check": True,
+        "created_at": now,
+        "created_by": (actor or {}).get("id", "cron"),
+        "created_by_name": (actor or {}).get("name", "Automatic"),
+    }
+    await db.stock_transformations.insert_one(dict(record))
+    await db.stock_movements.insert_one({
+        "id": f"sm_{uuid.uuid4().hex[:10]}",
+        "product_id": product["id"], "product_name": product.get("name"),
+        "variant_id": to["id"], "delta": 0, "reason": "adjustment",
+        "notes": f"Grew on: {at.get('name')} → {to.get('name')} ({moved:g})",
+        "reference": batch["id"], "location_id": store_id, "created_at": now,
+        "created_by": record["created_by"], "created_by_name": record["created_by_name"],
+    })
+
+    # The batch follows the birds: same batch, next stage, clock reset. Its
+    # supplier and its deaths stay with it, which is what the mortality chart
+    # and the run comparison read.
+    nxt = _stage_rule(product, to["id"])
+    if nxt:
+        await db.stock_batches.update_one({"id": batch["id"]}, {"$set": {
+            "variant_id": to["id"], "variant_name": to.get("name"),
+            "becomes_variant_id": nxt["to_variant"], "becomes_variant_name": nxt["to_variant_name"],
+            "grow_after_days": nxt["days"], "remaining": moved,
+            "matures_at": (datetime.now(timezone.utc) + timedelta(days=nxt["days"])).isoformat(),
+            "transformation_id": record["id"],
+        }, "$push": {"events": {"at": now, "qty": moved,
+                                "what": f"Grew on to {to.get('name')}"}}})
+    else:
+        await db.stock_batches.update_one({"id": batch["id"]}, {"$set": {
+            "variant_id": to["id"], "variant_name": to.get("name"),
+            "becomes_variant_id": None, "becomes_variant_name": None,
+            "status": "matured", "matured_at": now, "matured_qty": moved,
+            "transformation_id": record["id"],
+        }, "$push": {"events": {"at": now, "qty": moved,
+                                "what": f"Grew on to {to.get('name')} — final stage"}}})
+    return {"ok": True, "qty": moved, "batch_id": batch["id"], "transformation": record["id"],
+            "stage": to.get("name")}
+
+
 async def _mortality_rows(batches: list, weeks: int = 8) -> list:
     """One row per batch: what came in, what died, in which week of its life.
 
@@ -634,7 +819,8 @@ async def _mortality_rows(batches: list, weeks: int = 8) -> list:
         rows.append({
             "batch_id": batch["id"],
             "product_name": batch.get("product_name"),
-            "becomes_product_name": batch.get("becomes_product_name"),
+            "variant_name": batch.get("variant_name"),
+            "becomes_product_name": batch.get("becomes_variant_name") or batch.get("becomes_product_name"),
             "supplier": batch.get("supplier"),
             "received_at": batch.get("received_at"),
             "status": batch.get("status"),
@@ -772,10 +958,14 @@ async def mature_batch_now(batch_id: str, data: dict = None, current_user: dict 
     if not res.get("ok"):
         raise HTTPException(status_code=400, detail={
             "missing_product": "The product it should become no longer exists",
+            "missing_stage": "The stage it should become is no longer on this item",
             "no_stock": "There is none of it left at this store to grow on",
         }.get(res.get("reason"), "Could not grow this batch on"))
-    return {"message": f"{res['qty']:g} {batch.get('product_name')} became "
-                       f"{batch.get('becomes_product_name')}", **res}
+    # Produce moves between stages of one item, so the stage names are what the
+    # farm wants to read — not the item's name twice (iter424).
+    was = batch.get("variant_name") or batch.get("product_name")
+    now_is = res.get("stage") or batch.get("becomes_variant_name") or batch.get("becomes_product_name")
+    return {"message": f"{res['qty']:g} {was} became {now_is}", **res}
 
 
 @router.get("/stock-transformations")

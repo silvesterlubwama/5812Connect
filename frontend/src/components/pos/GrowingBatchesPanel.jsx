@@ -4,6 +4,7 @@ import { Badge } from '../ui/badge';
 import { Input } from '../ui/input';
 import { Egg, ArrowRight, Check, Activity, GitCompare } from 'lucide-react';
 import { MortalityChartDialog } from './MortalityChartDialog';
+import { BatchIntakeDialog } from './BatchIntakeDialog';
 import { BatchCompareDialog } from './BatchCompareDialog';
 import { toast } from 'sonner';
 import { stockApi } from '../../services/api';
@@ -13,12 +14,13 @@ import { stockApi } from '../../services/api';
  * product when its weeks are up. The move happens by itself overnight; this
  * panel is where the farm watches it coming and records any deaths.
  */
-export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, refreshKey }) => {
+export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, refreshKey, products = [] }) => {
   const [batches, setBatches] = useState([]);
   const [recent, setRecent] = useState([]);
   const [busy, setBusy] = useState('');
   const [showMortality, setShowMortality] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
+  const [showIntake, setShowIntake] = useState(false);
   const [namingSupplier, setNamingSupplier] = useState(null);   // batch id
   const [supplierDraft, setSupplierDraft] = useState('');
 
@@ -58,7 +60,8 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
     } catch (e) { toast.error(e.response?.data?.detail || 'Could not save that'); }
   };
 
-  if (!batches.length && !recent.length) return null;
+  const hasProduce = products.some(p => p.is_produce && (p.variants || []).length);
+  if (!batches.length && !recent.length && !hasProduce) return null;
   const money = (n) => `${currency} ${Number(n || 0).toLocaleString()}`;
 
   return (
@@ -67,7 +70,13 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
         <Egg size={16} className="text-amber-600" />
         <h3 className="text-base font-semibold">Growing on</h3>
         <Badge variant="secondary" data-testid="growing-count">{batches.length}</Badge>
-        <Button size="sm" variant="outline" className="ml-auto h-7 gap-1 text-xs"
+        {hasProduce && (
+          <Button size="sm" className="ml-auto h-7 gap-1 text-xs"
+                  onClick={() => setShowIntake(true)} data-testid="batch-intake-btn">
+            <Egg size={12} /> Book in a batch
+          </Button>
+        )}
+        <Button size="sm" variant="outline" className={`${hasProduce ? '' : 'ml-auto '}h-7 gap-1 text-xs`}
                 onClick={() => setShowCompare(true)} data-testid="batch-compare-btn">
           <GitCompare size={12} /> Compare runs
         </Button>
@@ -78,6 +87,8 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
       </div>
       <MortalityChartDialog open={showMortality} onOpenChange={setShowMortality} locationId={locationId} />
       <BatchCompareDialog open={showCompare} onOpenChange={setShowCompare} locationId={locationId} />
+      <BatchIntakeDialog open={showIntake} onOpenChange={setShowIntake} products={products}
+                         locationId={locationId} onDone={() => { load(); onChanged?.(); }} />
 
       {recent.map(t => (
         <div key={t.id} className="flex items-start justify-between gap-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 px-3 py-2"
@@ -100,7 +111,10 @@ export const GrowingBatchesPanel = ({ locationId, currency = 'UGX', onChanged, r
              data-testid={`batch-${b.id}`}>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium truncate">
-              {b.remaining} {b.product_name} <ArrowRight size={12} className="inline mx-1" /> {b.becomes_product_name}
+              {b.remaining} {b.variant_name ? `${b.product_name} — ${b.variant_name}` : b.product_name}
+              {(b.becomes_variant_name || b.becomes_product_name) && (
+                <><ArrowRight size={12} className="inline mx-1" />{b.becomes_variant_name || b.becomes_product_name}</>
+              )}
             </p>
             <p className="text-xs text-muted-foreground">
               in since {String(b.received_at).slice(0, 10)} ·{' '}

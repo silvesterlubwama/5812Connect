@@ -28,19 +28,43 @@ export const RecordLossDialog = ({ product, locationId, open, onOpenChange, curr
   const [donatedTo, setDonatedTo] = useState('');
   const [staff, setStaff] = useState([]);
   const [busy, setBusy] = useState(false);
+  // A loss has to come off something real: which variant, and which batch
+  // (iter424). Guessing is how a weak hatchery run ends up looking clean.
+  const [variantId, setVariantId] = useState('');
+  const [batchId, setBatchId] = useState('');
+  const [batches, setBatches] = useState([]);
+  const variants = product?.variants || [];
+  const variant = variants.find(v => v.id === variantId) || null;
 
   useEffect(() => {
     if (!open) return;
     setQty(''); setReason('spoiled'); setNote(''); setEmployeeId(''); setDonatedTo('');
-  }, [open]);
+    setVariantId(variants.length === 1 ? variants[0].id : '');
+    setBatchId(''); setBatches([]);
+  }, [open]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!open || !product?.id) return;
+    if (variants.length && !variantId) { setBatches([]); return; }
+    stockApi.batches({ location_id: locationId || undefined, product_id: product.id, status: 'growing' })
+      .then(r => {
+        const rows = (r.data || []).filter(b => !variantId || b.variant_id === variantId);
+        setBatches(rows);
+        setBatchId(rows.length === 1 ? rows[0].id : '');
+      })
+      .catch(() => setBatches([]));
+  }, [open, product?.id, variantId, locationId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (reason !== 'negligence' || staff.length) return;
     chatApi.users().then(r => setStaff(r.data || [])).catch(() => setStaff([]));
   }, [reason, staff.length]);
 
-  const onHand = Number(product?.stock ?? 0);
-  const unit = Number(product?.price || 0);
+  // Variants carry their own count and their own price — the parent's figures
+  // are only a total and would value the loss wrongly (iter424).
+  const onHand = variant ? Number(variant.stock ?? 0)
+    : (batchId ? Number(batches.find(b => b.id === batchId)?.remaining ?? 0) : Number(product?.stock ?? 0));
+  const unit = Number((variant?.price ?? product?.price) || 0);
   const value = (Number(qty) || 0) * unit;
   const money = (n) => `${currency} ${Number(n || 0).toLocaleString()}`;
 
@@ -50,10 +74,13 @@ export const RecordLossDialog = ({ product, locationId, open, onOpenChange, curr
     if (n > onHand) { toast.error(`Only ${onHand} on hand here`); return; }
     if (reason === 'negligence' && !employeeId) { toast.error('Say whose negligence it was'); return; }
     if (reason === 'donated' && !donatedTo.trim()) { toast.error('Say who it was donated to'); return; }
+    if (variants.length && !variantId) { toast.error('Pick which one was lost'); return; }
+    if (batches.length && !batchId) { toast.error('Pick which batch it came from'); return; }
     setBusy(true);
     try {
       const res = await stockApi.recordLoss({
         product_id: product.id, qty: n, reason, location_id: locationId || undefined,
+        variant_id: variantId || undefined, batch_id: batchId || undefined,
         note: note.trim(), employee_id: employeeId || undefined,
         donated_to: donatedTo.trim() || undefined,
       });
@@ -74,8 +101,45 @@ export const RecordLossDialog = ({ product, locationId, open, onOpenChange, curr
           </DialogTitle>
         </DialogHeader>
 
+        {!!variants.length && (
+          <div className="space-y-1">
+            <Label className="text-xs">Which one?</Label>
+            <Select value={variantId} onValueChange={(v) => { setVariantId(v); setBatchId(''); }}>
+              <SelectTrigger data-testid="loss-variant-select"><SelectValue placeholder="Pick the variant" /></SelectTrigger>
+              <SelectContent>
+                {variants.map(v => (
+                  <SelectItem key={v.id} value={v.id}>
+                    {v.name} — {Number(v.stock || 0)} on hand @ {money(v.price)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
+        {!!batches.length && (
+          <div className="space-y-1">
+            <Label className="text-xs">Which batch?</Label>
+            <Select value={batchId} onValueChange={setBatchId}>
+              <SelectTrigger data-testid="loss-batch-select"><SelectValue placeholder="Pick the batch" /></SelectTrigger>
+              <SelectContent>
+                {batches.map(b => (
+                  <SelectItem key={b.id} value={b.id}>
+                    In {String(b.received_at).slice(0, 10)}
+                    {b.supplier ? ` · ${b.supplier}` : ''} — {Number(b.remaining || 0)} left
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">
+              The loss comes off this batch, so its mortality is its own.
+            </p>
+          </div>
+        )}
+
         <p className="text-sm text-muted-foreground">
-          <span className="font-semibold text-foreground" data-testid="loss-on-hand">{onHand}</span> on hand at this store.
+          <span className="font-semibold text-foreground" data-testid="loss-on-hand">{onHand}</span>
+          {variant ? ` ${variant.name}` : ''} on hand at this store.
           A slip prints for the file.
         </p>
 

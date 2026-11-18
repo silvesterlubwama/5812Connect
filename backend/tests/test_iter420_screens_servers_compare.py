@@ -72,9 +72,15 @@ def shop():
     _run(_rm())
 
 
-def _loss(qty, reason="negligence", note=""):
+def _loss(qty, reason="negligence", note="", batch_id=None):
     set_current_org(GLOBAL_ORG)
+    # iter424 — the loss names its batch; these tests take the oldest open one,
+    # which is the run they are measuring.
+    if not batch_id:
+        open_batches = _run(life.open_batches_for(CHICKS, SHOP))
+        batch_id = open_batches[0]["id"] if open_batches else None
     body = life.LossCreate(product_id=CHICKS, qty=qty, reason=reason, location_id=SHOP, note=note,
+                           batch_id=batch_id,
                            employee_id=STAFF if reason == "negligence" else None)
     return _run(life.record_stock_loss(body, _user(role="Staff")))
 

@@ -40,7 +40,16 @@ const BOLD_ON = [ESC, 0x45, 0x01];
 const BOLD_OFF = [ESC, 0x45, 0x00];
 const DOUBLE_ON = [GS, 0x21, 0x11];
 const DOUBLE_OFF = [GS, 0x21, 0x00];
-const CUT = [GS, 0x56, 0x01];
+// GS V 1 cuts where the paper happens to be — but the blade sits about 2cm
+// ABOVE the print head, so the last lines were still under the head and came
+// out uncut on the next receipt. GS V 66 n feeds n lines THEN cuts, which is
+// what every thermal printer expects (iter424).
+const cutBytes = () => {
+  const cfg = getTillConfig();
+  if (cfg.cutMode === 'none') return [];
+  const feed = Math.max(0, Math.min(Number(cfg.cutFeedLines ?? 4), 10));
+  return [GS, 0x56, cfg.cutMode === 'full' ? 0x41 : 0x42, feed];
+};
 const DRAWER_KICK = [ESC, 0x70, 0x00, 0x32, 0xc8];   // ESC p 0 25 250
 
 /** Native ESC/POS QR (GS ( k). Printers that don't know it ignore it. */
@@ -123,7 +132,7 @@ export function buildReceiptBytes(sale, opts = {}) {
     parts.push(qrBytes(trackingUrl));
     push('Scan to verify\n');
   }
-  push(`${footer}\n`, '\n\n\n', CUT);
+  push(`${footer}\n`, '\n', cutBytes());
   return bytes(...parts.map(p => p));
 }
 
@@ -132,6 +141,8 @@ const DEFAULTS = {
   connection: 'none',          // none | usb | bluetooth | network
   paper: 'auto',               // auto → follow the shop's own setting; 80mm → 48 cols, 58mm → 32
   baudRate: 9600,              // serial printers vary; the wrong speed prints nothing (iter421)
+  cutMode: 'partial',          // partial | full | none
+  cutFeedLines: 4,             // lines fed past the blade before cutting (iter424)
   openDrawerOnCash: true,
   network: { host: '', port: 9100 },
   // A restaurant's kitchen printer, if it has its own. Empty means the kitchen
@@ -512,7 +523,7 @@ export function buildRefundBytes(sale, opts = {}) {
   push('\n', ALIGN_CENTER);
   if (showQr && trackingUrl) { parts.push(qrBytes(trackingUrl)); push('Scan to verify\n'); }
   push('Stock returned. No further payment is due.\n',
-       ...(partial ? ['The rest of this receipt still stands.\n'] : []), '\n\n\n', CUT);
+       ...(partial ? ['The rest of this receipt still stands.\n'] : []), '\n', cutBytes());
   return bytes(...parts);
 }
 
@@ -562,7 +573,7 @@ export function buildZReportBytes(report, opts = {}) {
   push('-'.repeat(columns) + '\n');
   if (report.first_receipt) push(row('First receipt', report.first_receipt, columns));
   if (report.last_receipt) push(row('Last receipt', report.last_receipt, columns));
-  push('\n', ALIGN_CENTER, 'End of day\n', '\n\n\n', CUT);
+  push('\n', ALIGN_CENTER, 'End of day\n', '\n', cutBytes());
   return bytes(...parts);
 }
 
@@ -612,7 +623,7 @@ export function buildQuoteBytes(quote, opts = {}) {
   if (note) push(`${note}\n`);
 
   push('\n', ALIGN_CENTER, BOLD_ON, DOUBLE_ON, 'NOT A RECEIPT\n', DOUBLE_OFF, BOLD_OFF);
-  push(centred('Keep this for reference only'), '\n\n\n', CUT);
+  push(centred('Keep this for reference only'), '\n', cutBytes());
   return bytes(...parts);
 }
 
@@ -724,7 +735,7 @@ export function buildLossSlipBytes(loss, opts = {}) {
   push('\n');
   push(`Signed: ${'_'.repeat(Math.max(8, columns - 10))}\n`);
   push(`Witness: ${'_'.repeat(Math.max(8, columns - 11))}\n`);
-  push('\n\n\n', CUT);
+  push('\n', cutBytes());
   return bytes(...parts);
 }
 
@@ -775,7 +786,7 @@ export function buildKitchenTicketBytes(order, opts = {}) {
   push('='.repeat(columns) + '\n');
   if (order.note) push(`Order note: ${String(order.note).slice(0, columns * 2)}\n`);
   push('No prices on this ticket.\n');
-  push('\n\n\n', CUT);
+  push('\n', cutBytes());
   return bytes(...parts);
 }
 
@@ -883,7 +894,7 @@ export async function testPrint(storeSettings = {}) {
     'Another, with a long name here\n', row('  10 x 1,250', '12,500', cols),
     '-'.repeat(cols) + '\n',
     BOLD_ON, DOUBLE_ON, row('TOTAL', 'UGX 42,500', Math.floor(cols / 2)), DOUBLE_OFF, BOLD_OFF,
-    '\n\n\n', CUT,
+    '\n', cutBytes(),
   );
   return sendBytes(payload, storeSettings, 'Test receipt');
 }

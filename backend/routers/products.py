@@ -117,6 +117,9 @@ class ProductCreate(BaseModel):
     # iter418 restaurant: this is cooked to order, so it goes to the kitchen on
     # a ticket rather than straight off the shelf.
     is_kitchen_item: bool = False
+    # iter424 — a produce item lives through stages kept as variants (chicks →
+    # broilers) and its stock comes in as dated batches.
+    is_produce: bool = False
     prep_station: Optional[str] = None
 
 class ProductUpdate(BaseModel):
@@ -141,6 +144,7 @@ class ProductUpdate(BaseModel):
     grow_ratio: Optional[float] = None
     is_kitchen_item: Optional[bool] = None
     prep_station: Optional[str] = None
+    is_produce: Optional[bool] = None
 
 # ========== PRODUCTS ==========
 
@@ -184,18 +188,22 @@ async def list_products(location_id: Optional[str] = None, current_user: dict = 
     return [resolve_for_store(p, location_id or "") for p in rows]
 
 async def _start_batch_if_growing(product: dict, qty: float, current_user: dict, note: str,
-                                  supplier: str = "") -> None:
+                                  supplier: str = "", variant_id: str = None) -> None:
     """Stock arriving for a product that grows on (chicks → broilers) starts its
     own dated batch, so the clock runs from when THESE birds came in (iter417).
     The supplier travels with it, so one hatchery's run can be set against
     another's later (iter420)."""
-    if qty <= 0 or not product.get("grows_into_product_id") or not product.get("grow_after_days"):
+    if qty <= 0:
+        return
+    produce_stage = bool(product.get("is_produce") and variant_id)
+    if not produce_stage and not (product.get("grows_into_product_id") and product.get("grow_after_days")):
         return
     try:
         from routers.stock_lifecycle import BatchCreate, create_batch
         await create_batch(BatchCreate(product_id=product["id"], qty=qty,
                                        location_id=product.get("location_id") or None,
                                        supplier=supplier or "",
+                                       variant_id=variant_id if produce_stage else None,
                                        note=note), current_user)
     except Exception as ex:
         logger.error(f"[grow] could not start a batch for {product.get('id')}: {ex}")
@@ -264,6 +272,10 @@ async def add_product_variant(product_id: str, data: dict, current_user: dict = 
         # Optional packaging cost (e.g. physical egg tray = UGX 500)
         "packaging_cost": float(data.get("packaging_cost", 0) or 0),
         "packaging_label": data.get("packaging_label", "") or "",
+        # Produce stages (iter424): how long this stage runs before it becomes
+        # the next one. Empty means it does not grow on.
+        "grow_after_days": int(data.get("grow_after_days") or 0) or None,
+        "grows_into_variant_id": data.get("grows_into_variant_id") or None,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.products.update_one({"id": product_id}, {
@@ -430,9 +442,12 @@ async def record_stock_movement(product_id: str, data: dict, current_user: dict 
     await db.stock_movements.insert_one(movement)
     movement.pop("_id", None)
     if delta > 0 and reason in {"purchase", "initial", "adjustment", "transfer", "count"}:
+        # Produce comes in as dated batches per stage (iter424); the old
+        # product-to-product rule still runs for items set up that way.
         await _start_batch_if_growing({**product, "location_id": movement["location_id"]},
                                       float(delta), current_user, f"Stock in ({reason})",
-                                      supplier=(data.get("supplier") or "").strip())
+                                      supplier=(data.get("supplier") or "").strip(),
+                                      variant_id=variant_id)
     return movement
 
 

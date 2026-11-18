@@ -52,10 +52,18 @@ const RISK_COLORS = {
   critical: 'bg-red-600 text-white',
 };
 const PAYMENT_KIND_LABELS = {
-  tuition: 'School tuition',
-  resource: 'Resource / supplies',
-  medical: 'Medical support',
-  child_support: 'Sponsor payment received',
+  tuition: 'School tuition (paid out)',
+  resource: 'Resource / supplies (paid out)',
+  medical: 'Medical support (paid out)',
+  child_support: 'Sponsor support received',
+  parent_support: 'Child support from parent / guardian',
+};
+// Which kinds bring money IN — decides whether we ask for an income or an
+// expense account. Mirrors INBOUND_KINDS in backend/routers/social_work.py.
+const INBOUND_KINDS = ['child_support', 'parent_support'];
+const PAYMENT_SOURCES = {
+  parent: 'Parent', guardian: 'Guardian', sponsor: 'Sponsor',
+  org_fund: 'Organisation funds', partner: 'Partner organisation', other: 'Other',
 };
 
 // iter350 — a child usually needs several kinds of help at once, so these are
@@ -833,7 +841,9 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
   const [editing, setEditing] = useState(null);  // local edits (education/medical/family/goals)
   const [complianceEdits, setComplianceEdits] = useState({});
   const [newNote, setNewNote] = useState({ kind: 'visit', body: '', is_confidential: false });
-  const [seenNotes, markNoteSeen] = useSeenNotes(caseId);  const [newPayment, setNewPayment] = useState({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '' });
+  const [seenNotes, markNoteSeen] = useSeenNotes(caseId);  const [newPayment, setNewPayment] = useState({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '', account_id: '', money_account_id: '' });
+  // Accounts this user is allowed to post against. Balances deliberately off.
+  const [myAccounts, setMyAccounts] = useState([]);
   // When a manual sponsor's email matches an existing in-system user we surface a
   // "link this account instead?" banner so org-wide identity stays unified.
   const [sponsorUserMatch, setSponsorUserMatch] = useState(null);
@@ -895,6 +905,13 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
   }, [caseId]);
   useEffect(() => { reload(); }, [reload]);
 
+  useEffect(() => {
+    if (!caseId) return;
+    api.get('/finance/account-access/mine?with_balances=false')
+      .then(r => setMyAccounts(r.data?.accounts || []))
+      .catch(() => setMyAccounts([]));
+  }, [caseId]);
+
   const saveSection = async (field) => {
     try {
       await api.put(`/social-work/cases/${caseId}`, { [field]: editing[field] });
@@ -944,10 +961,11 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
 
   const addPayment = async () => {
     if (!newPayment.amount) return;
+    if (!newPayment.account_id || !newPayment.money_account_id) { toast.error('Choose both accounts first'); return; }
     try {
       await api.post(`/social-work/cases/${caseId}/payments`, { ...newPayment, amount: parseFloat(newPayment.amount) });
-      toast.success('Payment recorded — wired to financials + accounting');
-      setNewPayment({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '' });
+      toast.success('Payment recorded — posted to the accounts you chose');
+      setNewPayment({ kind: 'tuition', amount: '', currency: 'UGX', date: new Date().toISOString().slice(0, 10), paid_to: '', source: 'org_fund', notes: '', account_id: '', money_account_id: '' });
       reload();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
@@ -956,7 +974,7 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
     if (!window.confirm('Delete this payment? The corresponding finance entry will also be removed.')) return;
     try {
       await api.delete(`/social-work/cases/${caseId}/payments/${id}`);
-      toast.success('Payment removed (ledger reversal required — handle on /accounting if needed)');
+      toast.success('Payment removed — a reversing entry was posted to the books');
       reload();
     } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
   };
@@ -1672,7 +1690,7 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                 <CardContent className="p-3 space-y-2">
                   <p className="text-xs font-semibold uppercase text-muted-foreground">Record a payment</p>
                   <div className="grid grid-cols-2 gap-2">
-                    <Select value={newPayment.kind} onValueChange={v => setNewPayment({ ...newPayment, kind: v })}>
+                    <Select value={newPayment.kind} onValueChange={v => setNewPayment({ ...newPayment, kind: v, source: v === 'parent_support' ? 'parent' : v === 'child_support' ? 'sponsor' : 'org_fund', account_id: '' })}>
                       <SelectTrigger className="h-8 text-xs" data-testid="cd-pay-kind"><SelectValue /></SelectTrigger>
                       <SelectContent>
                         {Object.entries(PAYMENT_KIND_LABELS).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
@@ -1681,11 +1699,37 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                     <Input className="h-8 text-xs" type="number" step="0.01" value={newPayment.amount} onChange={e => setNewPayment({ ...newPayment, amount: e.target.value })} placeholder="Amount" data-testid="cd-pay-amount" />
                     <Input className="h-8 text-xs" value={newPayment.currency} onChange={e => setNewPayment({ ...newPayment, currency: e.target.value.toUpperCase().slice(0, 5) })} placeholder="UGX" />
                     <Input className="h-8 text-xs" type="date" value={newPayment.date} onChange={e => setNewPayment({ ...newPayment, date: e.target.value })} />
+                    <Select value={newPayment.source} onValueChange={v => setNewPayment({ ...newPayment, source: v })}>
+                      <SelectTrigger className="h-8 text-xs" data-testid="cd-pay-source"><SelectValue placeholder="Money from" /></SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(PAYMENT_SOURCES).map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                    <div className="col-span-2 grid grid-cols-2 gap-2">
+                      <Select value={newPayment.account_id} onValueChange={v => setNewPayment({ ...newPayment, account_id: v })}>
+                        <SelectTrigger className="h-8 text-xs" data-testid="cd-pay-account">
+                          <SelectValue placeholder={INBOUND_KINDS.includes(newPayment.kind) ? 'Income account to credit' : 'Expense account to charge'} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {myAccounts.filter(a => a.type === (INBOUND_KINDS.includes(newPayment.kind) ? 'revenue' : 'expense'))
+                            .map(a => <SelectItem key={a.id} value={a.id}>{a.code} · {a.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <Select value={newPayment.money_account_id} onValueChange={v => setNewPayment({ ...newPayment, money_account_id: v })}>
+                        <SelectTrigger className="h-8 text-xs" data-testid="cd-pay-money-account">
+                          <SelectValue placeholder={INBOUND_KINDS.includes(newPayment.kind) ? 'Deposited into' : 'Paid out of'} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {myAccounts.filter(a => a.type === 'asset')
+                            .map(a => <SelectItem key={a.id} value={a.id}>{a.code} · {a.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div className="col-span-2">
                       {/* Type-to-find an existing sponsor / payee before typing a fresh name. */}
                       <PersonPicker testId="cd-pay-paid-to" kinds="member,user,guest"
                         value={newPayment.paid_to}
-                        placeholder={newPayment.kind === 'child_support' ? 'Sponsor name (received from)' : 'Paid to (school, clinic, vendor)'}
+                        placeholder={INBOUND_KINDS.includes(newPayment.kind) ? 'Received from (sponsor, parent, guardian)' : 'Paid to (school, clinic, vendor)'}
                         addNewLabel="as typed"
                         onChange={v => setNewPayment({ ...newPayment, paid_to: v, paid_to_id: '' })}
                         onPick={p => setNewPayment({ ...newPayment, paid_to: p.name, paid_to_id: p.id })}
@@ -1693,8 +1737,8 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                     </div>
                     <Input className="h-8 text-xs col-span-2" value={newPayment.notes} onChange={e => setNewPayment({ ...newPayment, notes: e.target.value })} placeholder="Notes" />
                   </div>
-                  <Button size="sm" className="w-full" onClick={addPayment} disabled={!newPayment.amount} data-testid="cd-pay-submit">Record &amp; auto-post to finance + accounting</Button>
-                  <p className="text-[10px] text-muted-foreground">This creates a finance entry (donation for inbound sponsor payments; expense for outflows) and a balanced journal entry in the accounting ledger.</p>
+                  <Button size="sm" className="w-full" onClick={addPayment} disabled={!newPayment.amount || !newPayment.account_id || !newPayment.money_account_id} data-testid="cd-pay-submit">Record &amp; post to the chosen accounts</Button>
+                  <p className="text-[10px] text-muted-foreground">Both accounts are required — the books never guess where welfare money came from. Deleting a payment posts a reversing entry.</p>
                 </CardContent>
               </Card>
               {payments.length === 0 ? <p className="text-xs text-muted-foreground text-center py-4">No payments recorded yet.</p> : (
@@ -1704,6 +1748,7 @@ function CaseDetailDialog({ caseId, schools, members, childrenList, onClose }) {
                       <div className="flex-1 min-w-0">
                         <p className="font-medium">{PAYMENT_KIND_LABELS[p.kind]} <span className={`text-[10px] ml-1 ${p.direction === 'in' ? 'text-emerald-600' : 'text-red-600'}`}>{p.direction === 'in' ? '+ inflow' : '- outflow'}</span></p>
                         <p className="text-muted-foreground text-[10px]">{p.date} · {p.paid_to || '—'} · {p.notes || ''} <span className="italic">{p.mirror_collection ? `[mirror: ${p.mirror_collection}]` : ''}</span></p>
+                        {p.account_code && <p className="text-muted-foreground text-[10px]" data-testid={`cd-pay-accounts-${p.id}`}>{p.direction === 'in' ? `${p.money_account_name} ← ${p.account_code} ${p.account_name}` : `${p.account_code} ${p.account_name} ← ${p.money_account_name}`}</p>}
                       </div>
                       <span className="font-semibold mr-2">{p.currency} {(p.amount || 0).toLocaleString()}</span>
                       <Button size="sm" variant="ghost" className="h-7 text-destructive" onClick={() => deletePayment(p.id)}><Trash2 size={12} /></Button>
