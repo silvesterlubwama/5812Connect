@@ -494,6 +494,7 @@ try:
     from routers.access_children import router as access_children_router
     from routers.reports import router as reports_router
     from routers.documents import router as documents_router
+    from routers.org_documents import router as org_documents_router
     from routers.auth import router as auth_router
     from routers.members import router as members_router
     from routers.import_csv import router as import_csv_router
@@ -537,6 +538,7 @@ try:
     app.include_router(access_children_router)
     app.include_router(reports_router)
     app.include_router(documents_router)
+    app.include_router(org_documents_router)
     app.include_router(auth_router)
     app.include_router(members_router)
     app.include_router(import_csv_router)

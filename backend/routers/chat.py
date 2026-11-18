@@ -197,52 +197,91 @@ async def send_message(conv_id: str, data: dict, current_user: dict = Depends(ge
 
 @router.post("/chat/ai-assistant")
 async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current_user)):
+    """The assistant, with the organisation's own paperwork behind it.
+
+    Order of work, deliberately: decide what this person is allowed to know in
+    Python, then hand the model only that. A refusal is written here and sent
+    back verbatim — the model is never asked to keep a secret.
+    """
     from dotenv import load_dotenv; load_dotenv()
     message = data.get("message", "").strip()
     session_id = data.get("session_id", f"ai_{current_user['id']}")
     if not message: raise HTTPException(status_code=400, detail="Message required")
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+        from routers import ai_knowledge as kb
         api_key = os.environ.get("EMERGENT_LLM_KEY")
         if not api_key: raise HTTPException(status_code=500, detail="AI not configured")
+        now = datetime.now(timezone.utc).isoformat()
+        conv_id = f"ai_{current_user['id']}"
 
-        # Build live app context based on user's role & access level
+        async def _save(user_text, reply, attachments=None):
+            await db.chat_messages.insert_one({"id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
+                                               "sender_id": current_user["id"], "sender_name": current_user.get("name"),
+                                               "text": user_text, "type": "user", "created_at": now})
+            await db.chat_messages.insert_one({"id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": conv_id,
+                                               "sender_id": "ai_assistant", "sender_name": "AI Assistant",
+                                               "text": reply, "type": "ai", "created_at": now,
+                                               "attachments": attachments or []})
+
+        # 1. Money / people questions — gated before anything is fetched.
+        gated = await kb.answer_data_question(current_user, message)
+        if gated and gated.get("denied"):
+            await _save(message, gated["answer"])
+            return {"response": gated["answer"], "session_id": session_id, "attachments": [], "access_denied": True}
+
+        # 2. The organisation's paperwork this person may read.
+        docs = await kb.search_documents(current_user, message)
+        attachments = [kb.attachment_of(d) for d in docs]
+        files = kb.readable_files(docs)
+
         role = (current_user.get("role") or "").lower()
         is_admin = role in {"admin", "system_admin", "executive director", "director"}
         is_manager = is_admin or role in {"manager", "coordinator", "hr"}
-        user_loc = current_user.get("location_id")
-        ctx = await _build_app_context(current_user, is_admin, is_manager, user_loc)
+        ctx = await _build_app_context(current_user, is_admin, is_manager, current_user.get("location_id"))
 
-        system_msg = f"""You are the AI Assistant for 58:12 Connect, a multi-location non-profit CRM. You have full access to live data and can help users work efficiently.
+        doc_block = "\n".join(
+            f"- [{d['doc_type']}] {d['title']}"
+            + (f" — issued by {d['issuer']}" if d.get("issuer") else "")
+            + (f", expires {d['expires_on']}" if d.get("expires_on") else "")
+            + (f". {d['summary']}" if d.get("summary") else "")
+            for d in docs
+        ) or "No organisation document matches this question (or none this person may read)."
 
-Current user: {current_user.get('name')} (Role: {current_user.get('role', 'Staff')})
-Access level: {'Full admin access' if is_admin else 'Manager/Coordinator' if is_manager else 'Staff/Member view'}
+        system_msg = f"""You are the AI Assistant for 58:12 Connect, a multi-location non-profit CRM.
+
+Current user: {current_user.get('name')} — {kb.access_summary(current_user)}
 
 LIVE APP DATA:
 {ctx}
 
-CAPABILITIES:
-- Answer questions about data, members, events, finances, attendance
-- Generate summaries and reports from real data (present in the chat)
-- Suggest actions: "Go to People > Members", "Open Financial > Balance Sheet"
-- If user asks to generate a report, summarize the relevant data directly in your response
-- For financial queries, calculate totals, averages, and trends from the live data
-- For attendance, show check-in counts and patterns
-- Be specific with numbers — use the real data provided above
+ORGANISATION DOCUMENTS THIS PERSON MAY SEE:
+{doc_block}
+{('ATTACHED FOR READING: ' + ', '.join(p for p, _ in files)) if files else ''}
+
+{('VERIFIED FIGURES (already permission-checked, quote these and no others):' + chr(10) + gated['facts']) if gated and gated.get('facts') else ''}
+{gated.get('preamble', '') if gated else ''}
 
 RULES:
-- Only share data the user's role permits
-- Be concise (2-4 sentences unless detailed report requested)
-- For reports: format as clear tables or bullet points
-- If asked to make changes you can't do, explain what the user should do and where
+- Everything above is already filtered to what this person may see. Never mention, hint at or guess
+  about data, documents or figures that are not above — say you don't have it.
+- When a document answers the question, give the answer first (dates, numbers, names as written),
+  then one or two plain sentences of summary, and say which document it came from by title.
+  The person can open or download it from the chat, so don't paste links.
+- Do not invent an expiry date, permit number or amount. If the document doesn't say, say so.
+- Be concise: 2-5 sentences unless a report was asked for. Use bullets for lists.
+- Point to where in the app something is done ("Finance → Chart of Accounts") when it needs an action.
 """
 
         chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_msg).with_model("gemini", "gemini-2.5-flash")
-        response = await chat.send_message(UserMessage(text=message))
-        now = datetime.now(timezone.utc).isoformat()
-        await db.chat_messages.insert_one({"id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": f"ai_{current_user['id']}", "sender_id": current_user["id"], "sender_name": current_user.get("name"), "text": message, "type": "user", "created_at": now})
-        await db.chat_messages.insert_one({"id": f"msg_{str(uuid.uuid4())[:8]}", "conversation_id": f"ai_{current_user['id']}", "sender_id": "ai_assistant", "sender_name": "AI Assistant", "text": response, "type": "ai", "created_at": now})
-        return {"response": response, "session_id": session_id}
+        user_msg = UserMessage(
+            text=message,
+            file_contents=[FileContentWithMimeType(file_path=p, mime_type=m) for p, m in files] or None,
+        )
+        response = await chat.send_message(user_msg)
+        await _save(message, response, attachments)
+        return {"response": response, "session_id": session_id, "attachments": attachments,
+                "access_denied": False, "scope": (gated or {}).get("scope")}
     except HTTPException: raise
     except Exception as e:
         logger.error(f"AI chat error: {e}")

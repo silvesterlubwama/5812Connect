@@ -108,8 +108,12 @@ function OverviewPanel() {
   const [addOpen, setAddOpen] = useState(null); // 'expense' | 'income'
   const [transferOpen, setTransferOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
+  // Somebody pinned to a few accounts sees those, and their balances, first.
+  const [myAccounts, setMyAccounts] = useState(null);
 
   const reload = async () => {
+    const mine = await api.get('/finance/account-access/mine?with_balances=true').catch(() => ({ data: null }));
+    setMyAccounts(mine.data?.restricted ? (mine.data.accounts || []) : null);
     const [p, b, r] = await Promise.all([
       api.get('/finance/reports/pnl'),
       api.get('/finance/reports/balance-sheet'),
@@ -166,6 +170,24 @@ function OverviewPanel() {
         <p className="text-[11px] text-muted-foreground text-right -mt-2" data-testid="finance-fx-note">
           Amounts in {fxCode} @ {fxRates[fxCode]} per {fxBase || 'UGX'}
         </p>
+      )}
+      {myAccounts && (
+        <Card data-testid="my-accounts-card">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">My accounts</CardTitle>
+            <CardDescription className="text-xs">The accounts you were given, and what each one stands at today.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {myAccounts.length === 0 && <p className="text-xs text-muted-foreground">No accounts assigned to you yet — ask a director.</p>}
+            {myAccounts.map(a => (
+              <div key={a.id} className="rounded-lg border p-2.5" data-testid={`my-account-${a.code}`}>
+                <p className="text-[10px] text-muted-foreground font-mono">{a.code} · {a.type}</p>
+                <p className="text-xs font-medium truncate">{a.name}</p>
+                <p className={`text-sm font-bold ${Number(a.balance || 0) < 0 ? 'text-rose-600' : ''}`}>{fxMoney(a.balance)}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <StatCard icon={<Wallet size={18} className="text-emerald-600" />} label="Cash & bank" value={fxMoney(cashOnHand)} testid="finance-stat-cash" />

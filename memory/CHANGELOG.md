@@ -3380,3 +3380,55 @@ switched back off.
   only the Chart of Accounts tab narrows).
 - P2: reverse the fund-request journal entry if a payment is undone.
 - P2: a monthly welfare statement per child, by account.
+
+### 2026-11-18 (iter426) — The assistant becomes the organisation's memory
+- **Paperwork lives in the chat.** A manager or admin drops a permit, certificate,
+  agreement, receipt or contract onto the AI room ("Add document"). It is read
+  once on the way in — PDF text extracted locally, then Gemini names it, pulls
+  out the issuer, reference and expiry date and writes a short summary
+  (`routers/org_documents.py`, collection `org_documents`).
+- **Who may see it is set per document** (`min_level`: every staff member →
+  coordinators → managers → directors → admins). Below that level the document
+  does not appear in search, cannot be fetched by id and cannot be downloaded —
+  a staff member never learns it exists. The file itself is served from
+  `GET /api/org-documents/{id}/file`, permission-checked, not the public uploads path.
+- **The assistant answers from it**: `routers/ai_knowledge.py` searches the
+  documents this person may read, attaches up to two of them to the Gemini call
+  (file attachments are Gemini-only) and the chat renders a card with "Show it /
+  Open" and "Download". Asked "when does our NGO permit expire?" a staff member
+  gets the date, a two-line summary and the permit itself.
+- **Money questions are gated in Python, never by the model.** No finance access
+  → a plain refusal saying why and how to get access; if that person has been
+  given accounts, they get *their own* account movements, their own postings and
+  their own fund requests instead. Payroll questions need HR. Directors and
+  admins get the organisation totals. Only permission-checked figures are ever
+  put in front of the model.
+- **Photo → PDF**: `POST /api/org-documents/{id}/to-pdf` files a clean PDF
+  derived from a photographed receipt or certificate.
+- **Expiry warnings**: new daily cron `document-expiry` (07:00 Africa/Kampala)
+  warns directors at 30 days, 7 days and on the day — once per threshold, never
+  nagging daily.
+- **Undo Payout**: `POST /api/funds/requests/{id}/undo-payment` (finance only)
+  reverses the journal entry, removes the expense row, voids the voucher number
+  (the printed voucher then prints "VOID" with the reason) and puts the request
+  back to approved so it can be paid from the right account.
+- **My Money View**: a restricted person now sees their own accounts and
+  balances at the top of the Finance overview, not just on the Chart of Accounts tab.
+- Tests: `tests/test_iter426_ai_knowledge_and_undo_payout.py` (15); 154 green
+  across iter411-426. Verified live: a filed permit was read correctly
+  (expiry 2027-03-31, issuer "Uganda NGO Bureau"), admin and staff both got the
+  answer with the document attached, the same staff member was refused the
+  organisation's spend with a reason, and after being granted account 5350.3 the
+  identical question returned their own figures.
+
+#### Known / not ours
+- `test_iteration162 TestManualPayslip::test_manual_payslip_creates_and_computes_net`
+  fails (net 723,000 vs expected 975,000) — pre-existing HR deduction maths, no
+  payroll code touched in iter425/426.
+
+#### Still open / next
+- P1: let the assistant *create* documents from app data (staff ID card, contract
+  from template) — the groundwork (derived documents) is in place.
+- P2: index documents already uploaded elsewhere (member/child files) into the
+  same search, respecting their own scoping.
+- P2: reverse the welfare/fund journal entries straight from the chat.

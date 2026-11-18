@@ -2721,3 +2721,10 @@ no systemd — the intended graceful path. Tests: 21 in
 Receipt cutting, variant-aware produce/losses, and welfare + fund-request money
 wired to chosen accounts with per-person account access and signable payment
 vouchers. Full detail in CHANGELOG.md (iter424, iter425).
+
+### 2026-11-18 (iter426)
+The AI chat became the organisation's knowledge base: managers file permits and
+agreements into the chat, the assistant answers from them with the document
+attached, and every answer — paperwork or money — is filtered to the asker's
+role first. Plus undo-payout and the staff "my accounts" view. Detail in
+CHANGELOG.md (iter426).

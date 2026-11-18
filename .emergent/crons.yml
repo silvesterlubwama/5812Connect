@@ -22,3 +22,11 @@ crons:
     endpoint: "{{BASE_URL}}/api/cron/mature-batches"
     method: POST
     enabled: true
+  - name: document-expiry
+    description: "Warns directors each morning about permits and certificates expiring within 30 days"
+    cron: "0 7 * * *"
+    timezone: "Africa/Kampala"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/document-expiry"
+    method: POST
+    enabled: true

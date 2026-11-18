@@ -375,6 +375,58 @@ async def mark_paid(request_id: str, data: dict = None, current_user: dict = Dep
             "journal_entry_id": je.get("id"), "paid_from_account_name": paid_from["name"]}
 
 
+@router.post("/requests/{request_id}/undo-payment")
+async def undo_payment(request_id: str, data: dict = None, current_user: dict = Depends(get_current_user)):
+    """Unpay a request — the books back out and the voucher is void.
+
+    Body: { reason?: str }. The journal entry is reversed (deleted with a kept
+    copy while the period is open, contra-posted once it is locked), the expense
+    row goes, and the request returns to 'approved' so it can be paid again
+    against the right account.
+    """
+    if not is_system_admin(current_user) and not has_module_access(current_user, "finance"):
+        raise HTTPException(status_code=403, detail="Only finance staff can undo a payment")
+    data = data or {}
+    req = await db.approval_requests.find_one({"id": request_id, "subject_kind": "fund_request"}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Fund request not found")
+    md = req.get("metadata") or {}
+    if not md.get("expense_id"):
+        raise HTTPException(status_code=400, detail="This request hasn't been paid yet")
+    reason = (data.get("reason") or "")[:300] or f"Payment undone by {current_user.get('name') or current_user['id']}"
+
+    if md.get("journal_entry_id"):
+        from routers.finance._common import reverse_journal_entry
+        try:
+            await reverse_journal_entry(md["journal_entry_id"], reason=reason, current_user=current_user)
+        except HTTPException as e:
+            if "not found" not in str(e.detail).lower() and "already reversed" not in str(e.detail).lower():
+                raise
+    await db.financial.delete_one({"id": md["expense_id"], "fund_request_id": request_id})
+
+    await db.approval_requests.update_one(
+        {"id": request_id},
+        {"$set": {
+            "metadata.payment_undone_at": datetime.now(timezone.utc).isoformat(),
+            "metadata.payment_undone_by_name": current_user.get("name", ""),
+            "metadata.payment_undone_reason": reason,
+            "metadata.voucher_void": True,
+            "metadata.previous_voucher_no": md.get("voucher_no"),
+        },
+         "$unset": {
+             "metadata.expense_id": "", "metadata.journal_entry_id": "", "metadata.voucher_no": "",
+             "metadata.paid_at": "", "metadata.paid_by": "", "metadata.paid_by_name": "",
+             "metadata.paid_from_account_id": "", "metadata.paid_from_account_code": "",
+             "metadata.paid_from_account_name": "", "metadata.expense_account_id": "",
+             "metadata.expense_account_code": "", "metadata.expense_account_name": "",
+         }},
+    )
+    await _audit(current_user["id"], "update", "fund_request_unpaid", request_id,
+                 {"reason": reason, "voided_voucher": md.get("voucher_no")})
+    return {"undone": True, "voided_voucher_no": md.get("voucher_no"),
+            "message": f"Payment backed out — voucher {md.get('voucher_no') or ''} is void and the books are square"}
+
+
 @router.get("/requests/{request_id}/voucher")
 async def fund_voucher(request_id: str, current_user: dict = Depends(get_current_user)):
     """The signable payment voucher — print, sign, file.
@@ -414,6 +466,8 @@ async def fund_voucher(request_id: str, current_user: dict = Depends(get_current
         f"({h(md.get('expense_account_code') or '')})</div>"
         f"<div><span class='k'>Paid on</span> {h((md.get('paid_at') or '')[:10])} by {h(md.get('paid_by_name') or '')}</div>"
         if md.get("paid_at") else
+        f"<div style='color:#b00;font-weight:700'>VOID — payment undone{(' (' + h(md.get('payment_undone_reason')) + ')') if md.get('payment_undone_reason') else ''}</div>"
+        if md.get("voucher_void") else
         "<div style='color:#777'>Not yet paid out — finance completes the account details on payment.</div>"
     )
     html_doc = f"""<!doctype html>

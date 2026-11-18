@@ -23,6 +23,8 @@ import EmptyState from '../components/EmptyState';
 import VoicemailList from '../components/voip/VoicemailList';
 import PhoneRoom from '../components/voip/PhoneRoom';
 import { useVoip } from '../context/VoipContext';
+import AiAttachment, { AiText } from '../components/comms/AiAttachment';
+import AiDocumentUpload from '../components/comms/AiDocumentUpload';
 
 const initials = (name) => (name || '?').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
 const QUICK_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🙏', '👏', '🔥', '💯', '✅'];
@@ -147,7 +149,9 @@ export default function CommsPage() {
       } catch (e) { console.warn(e.message || e); }
       try {
         const aiRes = await chatApi.messages(`ai_${user?.id}`, { limit: 50 });
-        setAiMessages((aiRes.data || []).map(m => ({ role: m.type === 'ai' ? 'assistant' : 'user', text: m.text })));
+        setAiMessages((aiRes.data || []).map(m => ({
+          role: m.type === 'ai' ? 'assistant' : 'user', text: m.text, attachments: m.attachments || [],
+        })));
       } catch (e) { console.warn(e.message || e); }
       setLoading(false);
     };
@@ -275,7 +279,10 @@ export default function CommsPage() {
       scrollToBottom();
       try {
         const res = await chatApi.aiAssistant(userText, aiSessionId);
-        setAiMessages(prev => [...prev, { role: 'assistant', text: res.data.response }]);
+        setAiMessages(prev => [...prev, {
+          role: 'assistant', text: res.data.response,
+          attachments: res.data.attachments || [], denied: !!res.data.access_denied,
+        }]);
         scrollToBottom();
       } catch {
         setAiMessages(prev => [...prev, { role: 'assistant', text: 'Sorry, I encountered an error. Please try again.' }]);
@@ -430,6 +437,8 @@ export default function CommsPage() {
 
   const isAdmin = ['admin', 'system_admin', 'Executive Director', 'Director'].includes(user?.role);
   const isStaff = isAdmin || ['Manager', 'Coordinator', 'Staff'].includes(user?.role);
+  // Managers and above put the organisation's paperwork into the assistant.
+  const canFileDocuments = isAdmin || ['Manager', 'Adviser'].includes(user?.role);
   const filteredConvs = conversations.filter(c => !searchQuery || c.name?.toLowerCase().includes(searchQuery.toLowerCase()));
   // The people list obeys the same search box, and never offers you yourself.
   const visibleStaff = React.useMemo(() => {
@@ -503,17 +512,28 @@ export default function CommsPage() {
               <p className="font-medium">AI Assistant</p>
               <p className="text-xs mt-1 mb-4">Powered by Gemini</p>
               <div className="flex flex-wrap gap-2 justify-center">
-                {['How do I add a new member?', 'Help me plan an event', 'Summarize financial status'].map(q => (
-                  <Button key={q} variant="outline" size="sm" className="text-xs h-7" onClick={() => setNewMsg(q)}>{q}</Button>
+                {['When does our NGO permit expire?', 'Which permits expire in the next 60 days?', 'How much did we spend last month?', 'Show me our latest signed agreement'].map(q => (
+                  <Button key={q} variant="outline" size="sm" className="text-xs h-7" onClick={() => setNewMsg(q)} data-testid={`ai-prompt-${q.slice(0, 12).replace(/\s+/g, '-').toLowerCase()}`}>{q}</Button>
                 ))}
               </div>
+              <p className="text-[10px] mt-4 max-w-sm mx-auto">
+                It reads the organisation's filed paperwork — permits, certificates, agreements, receipts — and
+                only ever shows you what your role allows.
+              </p>
             </div>
           )}
           {aiMessages.map((msg, i) => (
             <div key={`ai-${i}-${msg.role}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary'}`}>
-                {msg.role === 'assistant' && <p className="text-[10px] font-semibold opacity-60 mb-0.5">AI Assistant</p>}
-                <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+              <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${msg.role === 'user' ? 'bg-primary text-primary-foreground' : msg.denied ? 'bg-amber-50 border border-amber-200' : 'bg-secondary'}`}>
+                {msg.role === 'assistant' && (
+                  <p className="text-[10px] font-semibold opacity-60 mb-0.5">
+                    {msg.denied ? 'AI Assistant · not shared with your role' : 'AI Assistant'}
+                  </p>
+                )}
+                {msg.role === 'assistant'
+                  ? <AiText text={msg.text} />
+                  : <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>}
+                {(msg.attachments || []).map(att => <AiAttachment key={att.document_id} att={att} />)}
               </div>
             </div>
           ))}
@@ -867,6 +887,13 @@ export default function CommsPage() {
                     <Video size={15} />
                   </Button>
                 </div>
+              )}
+              {selectedRoom.id === '__ai__' && canFileDocuments && (
+                <AiDocumentUpload onFiled={(doc) => setAiMessages(prev => [...prev, {
+                  role: 'assistant',
+                  text: `Filed "${doc.title}". ${doc.summary || ''}${doc.expires_on ? ` It expires on ${doc.expires_on}.` : ''} I'll use it when anyone allowed to see it asks.`.trim(),
+                  attachments: [{ document_id: doc.id, title: doc.title, doc_type: doc.doc_type, mime: doc.mime, expires_on: doc.expires_on, issuer: doc.issuer }],
+                }])} />
               )}
               {selectedRoom.id === '__announcements__' && isAdmin && (
                 <Button size="sm" variant="outline" className="gap-1.5 text-xs h-7" onClick={() => setShowNewAnnouncement(true)} data-testid="post-announcement-btn">

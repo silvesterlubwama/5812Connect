@@ -15,7 +15,7 @@ import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
-import { Plus, Receipt, Upload, RefreshCw, CheckCircle2, X, Banknote, Printer } from 'lucide-react';
+import { Plus, Receipt, Upload, RefreshCw, CheckCircle2, X, Banknote, Printer, Undo2 } from 'lucide-react';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
@@ -139,6 +139,16 @@ export default function FundRequestsPanel() {
     finally { setMarkPaidBusy(false); }
   };
 
+  const undoPayment = async (req) => {
+    const reason = window.prompt('Why is this payment being backed out? (shown on the void voucher)', 'Paid from the wrong account');
+    if (reason === null) return;
+    try {
+      const r = await api.post(`/funds/requests/${req.id}/undo-payment`, { reason });
+      toast.success(r.data?.message || 'Payment backed out');
+      await refresh();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Could not undo the payment'); }
+  };
+
   const cancel = async (req) => {
     if (!window.confirm(`Cancel this ${req.metadata?.kind} request?`)) return;
     try {
@@ -169,6 +179,11 @@ export default function FundRequestsPanel() {
               {' · '}{(req.created_at || '').slice(0, 10)}
               {md.expense_id && <span className="ml-1 text-emerald-700">· paid (exp {md.expense_id.slice(0, 12)}…)</span>}
             </p>
+            {md.voucher_void && !md.expense_id && (
+              <p className="text-[10px] text-destructive mt-0.5" data-testid={`fund-void-${req.id}`}>
+                Voucher {md.previous_voucher_no} void — payment backed out{md.payment_undone_reason ? `: ${md.payment_undone_reason}` : ''}
+              </p>
+            )}
             {md.paid_from_account_name && (
               <p className="text-[10px] text-muted-foreground mt-0.5" data-testid={`fund-paid-from-${req.id}`}>
                 Voucher <span className="font-mono">{md.voucher_no}</span> · paid from {md.paid_from_account_name} → {md.expense_account_name}
@@ -194,6 +209,11 @@ export default function FundRequestsPanel() {
             {(req.status === 'approved' || md.expense_id) && (
               <Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => printVoucher(req)} data-testid={`fund-voucher-${req.id}`}>
                 <Printer size={11} className="mr-1" /> Print voucher
+              </Button>
+            )}
+            {md.expense_id && hasFinance && (
+              <Button size="sm" variant="ghost" className="h-7 text-[11px] text-destructive" onClick={() => undoPayment(req)} data-testid={`fund-undo-paid-${req.id}`}>
+                <Undo2 size={11} className="mr-1" /> Undo payment
               </Button>
             )}
             {withActions && req.status === 'approved' && !md.expense_id && hasFinance && (

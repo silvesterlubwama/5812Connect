@@ -180,3 +180,23 @@ async def cron_mature_batches(
     from routers.stock_lifecycle import run_due_maturations
     background.add_task(run_for_every_org, run_due_maturations)
     return {"accepted": True}
+
+
+@router.post("/document-expiry")
+async def cron_document_expiry(
+    request: Request, background: BackgroundTasks,
+    authorization: str = Header(None), x_webhook_id: str = Header(None),
+):
+    """Warn directors before a permit, certificate or agreement lapses."""
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    _authorize(authorization)
+    try:
+        envelope = await request.json()
+    except Exception:
+        envelope = {}
+    run_id = x_webhook_id or envelope.get("run_id") or ""
+    if await _seen_before(run_id, "document-expiry"):
+        return {"accepted": True, "duplicate": True}
+    from routers.org_documents import warn_about_expiring_documents
+    background.add_task(run_for_every_org, warn_about_expiring_documents)
+    return {"accepted": True}
