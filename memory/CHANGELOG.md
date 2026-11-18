@@ -3469,3 +3469,35 @@ switched back off.
   contract from template) — derived-document plumbing is already in place.
 - P2: child/guardian files in `child_extras` are not yet in the AI search (only
   the `files` collection is).
+
+### 2026-11-18 (iter428) — One search across the whole organisation
+- **Children's paperwork** (guardian IDs, LC1 letters, school reports, consent
+  forms in `child_extras`) is now searchable by the assistant, but only for
+  social work, admins and directors — a general staff member gets nothing back
+  (`search_child_files`, ai_knowledge.py). Files are served from where social
+  work already keeps them, not re-filed.
+- **The rest of the application** is searched in the same pass
+  (`search_app_records` + the `APP_SOURCES` registry): members, children,
+  families, welfare cases, events, resources, products, sales, finance entries,
+  requests and staff. Each source carries its own role level and module gate —
+  finance entries never reach a staff member's results — and every query runs on
+  the org-scoped `db`, so one organisation's records can't surface in another's
+  answers. A vague question ("what is it?") returns nothing rather than a dump.
+- **Tidy from the chat**: "what documents do we have on file?" lists them by
+  type; "are there any duplicate documents?" groups the repeats; and a manager
+  saying "clear out the duplicates" keeps the earliest copy of each and
+  soft-deletes the rest with a reason and their name on it. Staff can see the
+  repeats but not clear them.
+- Fixes found while testing live: child/person file attachments were handed the
+  organisation-document route instead of their own, and ranking only considered
+  the 20 newest matches, so the right child's report lost to someone else's.
+- Tests: `tests/test_iter428_child_files_app_search_tidy.py` (13); 163 green
+  across iter411-428. Verified live: an admin got the right child's school
+  report with the correct link, a staff member got nothing for the same
+  question, two duplicate permits were spotted and cleared from the chat, and
+  asking "what do we have on record for <child>?" answered from the child record.
+
+#### Still open / next
+- P1: let the assistant create documents from app data (staff ID card, contract).
+- P2: child file links go through the existing uploads path; a permission-checked
+  route like the organisation documents one would be tighter.

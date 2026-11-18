@@ -2735,3 +2735,9 @@ document, "remember this" notes and links), it lists expiring paperwork from the
 records, and it searches files already attached to people's profiles. Also
 closed a real leak: personal documents were readable by any logged-in account.
 Detail in CHANGELOG.md (iter427).
+
+### 2026-11-18 (iter428)
+The assistant now searches the entire application per organisation — people,
+children, cases, events, stock, sales, finance and requests — alongside filed
+paperwork and children's own documents (social work only), and a manager can
+list or de-duplicate the document shelf from the chat. Detail in CHANGELOG.md.

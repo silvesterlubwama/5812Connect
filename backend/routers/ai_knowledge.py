@@ -117,7 +117,7 @@ async def search_person_files(current_user: dict, text: str, limit: int = 3) -> 
         rx = {"$regex": re.escape(w), "$options": "i"}
         ors += [{"label": rx}, {"doc_type": rx}, {"member_name": rx}, {"original_filename": rx}]
     query["$or"] = ors
-    rows = await db.files.find(query, {"_id": 0}).sort("created_at", -1).to_list(20)
+    rows = await db.files.find(query, {"_id": 0}).sort("created_at", -1).to_list(120)
 
     def score(f):
         hay = " ".join([f.get("label", ""), f.get("doc_type", ""), f.get("member_name", ""),
@@ -132,7 +132,7 @@ async def search_person_files(current_user: dict, text: str, limit: int = 3) -> 
             "title": f"{f.get('member_name') or 'Person'} — {f.get('label') or f.get('doc_type') or 'document'}",
             "doc_type": f.get("doc_type") or "id",
             "mime": f.get("content_type") or "application/octet-stream",
-            "issuer": f.get("member_name") or "",
+            "issuer": "",
             "summary": f"On {f.get('member_name') or 'the person'}'s profile, uploaded {str(f.get('created_at') or '')[:10]}.",
             "expires_on": "",
             "file_url": f"/api/documents/{f['id']}/file",
@@ -144,7 +144,7 @@ async def search_person_files(current_user: dict, text: str, limit: int = 3) -> 
 
 def attachment_of(doc: dict) -> dict:
     """What the chat needs to render and offer a download."""
-    person = doc.get("source") == "person_file"
+    person = doc.get("source") in ("person_file", "child_file")
     return {
         "document_id": doc["id"],
         "title": doc.get("title"),
@@ -450,3 +450,233 @@ async def try_knowledge_note(current_user: dict, text: str) -> Optional[dict]:
     return {"answer": f"Noted{where} as \"{doc['title']}\" — "
                       f"{'anyone on staff' if doc['min_level'] <= 5 else 'people at the level you set'} can ask me about it now.",
             "document": doc, "noted": True}
+
+
+# --------------------------------------------------------------- children's own paperwork
+CHILD_FILE_WORDS = re.compile(
+    r"\b(guardian|lc1|lc\s?1|local\s+council|birth\s+certificate|consent|referral|child'?s?\s+(id|file|document)|"
+    r"sponsor\s+letter|immunisation|immunization|school\s+report)\b", re.I)
+
+
+def _may_read_child_files(current_user: dict) -> bool:
+    """Children's paperwork belongs to social work — and to nobody browsing."""
+    return (is_system_admin(current_user)
+            or has_module_access(current_user, "social_work")
+            or get_role_level(current_user.get("role")) >= 8)
+
+
+async def search_child_files(current_user: dict, text: str, limit: int = 3) -> list:
+    """Guardian IDs, LC1 letters and the rest, where social work already keeps them."""
+    words = _keywords(text)
+    if not words:
+        return []
+    if not (CHILD_FILE_WORDS.search(text) or PERSON_FILE_WORDS.search(text)):
+        return []
+    if not _may_read_child_files(current_user):
+        return []
+    ors = []
+    for w in words:
+        rx = {"$regex": re.escape(w), "$options": "i"}
+        ors += [{"child_name": rx}, {"doc_label": rx}, {"doc_type": rx}, {"caption": rx}, {"file_name": rx}]
+    rows = await db.child_extras.find({"$or": ors}, {"_id": 0}).sort("created_at", -1).to_list(120)
+
+    def score(f):
+        hay = " ".join([f.get("child_name", ""), f.get("doc_label", ""), f.get("doc_type", ""),
+                        f.get("caption", ""), f.get("file_name", "")]).lower()
+        return -sum(2 if w in (f.get("child_name") or "").lower() else 1 if w in hay else 0 for w in words)
+
+    rows.sort(key=score)
+    out = []
+    for f in rows[:limit]:
+        label = f.get("doc_label") or f.get("doc_type") or f.get("kind") or "file"
+        out.append({
+            "id": f["id"],
+            "title": f"{f.get('child_name') or 'Child'} — {label}",
+            "doc_type": (f.get("doc_type") or "id"),
+            "mime": "application/octet-stream",
+            "issuer": "",
+            "summary": ((f.get("caption") + " ") if f.get("caption") else "")
+                       + f"On {f.get('child_name') or 'the child'}'s record"
+                        + (f", issued {f['issued_date']}" if f.get("issued_date") else "") + ".",
+            "expires_on": "",
+            "file_url": f.get("file_url") or "",
+            "source": "child_file",
+        })
+    return out
+
+
+# --------------------------------------------------------------- the rest of the application
+def _fmt_money(v) -> str:
+    try:
+        return f"{float(v):,.0f}"
+    except Exception:
+        return str(v or "")
+
+
+# What the assistant may look through, and who may look. Every query runs on the
+# org-scoped `db`, so one organisation never sees another's records.
+APP_SOURCES = [
+    {"col": "members", "label": "Member", "level": 5,
+     "fields": ["name", "email", "phone", "badge_id", "department", "group"],
+     "line": lambda r: f"{r.get('name')} — member{', ' + r['department'] if r.get('department') else ''}"
+                       f"{', ' + r['phone'] if r.get('phone') else ''}"},
+    {"col": "children", "label": "Child", "level": 5, "module": "social_work",
+     "fields": ["name", "class_group", "grade", "school"],
+     "line": lambda r: f"{r.get('name')} — child, {r.get('class_group') or r.get('grade') or 'no class on file'}"
+                       f"{', sponsored' if r.get('is_sponsored') else ''}"},
+    {"col": "families", "label": "Family", "level": 5,
+     "fields": ["family_name", "primary_contact_name", "primary_contact_phone"],
+     "line": lambda r: f"{r.get('family_name')} — family, contact {r.get('primary_contact_name') or '—'}"
+                       f" {r.get('primary_contact_phone') or ''}"},
+    {"col": "social_cases", "label": "Welfare case", "level": 6, "module": "social_work",
+     "fields": ["subject_name", "category", "status", "risk_level"],
+     "line": lambda r: f"{r.get('subject_name')} — {str(r.get('category') or '').replace('_', ' ')} case,"
+                       f" {r.get('status')}, risk {r.get('risk_level') or 'n/a'}"},
+    {"col": "events", "label": "Event", "level": 5,
+     "fields": ["title", "description", "location", "programme_name"],
+     "line": lambda r: f"{r.get('title')} — event on {r.get('date')} {r.get('start_time') or ''}"
+                       f" at {r.get('location') or 'n/a'}"},
+    {"col": "resources", "label": "Resource", "level": 5,
+     "fields": ["name", "category", "description", "barcode"],
+     "line": lambda r: f"{r.get('name')} — {r.get('category') or 'resource'},"
+                       f" {'available' if r.get('available') else 'in use'}"},
+    {"col": "products", "label": "Product", "level": 5,
+     "fields": ["name", "sku", "category", "barcode"],
+     "line": lambda r: f"{r.get('name')} — product, {_fmt_money(r.get('price'))} {r.get('currency') or ''},"
+                       f" {r.get('stock', 0)} in stock"},
+    {"col": "sales", "label": "Sale", "level": 6, "module": "sales",
+     "fields": ["receipt_number", "customer_name", "cashier"],
+     "line": lambda r: f"Receipt {r.get('receipt_number') or r.get('id')} — {_fmt_money(r.get('total'))}"
+                       f" on {str(r.get('created_at') or '')[:10]}, served by {r.get('cashier') or '—'}"},
+    {"col": "financial", "label": "Finance entry", "level": 6, "module": "finance",
+     "fields": ["description", "category", "notes", "vendor"],
+     "line": lambda r: f"{r.get('type', 'entry').title()} {_fmt_money(r.get('amount'))} {r.get('currency') or ''}"
+                       f" — {r.get('description') or r.get('category')} on {r.get('date')}"},
+    {"col": "approval_requests", "label": "Request", "level": 5,
+     "fields": ["title", "summary"],
+     "line": lambda r: f"{r.get('title')} — {str(r.get('subject_kind') or '').replace('_', ' ')},"
+                       f" {_fmt_money(r.get('amount'))} {r.get('currency') or ''}, {r.get('status')}"},
+    {"col": "users", "label": "Staff", "level": 7, "module": "hr",
+     "fields": ["name", "email", "role", "department"],
+     "line": lambda r: f"{r.get('name')} — {r.get('role')}{', ' + r['department'] if r.get('department') else ''}"},
+]
+
+
+def _source_allowed(src: dict, current_user: dict) -> bool:
+    if is_system_admin(current_user):
+        return True
+    if get_role_level(current_user.get("role")) < src.get("level", 5):
+        return False
+    module = src.get("module")
+    if module and not has_module_access(current_user, module):
+        # Social work records stay open to general staff; money and people don't.
+        return module == "social_work" and get_role_level(current_user.get("role")) >= 5
+    return True
+
+
+async def search_app_records(current_user: dict, text: str, per_source: int = 3, total: int = 10) -> list:
+    """Everything else in the app this person may see — people, cases, events,
+    stock, sales, requests — searched in one pass, org-scoped by the database
+    wrapper so one organisation's records never leak into another's answers."""
+    words = _keywords(text)
+    if not words:
+        return []
+    found = []
+    for src in APP_SOURCES:
+        if len(found) >= total or not _source_allowed(src, current_user):
+            continue
+        ors = []
+        for w in words:
+            rx = {"$regex": re.escape(w), "$options": "i"}
+            ors += [{f: rx} for f in src["fields"]]
+        try:
+            rows = await db[src["col"]].find(
+                {"$or": ors, "is_deleted": {"$ne": True}, "deleted": {"$ne": True}}, {"_id": 0}
+            ).limit(per_source).to_list(per_source)
+        except Exception as e:
+            logger.warning(f"App search on {src['col']} failed: {e}")
+            continue
+        for r in rows:
+            try:
+                found.append(f"[{src['label']}] {src['line'](r)}")
+            except Exception:
+                found.append(f"[{src['label']}] {r.get('name') or r.get('title') or r.get('id')}")
+    return found[:total]
+
+
+# --------------------------------------------------------------- tidying the shelf
+TIDY_LIST_WORDS = re.compile(
+    r"(\b(what|which)\b.{0,30}\b(documents?|paperwork|files?)\b)"
+    r"|(\b(list|show)\b.{0,25}\b(documents?|paperwork)\b)"
+    r"|(\bwhat('?s| is| are)?\s+(on\s+file|filed|stored)\b)", re.I)
+TIDY_DUPE_WORDS = re.compile(r"\b(duplicate|duplicates|dupes|tidy|clean\s*up|clear\s+out)\b", re.I)
+TIDY_DO_IT = re.compile(r"\b(remove|delete|clear|tidy|clean|get\s+rid)\b", re.I)
+
+
+def _dupe_key(doc: dict) -> str:
+    return "|".join([
+        re.sub(r"\s+", " ", (doc.get("title") or "").strip().lower()),
+        doc.get("doc_type") or "",
+        str(doc.get("size") or ""),
+    ])
+
+
+async def try_document_tidy(current_user: dict, text: str) -> Optional[dict]:
+    """"What's filed?" and "clear out the duplicates" — both answered here.
+
+    Removal keeps the oldest of each set (the one people have been citing) and
+    only ever soft-deletes, so nothing actually leaves the audit trail.
+    """
+    wants_list = bool(TIDY_LIST_WORDS.search(text))
+    wants_dupes = bool(TIDY_DUPE_WORDS.search(text)) and re.search(r"\b(document|documents|paperwork|file|files|permit|certificate)\b", text, re.I)
+    if not (wants_list or wants_dupes):
+        return None
+    docs = await db.org_documents.find(visible_filter(current_user), {"_id": 0, "text": 0}) \
+        .sort("created_at", 1).to_list(400)
+    if not docs:
+        return {"answer": "Nothing is filed yet that you can see. Drop a file in with “Add document” and I'll remember it."}
+
+    if wants_dupes:
+        groups = {}
+        for d in docs:
+            groups.setdefault(_dupe_key(d), []).append(d)
+        dupes = {k: v for k, v in groups.items() if len(v) > 1}
+        if not dupes:
+            return {"answer": f"No duplicates — {len(docs)} document(s) on file, each one different."}
+        manager = get_role_level(current_user.get("role")) >= 7 or is_system_admin(current_user)
+        if not (manager and TIDY_DO_IT.search(text)):
+            lines = [f"- {v[0]['title']}: {len(v)} copies (filed {', '.join(str(x.get('created_at'))[:10] for x in v)})"
+                     for v in dupes.values()]
+            tail = ("Say \"clear out the duplicates\" and I'll keep the earliest of each and retire the rest."
+                    if manager else "A manager can ask me to clear them out.")
+            return {"answer": "Looks like repeats:\n" + "\n".join(lines) + "\n" + tail}
+        removed, kept = [], []
+        for v in dupes.values():
+            kept.append(v[0]["title"])
+            for extra in v[1:]:
+                await db.org_documents.update_one({"id": extra["id"]}, {"$set": {
+                    "deleted": True,
+                    "deleted_at": datetime_now(),
+                    "deleted_by": current_user["id"],
+                    "deleted_by_name": current_user.get("name", ""),
+                    "deleted_reason": "duplicate, cleared from chat",
+                }})
+                removed.append(extra["id"])
+        return {"answer": f"Tidied — kept the earliest copy of {len(kept)} document(s) and retired "
+                          f"{len(removed)} repeat(s). Nothing is gone for good; a director can still see them in the audit trail.",
+                "tidied": True, "removed": removed}
+
+    by_type = {}
+    for d in docs:
+        by_type.setdefault(DOC_TYPES.get(d.get("doc_type"), "Other"), []).append(d)
+    lines = []
+    for label, items in sorted(by_type.items()):
+        lines.append(f"{label} ({len(items)}): " + "; ".join(
+            i["title"] + (f" — expires {i['expires_on']}" if i.get("expires_on") else "") for i in items[:6]
+        ) + (" …" if len(items) > 6 else ""))
+    return {"facts": f"{len(docs)} document(s) you may see:\n" + "\n".join(lines)}
+
+
+def datetime_now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()

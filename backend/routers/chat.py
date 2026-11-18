@@ -236,16 +236,25 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
             await _save(message, edited["answer"], atts)
             return {"response": edited["answer"], "session_id": session_id, "attachments": atts, "access_denied": False}
 
-        # 2. Money / people questions — gated before anything is fetched.
+        # 2. "What's filed?" / "clear out the duplicates".
+        tidy = await kb.try_document_tidy(current_user, message)
+        if tidy and tidy.get("answer"):
+            await _save(message, tidy["answer"])
+            return {"response": tidy["answer"], "session_id": session_id, "attachments": [], "access_denied": False}
+
+        # 3. Money / people questions — gated before anything is fetched.
         gated = await kb.answer_data_question(current_user, message)
         if gated and gated.get("denied"):
             await _save(message, gated["answer"])
             return {"response": gated["answer"], "session_id": session_id, "attachments": [], "access_denied": True}
 
-        # 3. The organisation's paperwork, plus files already on people's profiles.
+        # 4. Paperwork: the organisation's own, plus files on people's and
+        #    children's records — each scoped to who may read that kind.
         expiry = await kb.expiry_rundown(current_user, message)
         docs = await kb.search_documents(current_user, message)
         docs += await kb.search_person_files(current_user, message)
+        docs += await kb.search_child_files(current_user, message)
+        records = await kb.search_app_records(current_user, message)
         if expiry and expiry.get("docs"):
             seen = {d["id"] for d in docs}
             docs += [d for d in expiry["docs"] if d["id"] not in seen]
@@ -275,10 +284,14 @@ LIVE APP DATA:
 
 ORGANISATION DOCUMENTS THIS PERSON MAY SEE:
 {doc_block}
+
+OTHER RECORDS IN THIS ORGANISATION MATCHING THE QUESTION (already permission-filtered):
+{chr(10).join(records) if records else 'None matched.'}
 {('ATTACHED FOR READING: ' + ', '.join(p for p, _ in files)) if files else ''}
 
 {('VERIFIED FIGURES (already permission-checked, quote these and no others):' + chr(10) + gated['facts']) if gated and gated.get('facts') else ''}
 {(chr(10) + 'EXPIRY LIST (read straight from the records — use these dates exactly):' + chr(10) + expiry['facts']) if expiry and expiry.get('facts') else ''}
+{(chr(10) + (tidy or {}).get('facts', '')) if tidy and tidy.get('facts') else ''}
 {heads}
 {gated.get('preamble', '') if gated else ''}
 
