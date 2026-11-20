@@ -284,8 +284,16 @@ export default function CommsPage() {
           attachments: res.data.attachments || [], denied: !!res.data.access_denied,
         }]);
         scrollToBottom();
-      } catch {
-        setAiMessages(prev => [...prev, { role: 'assistant', text: 'Sorry, I encountered an error. Please try again.' }]);
+      } catch (e) {
+        // Show what actually went wrong — "try again" hides a missing key or
+        // an un-rebuilt server, and the person retries forever.
+        const detail = e?.response?.data?.detail;
+        const text = typeof detail === 'string' && detail
+          ? detail
+          : e?.response?.status === 401
+            ? 'Your session has expired — sign in again and I\'ll pick this up.'
+            : `I couldn't reach the assistant just then${e?.message ? ` (${e.message})` : ''}. Try once more, and tell an admin if it keeps happening.`;
+        setAiMessages(prev => [...prev, { role: 'assistant', text, denied: true }]);
       }
       setSending(false);
       return;

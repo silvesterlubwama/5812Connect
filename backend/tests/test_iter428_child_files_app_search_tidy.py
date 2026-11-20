@@ -184,3 +184,52 @@ def test_a_staff_member_can_see_repeats_but_not_clear_them(world):
 
 def test_ordinary_chat_is_not_mistaken_for_tidying(world):
     assert _run(kb.try_document_tidy(MANAGER, "when does our permit expire?")) is None
+
+
+# ------------------------------------------------- the assistant failing loudly
+def test_a_server_without_the_ai_library_says_exactly_that(world):
+    import builtins
+    from routers import chat as chat_router
+    real_import = builtins.__import__
+
+    def fake(name, *a, **k):
+        if name.startswith("emergentintegrations"):
+            raise ImportError("No module named 'emergentintegrations'")
+        return real_import(name, *a, **k)
+
+    builtins.__import__ = fake
+    try:
+        with pytest.raises(Exception) as err:
+            _run(chat_router.ai_chat_assistant({"message": "hello"}, ADMIN))
+    finally:
+        builtins.__import__ = real_import
+    assert getattr(err.value, "status_code", None) == 503
+    assert "AI library isn't installed" in err.value.detail
+
+
+def test_a_server_without_an_ai_key_says_exactly_that(world, monkeypatch):
+    monkeypatch.delenv("EMERGENT_LLM_KEY", raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    with pytest.raises(Exception) as err:
+        _run(chat_router_ai({"message": "hello"}, ADMIN))
+    assert getattr(err.value, "status_code", None) == 503
+    assert "No AI key is set" in err.value.detail
+
+
+def chat_router_ai(data, user):
+    from routers.chat import ai_chat_assistant
+    return ai_chat_assistant(data, user)
+
+
+def test_an_empty_model_reply_still_answers_from_the_records(world, monkeypatch):
+    # Gemini occasionally returns nothing; the person must still get the facts.
+    from emergentintegrations.llm.chat import LlmChat
+    from routers import chat as chat_router
+
+    async def _nothing(self, msg):
+        return ""
+    monkeypatch.setattr(LlmChat, "send_message", _nothing)
+    _file_doc("ZW Water permit", dtype="permit")
+    out = _run(chat_router.ai_chat_assistant({"message": "ZW Water permit details"}, ADMIN))
+    assert out["response"], "the assistant returned a blank message"
+    assert "ZW Water permit" in out["response"]

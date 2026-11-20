@@ -3501,3 +3501,29 @@ switched back off.
 - P1: let the assistant create documents from app data (staff ID card, contract).
 - P2: child file links go through the existing uploads path; a permission-checked
   route like the organisation documents one would be tighter.
+
+### 2026-11-20 (iter429) — Why the AI failed on the self-hosted box
+- **Root cause**: `emergentintegrations` (the AI library) was never pinned in
+  `backend/requirements.txt`. The preview pod has it pre-installed, so it worked
+  here; the appliance image built from requirements.txt did not, so *every*
+  message on the deployed Ubuntu box raised ImportError → 500 → "Sorry, I
+  encountered an error." for every login. Now pinned (`emergentintegrations==0.2.0`);
+  the appliance Dockerfile already resolves it from the CDN extra-index, so a
+  rebuild fixes the box.
+- **The error now names the missing piece** instead of hiding it: 503 "The AI
+  library isn't installed on this server…" or "No AI key is set on this server…",
+  and the chat shows the server's actual message rather than "please try again".
+- **Blank replies fixed too** (found while reproducing): Gemini intermittently
+  returned an empty string and we rendered an empty bubble. It now retries once
+  on a fresh session, then falls back to answering from the records it already
+  gathered. The system brief is also capped at 20k characters, one of the causes
+  of the empty return.
+- Appliance docs: new "The AI assistant says it can't answer" section in
+  `appliance/OPERATIONS.md` with the two checks and the rebuild command.
+- Tests: 3 added to `tests/test_iter428_child_files_app_search_tidy.py` (missing
+  library, missing key, empty model reply); 78 green across iter424-428.
+
+#### Action required on the deployed box
+`docker compose pull && docker compose up -d` (or `docker compose build backend
+&& docker compose up -d backend`) — then confirm `EMERGENT_LLM_KEY` has a value
+in the box's `.env`.

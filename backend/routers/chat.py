@@ -208,10 +208,25 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
     session_id = data.get("session_id", f"ai_{current_user['id']}")
     if not message: raise HTTPException(status_code=400, detail="Message required")
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
         from routers import ai_knowledge as kb
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage, FileContentWithMimeType
+        except ImportError as e:
+            # Self-hosted boxes that built before this was pinned in
+            # requirements.txt hit this on every message. Say so plainly.
+            logger.error(f"AI library missing on this server: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail="The AI library isn't installed on this server. Rebuild the backend image "
+                       "(emergentintegrations is in backend/requirements.txt) and the assistant will work again.",
+            )
         api_key = os.environ.get("EMERGENT_LLM_KEY")
-        if not api_key: raise HTTPException(status_code=500, detail="AI not configured")
+        if not api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="No AI key is set on this server — add EMERGENT_LLM_KEY to the backend environment "
+                       "(appliance: put it in the box's .env and restart) and the assistant will work again.",
+            )
         now = datetime.now(timezone.utc).isoformat()
         conv_id = f"ai_{current_user['id']}"
 
@@ -309,12 +324,43 @@ RULES:
   and you can remember a note or a link they hand you — mention that only if it helps.
 """
 
-        chat = LlmChat(api_key=api_key, session_id=session_id, system_message=system_msg).with_model("gemini", "gemini-2.5-flash")
+        # Keep the brief bounded — an oversized system message is one of the
+        # ways this comes back empty.
+        chat = LlmChat(api_key=api_key, session_id=session_id,
+                       system_message=system_msg[:20000]).with_model("gemini", "gemini-2.5-flash")
         user_msg = UserMessage(
             text=message,
             file_contents=[FileContentWithMimeType(file_path=p, mime_type=m) for p, m in files] or None,
         )
-        response = await chat.send_message(user_msg)
+        response = (await chat.send_message(user_msg) or "").strip()
+
+        if not response:
+            # Gemini sometimes comes back empty — a long session, an awkward
+            # attachment, a safety stop. Try once more on a clean session with
+            # no files rather than showing the person an empty bubble.
+            logger.warning(f"AI returned nothing for {current_user['id']}; retrying on a fresh session")
+            retry = LlmChat(api_key=api_key, session_id=f"{session_id}_r{uuid.uuid4().hex[:6]}",
+                            system_message=system_msg[:12000]).with_model("gemini", "gemini-2.5-flash")
+            response = (await retry.send_message(UserMessage(text=message)) or "").strip()
+
+        if not response:
+            # Still nothing: answer from what we actually found, so the person
+            # always gets the facts even when the model won't speak.
+            parts = []
+            if gated and gated.get("facts"):
+                parts.append(gated["facts"])
+            if expiry and expiry.get("facts"):
+                parts.append(expiry["facts"])
+            if docs:
+                parts.append("These are on file and attached below: "
+                             + "; ".join(f"{d['title']}" + (f" (expires {d['expires_on']})" if d.get("expires_on") else "")
+                                         for d in docs))
+            if records:
+                parts.append("Matching records:\n" + "\n".join(records))
+            response = ("\n\n".join(parts) if parts else
+                        "I couldn't put an answer together just then — ask me again, or in fewer words.")
+            logger.error(f"AI empty twice for {current_user['id']}; answered from records instead")
+
         await _save(message, response, attachments)
         return {"response": response, "session_id": session_id, "attachments": attachments,
                 "access_denied": False, "scope": (gated or {}).get("scope")}

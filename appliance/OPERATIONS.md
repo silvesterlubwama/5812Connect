@@ -340,3 +340,20 @@ organisation is suspended with the reason on it: delete it and start again.
 
 A full-server move (every organisation at once) is still a database dump plus the
 uploads directory, as above.
+
+## The AI assistant says it can't answer
+
+Two things it needs, both on the box:
+
+1. **The key.** `EMERGENT_LLM_KEY=` in the box's `.env` must have a value.
+   Add it, then `docker compose up -d backend`. Without it the assistant now
+   replies "No AI key is set on this server" instead of a vague error.
+
+2. **The library.** `emergentintegrations` is pinned in
+   `backend/requirements.txt`. Boxes built before 18 Nov 2026 don't have it, and
+   every message comes back "The AI library isn't installed on this server".
+   Fix by pulling the newer image (`docker compose pull && docker compose up -d`)
+   or rebuilding: `docker compose build backend && docker compose up -d backend`.
+
+Check which one you're hitting by sending any message in the AI room — the reply
+names the missing piece. Backend logs: `docker compose logs -f backend | grep -i ai`.
