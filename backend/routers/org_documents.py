@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from fastapi.responses import FileResponse
 
-from deps import db, require_staff, require_manager, get_role_level, logger, _audit
+from deps import db, require_staff, require_manager, get_role_level, logger, _audit, get_llm_key
 from upload_helper import _disk_fallback, UPLOAD_ROOT
 
 router = APIRouter(prefix="/api/org-documents", tags=["org-documents"])
@@ -80,7 +80,7 @@ def _extract_text(path: str, mime: str) -> str:
 async def _read_with_model(path: str, mime: str, extracted: str) -> dict:
     """Ask the model what this paper is. Gemini is the only provider that
     takes a file path, which is exactly what we have here."""
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    api_key = get_llm_key()
     if not api_key:
         return {}
     try:
@@ -129,6 +129,41 @@ def visible_filter(current_user: dict) -> dict:
 @router.get("/types")
 async def document_types(current_user: dict = Depends(require_staff)):
     return {"types": DOC_TYPES, "visibility_levels": VISIBILITY_LEVELS}
+
+
+@router.get("/ai-status")
+async def ai_status(current_user: dict = Depends(require_manager)):
+    """Can this server actually run the assistant? Checked on the box itself.
+
+    Admins on a self-hosted box need to see which piece is missing without
+    reading container logs.
+    """
+    key = get_llm_key()
+    try:
+        import emergentintegrations  # noqa: F401
+        library = True
+    except ImportError:
+        library = False
+    env_raw = (os.environ.get("EMERGENT_LLM_KEY") or "")
+    checks = {
+        "library_installed": library,
+        "key_present": bool(key),
+        "key_source": ("environment" if (env_raw.strip().strip('"')) else "mounted .env file" if key else "not found"),
+        "key_tail": f"…{key[-4:]}" if key else "",
+        "key_env_blank_but_file_has_it": bool(key) and not env_raw.strip().strip('"'),
+        "documents_on_file": await db.org_documents.count_documents({"deleted": {"$ne": True}}),
+        "uploads_writable": os.access(UPLOAD_ROOT, os.W_OK),
+    }
+    if not library:
+        checks["fix"] = ("Rebuild the backend image — emergentintegrations is pinned in "
+                         "backend/requirements.txt: docker compose build backend && docker compose up -d backend")
+    elif not key:
+        checks["fix"] = ("Put EMERGENT_LLM_KEY=<your key> in the box's .env (next to docker-compose.yml) "
+                         "then run 'docker compose up -d backend' — a plain 'restart' keeps the old, empty value.")
+    else:
+        checks["fix"] = ""
+    checks["ready"] = library and bool(key)
+    return checks
 
 
 @router.post("")

@@ -3527,3 +3527,31 @@ switched back off.
 `docker compose pull && docker compose up -d` (or `docker compose build backend
 && docker compose up -d backend`) — then confirm `EMERGENT_LLM_KEY` has a value
 in the box's `.env`.
+
+### 2026-11-20 (iter430) — Why the key still looked missing
+- **`docker compose restart` keeps the old environment.** Compose passes
+  `EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY:-}`, so a key added to the box's .env
+  only reaches the container on `docker compose up -d backend` (which recreates
+  it). A restarted container keeps the previous, empty value — which the app then
+  read as "no key".
+- `deps.get_llm_key()` now treats a blank or quoted env var as absent and falls
+  back to a mounted `.env` (`/app/.env`, `/app/backend/.env`, `/app/secrets/.env`).
+  Every AI caller (chat, document reading, sponsor stories, translate) goes
+  through it.
+- **`GET /api/org-documents/ai-status`** (manager+) reports what the box actually
+  sees: library installed, key present and where it came from, last four
+  characters, uploads writable, documents on file, and the exact command to fix
+  what's missing. The AI room shows that as a banner to managers when it isn't
+  ready, so nobody retries blindly.
+- **Added `/app/.dockerignore`** — `COPY backend/ /app/` was baking
+  `backend/.env` (real preview keys) into every published image, and an empty
+  compose variable then shadowed the box's own key. Secrets, caches,
+  node_modules and uploads are now excluded from builds.
+- Tests: 4 more in `tests/test_iter428_child_files_app_search_tidy.py`
+  (blank env var, quoted key, status report, missing key message); 64 green
+  across iter425-428.
+
+#### On the box
+`docker compose up -d backend` (NOT `restart`), then open the AI room — if
+anything is still missing the banner and the reply name it. `GET /api/org-documents/ai-status`
+gives the same answer for a curl check.

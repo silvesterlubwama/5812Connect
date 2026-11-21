@@ -1,6 +1,6 @@
 """Chat, AI Assistant, Offline Sync routes"""
 from fastapi import APIRouter, Depends, HTTPException
-from deps import db, get_current_user, logger, is_system_admin, get_campus_filter
+from deps import db, get_current_user, logger, is_system_admin, get_campus_filter, get_llm_key
 from datetime import datetime, timezone
 from typing import Optional
 import uuid, os
@@ -220,7 +220,7 @@ async def ai_chat_assistant(data: dict, current_user: dict = Depends(get_current
                 detail="The AI library isn't installed on this server. Rebuild the backend image "
                        "(emergentintegrations is in backend/requirements.txt) and the assistant will work again.",
             )
-        api_key = os.environ.get("EMERGENT_LLM_KEY")
+        api_key = get_llm_key()
         if not api_key:
             raise HTTPException(
                 status_code=503,

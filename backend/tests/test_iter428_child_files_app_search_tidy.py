@@ -208,10 +208,10 @@ def test_a_server_without_the_ai_library_says_exactly_that(world):
 
 
 def test_a_server_without_an_ai_key_says_exactly_that(world, monkeypatch):
-    monkeypatch.delenv("EMERGENT_LLM_KEY", raising=False)
-    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False)
+    from routers import chat as chat_router
+    monkeypatch.setattr(chat_router, "get_llm_key", lambda: "")
     with pytest.raises(Exception) as err:
-        _run(chat_router_ai({"message": "hello"}, ADMIN))
+        _run(chat_router.ai_chat_assistant({"message": "hello"}, ADMIN))
     assert getattr(err.value, "status_code", None) == 503
     assert "No AI key is set" in err.value.detail
 
@@ -233,3 +233,43 @@ def test_an_empty_model_reply_still_answers_from_the_records(world, monkeypatch)
     out = _run(chat_router.ai_chat_assistant({"message": "ZW Water permit details"}, ADMIN))
     assert out["response"], "the assistant returned a blank message"
     assert "ZW Water permit" in out["response"]
+
+
+# ------------------------------------------------- finding the key on a self-hosted box
+def test_a_blank_environment_variable_does_not_hide_the_key_in_the_file(tmp_path, monkeypatch):
+    import deps
+    # Compose passes `EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY:-}` — an empty string
+    # must not beat a key the box keeps in its mounted .env.
+    monkeypatch.setenv("EMERGENT_LLM_KEY", "")
+    env_file = tmp_path / ".env"
+    env_file.write_text('OTHER=1\nEMERGENT_LLM_KEY="sk-emergent-from-the-box"\n')
+    monkeypatch.setattr(deps, "get_llm_key", deps.get_llm_key)  # keep the real one
+    import builtins
+    real_open = builtins.open
+
+    def fake_open(path, *a, **k):
+        if path in ("/app/.env", "/app/backend/.env", "/app/secrets/.env"):
+            return real_open(str(env_file), *a, **k)
+        return real_open(path, *a, **k)
+
+    builtins.open = fake_open
+    try:
+        assert deps.get_llm_key() == "sk-emergent-from-the-box"
+    finally:
+        builtins.open = real_open
+
+
+def test_a_quoted_key_is_unwrapped(monkeypatch):
+    import deps
+    monkeypatch.setenv("EMERGENT_LLM_KEY", '"sk-emergent-quoted"')
+    assert deps.get_llm_key() == "sk-emergent-quoted"
+
+
+def test_the_box_can_report_what_the_assistant_is_missing(world, monkeypatch):
+    import deps
+    monkeypatch.setattr(deps, "get_llm_key", lambda: "")
+    monkeypatch.setattr(od, "get_llm_key", lambda: "")
+    out = _run(od.ai_status(MANAGER))
+    assert out["ready"] is False and out["key_present"] is False
+    assert "docker compose up -d backend" in out["fix"]
+    assert "restart" in out["fix"], "it should warn that a plain restart keeps the old value"

@@ -17,7 +17,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 
-from deps import db, require_staff, _audit, logger, require_social_work_view
+from deps import db, require_staff, _audit, logger, require_social_work_view, get_llm_key
 from routers.social_work import _scoped_case_or_404
 
 load_dotenv()
@@ -159,7 +159,7 @@ async def generate_sponsor_story(case_id: str, data: dict = None, current_user: 
     # Campus-scoped fetch — a case id from another campus must not be readable
     # (let alone summarised by an LLM). See social_work._scoped_case_or_404.
     case = await _scoped_case_or_404(case_id, current_user)
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    api_key = get_llm_key()
     if not api_key:
         raise HTTPException(status_code=503, detail="AI key not configured — add EMERGENT_LLM_KEY to the backend environment")
 

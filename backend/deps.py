@@ -888,3 +888,27 @@ async def find_linked_member(user_id: str = "", email: str = "", projection: dic
             continue
         return await db.members.find_one({"id": ident["id"]}, proj)
     return None
+
+
+def get_llm_key() -> str:
+    """The AI key, wherever this box keeps it.
+
+    An empty environment variable is treated as absent — compose passes
+    `EMERGENT_LLM_KEY: ${EMERGENT_LLM_KEY:-}`, so a key typed into the wrong
+    file (or a container that was `restart`ed instead of recreated) arrives as
+    an empty string and must not shadow a key sitting in a mounted .env.
+    """
+    value = (os.environ.get("EMERGENT_LLM_KEY") or "").strip().strip('"').strip("'")
+    if value:
+        return value
+    for path in ("/app/.env", "/app/backend/.env", "/app/secrets/.env"):
+        try:
+            with open(path, "r") as fh:
+                for line in fh:
+                    if line.strip().startswith("EMERGENT_LLM_KEY="):
+                        found = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        if found:
+                            return found
+        except OSError:
+            continue
+    return ""

@@ -13,7 +13,7 @@ import re
 from datetime import date, timedelta
 from typing import Optional
 
-from deps import db, get_role_level, has_module_access, is_system_admin, logger, find_linked_member
+from deps import db, get_role_level, has_module_access, is_system_admin, logger, find_linked_member, get_llm_key
 
 from routers.org_documents import visible_filter, _local_path, DOC_TYPES
 
@@ -369,7 +369,7 @@ async def try_document_edit(current_user: dict, text: str) -> Optional[dict]:
     if not docs:
         return {"answer": "I couldn't tell which document you mean — say its title and I'll change it."}
 
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    api_key = get_llm_key()
     fields = {}
     if api_key:
         try:

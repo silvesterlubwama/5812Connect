@@ -1,0 +1,18 @@
+# Keep secrets and local junk out of the published images.
+# Without this, `COPY backend/ /app/` bakes backend/.env — real keys — into
+# every image we ship, and an empty compose variable then shadows the box's own.
+**/.env
+**/.env.*
+!**/.env.example
+**/.git
+**/.github
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/build
+**/.pytest_cache
+**/test_reports
+**/memory
+appliance/data
+backend/uploads
+backend/backups

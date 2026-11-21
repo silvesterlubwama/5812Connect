@@ -447,6 +447,15 @@ export default function CommsPage() {
   const isStaff = isAdmin || ['Manager', 'Coordinator', 'Staff'].includes(user?.role);
   // Managers and above put the organisation's paperwork into the assistant.
   const canFileDocuments = isAdmin || ['Manager', 'Adviser'].includes(user?.role);
+  // On a self-hosted box the assistant can be missing its key or library —
+  // tell the admin which, instead of letting them retry forever.
+  const [aiStatus, setAiStatus] = useState(null);
+  useEffect(() => {
+    if (!canFileDocuments) return;
+    api.get('/org-documents/ai-status')
+      .then(r => setAiStatus(r.data?.ready ? null : r.data))
+      .catch(() => setAiStatus(null));
+  }, [canFileDocuments]);
   const filteredConvs = conversations.filter(c => !searchQuery || c.name?.toLowerCase().includes(searchQuery.toLowerCase()));
   // The people list obeys the same search box, and never offers you yourself.
   const visibleStaff = React.useMemo(() => {
@@ -519,6 +528,12 @@ export default function CommsPage() {
               <Bot size={40} className="mx-auto mb-3 opacity-20" />
               <p className="font-medium">AI Assistant</p>
               <p className="text-xs mt-1 mb-4">Powered by Gemini</p>
+              {aiStatus && (
+                <div className="mb-4 mx-auto max-w-md rounded-lg border border-amber-300 bg-amber-50 p-3 text-left" data-testid="ai-status-banner">
+                  <p className="text-xs font-semibold text-amber-900">The assistant isn't ready on this server</p>
+                  <p className="text-[11px] text-amber-800 mt-0.5">{aiStatus.fix}</p>
+                </div>
+              )}
               <div className="flex flex-wrap gap-2 justify-center">
                 {['When does our NGO permit expire?', 'Which permits expire in the next 60 days?', 'How much did we spend last month?', 'Show me our latest signed agreement'].map(q => (
                   <Button key={q} variant="outline" size="sm" className="text-xs h-7" onClick={() => setNewMsg(q)} data-testid={`ai-prompt-${q.slice(0, 12).replace(/\s+/g, '-').toLowerCase()}`}>{q}</Button>

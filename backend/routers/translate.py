@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 
-from deps import db, get_current_user
+from deps import db, get_current_user, get_llm_key
 
 load_dotenv("/app/backend/.env")
 logger = logging.getLogger(__name__)
@@ -97,7 +97,7 @@ async def _ask_model(texts: list, lang: str) -> dict:
     """One call for the whole batch, one line back per string."""
     from emergentintegrations.llm.chat import LlmChat, UserMessage
 
-    key = os.environ["EMERGENT_LLM_KEY"]
+    key = get_llm_key()
     language = LANGUAGE_NAMES[lang]
     chat = LlmChat(
         api_key=key,
